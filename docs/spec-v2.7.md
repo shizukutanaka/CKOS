@@ -43,7 +43,11 @@ graph, attachments`. → `memory::Document`.
 - **§941 Builder** extracts: people, companies, APIs, OSS, libraries, events,
   concepts, algorithms, formulas, papers, patents, source code.
 - **§942 Versioning**: the graph is managed Git-like (v1 → v2 → branch → merge).
+  → `graph::GraphRepo`: commit/branch/checkout/log over immutable snapshots.
 - **§943 Merge**: AI merge / human merge / policy merge on conflict.
+  → `GraphRepo::merge` by semantic node identity (kind+label) with
+  `MergeStrategy::{PreferOurs, PreferTheirs, HigherConfidence}` and a
+  `MergeReport` of resolved conflicts.
 
 ## §944–§946 Embeddings & temporal knowledge
 

@@ -46,6 +46,10 @@ so the whole system runs offline.
 - ✅ **KQL** (`sdk::kql`, §962) — Knowledge Query Language: tokeniser +
   recursive-descent parser → typed AST, executor over the graph
   (FIND/RELATED/FILTER/BEFORE/AFTER, RETURN Sources); via `ckos kql`.
+- ✅ **Graph versioning** (`graph::GraphRepo`, §942/§943) — Git-like
+  commit/branch/checkout/log over graph snapshots, plus merge by semantic node
+  identity with PreferOurs/PreferTheirs/HigherConfidence strategies and a
+  conflict report. Human-in-the-loop merge and three-way diff are next.
 - ✅ **Temporal knowledge & provenance** (§946/§947) — graph nodes carry an ISO
   `date` and a `provenance` source; KQL enforces `BEFORE`/`AFTER` and surfaces
   sources via `RETURN Sources`.

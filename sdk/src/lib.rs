@@ -58,7 +58,10 @@ pub mod prelude {
         EchoRuntime, InferenceRequest, InferenceResponse, Runtime, RuntimeKind, RuntimeRegistry,
     };
 
-    pub use ckos_graph::{EdgeKind, KnowledgeGraph, Node, NodeKind};
+    pub use ckos_graph::{
+        EdgeKind, GraphRepo, KnowledgeGraph, MergeConflict, MergeReport, MergeStrategy, Node,
+        NodeKind, VersionId,
+    };
 
     pub use ckos_memory::{
         collect as gc_collect, compress_document, cosine, summarize, Document, Embedder, FileStore,

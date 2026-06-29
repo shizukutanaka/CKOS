@@ -8,6 +8,9 @@
 use ckos_kernel::NodeId;
 use std::collections::HashMap;
 
+pub mod versioning;
+pub use versioning::{GraphRepo, MergeConflict, MergeReport, MergeStrategy, VersionId};
+
 /// Node categories from §897.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeKind {
@@ -58,7 +61,7 @@ pub struct Edge {
 }
 
 /// In-memory knowledge graph.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct KnowledgeGraph {
     nodes: HashMap<NodeId, Node>,
     /// Adjacency: source node -> outgoing edges.
@@ -121,6 +124,11 @@ impl KnowledgeGraph {
     /// the graph for label matches (§951).
     pub fn nodes(&self) -> impl Iterator<Item = &Node> {
         self.nodes.values()
+    }
+
+    /// Iterate over all edges (order unspecified). Used by versioning/merge.
+    pub fn edges(&self) -> impl Iterator<Item = &Edge> {
+        self.adjacency.values().flatten()
     }
 
     /// Number of nodes.
