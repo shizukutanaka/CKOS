@@ -7,7 +7,7 @@
 //! is a ready-made subscriber that collects changed node ids for an async
 //! re-index worker to drain.
 
-use ckos_graph::{EdgeKind, KnowledgeGraph, NodeKind};
+use ckos_graph::{EdgeKind, ExtractReport, KnowledgeGraph, NodeKind};
 use ckos_kernel::event::{Event, EventBus, InMemoryEventBus};
 use ckos_kernel::NodeId;
 use ckos_memory::{Document, Embedder, Storage};
@@ -47,6 +47,26 @@ impl KnowledgeBus {
     pub fn connect(&mut self, from: &NodeId, to: &NodeId, kind: EdgeKind) {
         self.graph.connect(from, to, kind);
         self.bus.publish(Event::GraphChanged(from.clone()));
+    }
+
+    /// Ingest free document text: heuristically extract concepts (§941) into the
+    /// graph and announce every newly-created node so re-index subscribers pick
+    /// them up (§938 index pipeline). Entities already present are reinforced in
+    /// place and emit no event. Returns the [`ExtractReport`] from the pass.
+    pub fn ingest_text(&mut self, text: &str) -> ExtractReport {
+        use std::collections::HashSet;
+        let before: HashSet<NodeId> = self.graph.nodes().map(|n| n.id.clone()).collect();
+        let report = self.graph.extract_concepts(text);
+        let new_ids: Vec<NodeId> = self
+            .graph
+            .nodes()
+            .filter(|n| !before.contains(&n.id))
+            .map(|n| n.id.clone())
+            .collect();
+        for id in new_ids {
+            self.bus.publish(Event::GraphChanged(id));
+        }
+        report
     }
 
     /// Attach a subscriber that queues every changed node id for re-indexing
@@ -150,6 +170,47 @@ mod tests {
         assert_eq!(drained[0], a);
         // The graph reflects the mutations.
         assert_eq!(kb.graph().len(), 2);
+    }
+
+    #[test]
+    fn ingest_text_extracts_and_queues_new_nodes() {
+        let mut kb = KnowledgeBus::new();
+        let queue = kb.subscribe_reindex();
+
+        let report = kb.ingest_text("CKOS uses a Knowledge Graph. CKOS is fast.");
+        // Three concepts: CKOS, Knowledge Graph, (no others) — "is"/"a" filtered.
+        assert_eq!(report.nodes_added, 2);
+        assert_eq!(kb.graph().len(), 2);
+        // Each new node emitted one GraphChanged event onto the reindex queue.
+        assert_eq!(queue.len(), 2);
+
+        // A second ingest mentioning an existing entity reinforces it: no new
+        // node, so no new reindex work is queued.
+        queue.drain();
+        let again = kb.ingest_text("CKOS ships today.");
+        assert_eq!(again.nodes_added, 0);
+        assert_eq!(again.nodes_reinforced, 1);
+        assert_eq!(queue.len(), 0);
+    }
+
+    #[test]
+    fn ingested_concepts_become_searchable_via_reindex() {
+        let mut kb = KnowledgeBus::new();
+        let queue = kb.subscribe_reindex();
+        kb.ingest_text("The Scheduler dispatches tasks to the Runtime.");
+
+        let embedder = HashingEmbedder::new(64);
+        let mut store = InMemoryStore::new();
+        let written = Reindexer::new(kb.graph(), &embedder).process(&queue, &mut store);
+        assert_eq!(written, 2); // Scheduler, Runtime
+        let docs = store
+            .search(&Query {
+                doc_type: Some("graph_node".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(docs.iter().any(|d| d.title == "Scheduler"));
+        assert!(docs.iter().any(|d| d.title == "Runtime"));
     }
 
     #[test]
