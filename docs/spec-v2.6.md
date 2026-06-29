@@ -45,10 +45,14 @@ confidence — not FIFO. → `scheduler::ScoreFactors`.
 
 ## §914–§916 Messaging & service mesh
 
-- **§914 Message bus**: event-driven `Planner → Bus → Reasoner → Verifier → Output`.
-- **§915 Message format**: `id, source, destination, type, priority, payload{graph_id, memory_ref}`.
+- **§914 Message bus**: event-driven `Planner → Bus → Reasoner → Verifier →
+  Output`. → `sdk::messaging::MessageBus` (per-agent inboxes, priority-ordered
+  delivery).
+- **§915 Message format**: `id, source, destination, type, priority,
+  payload{graph_id, memory_ref}`. → `sdk::messaging::{Message, Payload}`.
 - **§916 Service mesh**: abstracts agent-to-agent comms — load balancing, retry,
-  routing, security.
+  routing, security. → `sdk::messaging::ServiceMesh` routes by capability with
+  round-robin load balancing and delivery accounting.
 
 ## §917–§919 Tools
 
