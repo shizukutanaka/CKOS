@@ -6,12 +6,16 @@
 //! ```text
 //! FIND Concept "Transformer"
 //! RELATED Algorithm
-//! FILTER Confidence > 90
+//! FILTER (Confidence > 90 AND Confidence < 99) OR NOT Confidence < 50
 //! BEFORE 2025-01-01
 //! ORDER BY Confidence DESC
 //! LIMIT 10
 //! RETURN Graph + Sources
 //! ```
+//!
+//! `FILTER` accepts a boolean expression over `Confidence <op> <value>` leaves
+//! combined with `AND`, `OR`, `NOT` and parentheses (precedence: `NOT` > `AND` >
+//! `OR`). Multiple `FILTER` clauses are ANDed together.
 //!
 //! This module provides [`parse`] (tokeniser + recursive-descent parser → AST)
 //! and [`execute`] (runs an AST against a [`KnowledgeGraph`]). Clauses may appear
@@ -84,10 +88,14 @@ impl CmpOp {
     }
 }
 
-/// A filter predicate. Currently only `Confidence <op> <value>` (§948).
+/// A filter predicate tree. The leaf is `Confidence <op> <value>` (§948);
+/// leaves combine with `AND`, `OR`, `NOT` and parentheses.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Filter {
     Confidence { op: CmpOp, value: u8 },
+    And(Vec<Filter>),
+    Or(Vec<Filter>),
+    Not(Box<Filter>),
 }
 
 /// A `RETURN` target.
@@ -132,6 +140,10 @@ enum Tok {
     Op(CmpOp),
     /// The `+` separator in RETURN.
     Plus,
+    /// `(` grouping a filter sub-expression.
+    LParen,
+    /// `)` closing a filter sub-expression.
+    RParen,
 }
 
 fn tokenize(input: &str) -> Result<Vec<Tok>, KqlError> {
@@ -162,6 +174,14 @@ fn tokenize(input: &str) -> Result<Vec<Tok>, KqlError> {
                 chars.next();
                 toks.push(Tok::Plus);
             }
+            '(' => {
+                chars.next();
+                toks.push(Tok::LParen);
+            }
+            ')' => {
+                chars.next();
+                toks.push(Tok::RParen);
+            }
             '>' | '<' | '=' => {
                 chars.next();
                 let op = if matches!(chars.peek(), Some('=')) {
@@ -183,7 +203,7 @@ fn tokenize(input: &str) -> Result<Vec<Tok>, KqlError> {
             _ => {
                 let mut w = String::new();
                 while let Some(&c2) = chars.peek() {
-                    if c2.is_whitespace() || matches!(c2, '"' | '+' | '>' | '<' | '=') {
+                    if c2.is_whitespace() || matches!(c2, '"' | '+' | '>' | '<' | '=' | '(' | ')') {
                         break;
                     }
                     w.push(c2);
@@ -311,20 +331,68 @@ pub fn parse(input: &str) -> Result<KqlQuery, KqlError> {
     Ok(q)
 }
 
+/// Parse a filter expression: `OR` (lowest precedence) over `AND` over `NOT`
+/// over atoms, where an atom is `Confidence <op> <value>` or a parenthesised
+/// sub-expression. Stops at the next clause keyword.
 fn parse_filter(p: &mut Parser) -> Result<Filter, KqlError> {
-    let field = p.next_word()?;
-    if !field.eq_ignore_ascii_case("Confidence") {
-        return err(format!("unsupported filter field: {field}"));
+    parse_filter_or(p)
+}
+
+fn parse_filter_or(p: &mut Parser) -> Result<Filter, KqlError> {
+    let mut terms = vec![parse_filter_and(p)?];
+    while p.eat_keyword("OR") {
+        terms.push(parse_filter_and(p)?);
     }
-    let op = match p.next() {
-        Some(Tok::Op(op)) => op,
-        other => return err(format!("expected a comparison operator, found {other:?}")),
-    };
-    let value: u8 = p
-        .next_word()?
-        .parse()
-        .map_err(|_| KqlError("FILTER Confidence value must be 0..=255".into()))?;
-    Ok(Filter::Confidence { op, value })
+    Ok(if terms.len() == 1 {
+        terms.pop().unwrap()
+    } else {
+        Filter::Or(terms)
+    })
+}
+
+fn parse_filter_and(p: &mut Parser) -> Result<Filter, KqlError> {
+    let mut terms = vec![parse_filter_not(p)?];
+    while p.eat_keyword("AND") {
+        terms.push(parse_filter_not(p)?);
+    }
+    Ok(if terms.len() == 1 {
+        terms.pop().unwrap()
+    } else {
+        Filter::And(terms)
+    })
+}
+
+fn parse_filter_not(p: &mut Parser) -> Result<Filter, KqlError> {
+    if p.eat_keyword("NOT") {
+        Ok(Filter::Not(Box::new(parse_filter_not(p)?)))
+    } else {
+        parse_filter_atom(p)
+    }
+}
+
+fn parse_filter_atom(p: &mut Parser) -> Result<Filter, KqlError> {
+    if matches!(p.peek(), Some(Tok::LParen)) {
+        p.pos += 1;
+        let inner = parse_filter_or(p)?;
+        match p.next() {
+            Some(Tok::RParen) => Ok(inner),
+            other => err(format!("expected ')', found {other:?}")),
+        }
+    } else {
+        let field = p.next_word()?;
+        if !field.eq_ignore_ascii_case("Confidence") {
+            return err(format!("unsupported filter field: {field}"));
+        }
+        let op = match p.next() {
+            Some(Tok::Op(op)) => op,
+            other => return err(format!("expected a comparison operator, found {other:?}")),
+        };
+        let value: u8 = p
+            .next_word()?
+            .parse()
+            .map_err(|_| KqlError("FILTER Confidence value must be 0..=255".into()))?;
+        Ok(Filter::Confidence { op, value })
+    }
 }
 
 /// Parse `ORDER [BY] Confidence [ASC|DESC]`. The optional `BY` and the field
@@ -419,10 +487,17 @@ fn order_and_limit(mut v: Vec<NodeMatch>, query: &KqlQuery) -> Vec<NodeMatch> {
     v
 }
 
-fn passes_filters(node: &Node, filters: &[Filter]) -> bool {
-    filters.iter().all(|f| match f {
+fn eval_filter(node: &Node, filter: &Filter) -> bool {
+    match filter {
         Filter::Confidence { op, value } => op.apply(node.confidence, *value),
-    })
+        Filter::And(fs) => fs.iter().all(|f| eval_filter(node, f)),
+        Filter::Or(fs) => fs.iter().any(|f| eval_filter(node, f)),
+        Filter::Not(inner) => !eval_filter(node, inner),
+    }
+}
+
+fn passes_filters(node: &Node, filters: &[Filter]) -> bool {
+    filters.iter().all(|f| eval_filter(node, f))
 }
 
 /// Enforce `BEFORE`/`AFTER` temporal bounds against a node's date (§946).
@@ -571,6 +646,35 @@ mod tests {
         // Only the high-confidence algorithm passes the filter.
         assert_eq!(res.related.len(), 1);
         assert_eq!(res.related[0].label, "Attention");
+    }
+
+    #[test]
+    fn parses_and_evaluates_compound_filters() {
+        let mut g = KnowledgeGraph::new();
+        g.add_node(NodeKind::Concept, "Low", 20);
+        g.add_node(NodeKind::Concept, "Mid", 60);
+        g.add_node(NodeKind::Concept, "High", 95);
+
+        // Range via AND: only Mid (60) is in (50, 90).
+        let q = parse("FIND Concept FILTER Confidence > 50 AND Confidence < 90").unwrap();
+        let res = execute(&q, &g);
+        assert_eq!(res.primary.len(), 1);
+        assert_eq!(res.primary[0].label, "Mid");
+
+        // OR of two ranges: Low (<30) or High (>90).
+        let q =
+            parse("FIND Concept FILTER Confidence < 30 OR Confidence > 90 ORDER BY Confidence ASC")
+                .unwrap();
+        let res = execute(&q, &g);
+        let labels: Vec<&str> = res.primary.iter().map(|m| m.label.as_str()).collect();
+        assert_eq!(labels, vec!["Low", "High"]);
+
+        // NOT and parentheses: NOT (Confidence < 50) keeps Mid and High.
+        let q = parse("FIND Concept FILTER NOT (Confidence < 50)").unwrap();
+        let res = execute(&q, &g);
+        let mut labels: Vec<&str> = res.primary.iter().map(|m| m.label.as_str()).collect();
+        labels.sort_unstable();
+        assert_eq!(labels, vec!["High", "Mid"]);
     }
 
     #[test]
