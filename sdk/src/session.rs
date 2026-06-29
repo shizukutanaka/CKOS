@@ -71,7 +71,8 @@ impl Session {
             doc.metadata
                 .insert("capability".into(), r.capability.to_string());
             doc.metadata.insert("runtime".into(), r.runtime.clone());
-            doc.metadata.insert("verified".into(), r.verified.to_string());
+            doc.metadata
+                .insert("verified".into(), r.verified.to_string());
             if let Some(agent) = &r.agent {
                 doc.metadata.insert("agent".into(), agent.clone());
             }

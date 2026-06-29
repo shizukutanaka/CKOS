@@ -39,7 +39,11 @@ pub trait Planner {
         let mut refs: Vec<StepRef> = Vec::with_capacity(subtasks.len());
         for st in &subtasks {
             let task = Task::new(st.description.clone(), st.capability.clone());
-            let deps: Vec<StepRef> = st.depends_on.iter().filter_map(|i| refs.get(*i).copied()).collect();
+            let deps: Vec<StepRef> = st
+                .depends_on
+                .iter()
+                .filter_map(|i| refs.get(*i).copied())
+                .collect();
             let r = dag.add_step(task, &deps);
             refs.push(r);
         }

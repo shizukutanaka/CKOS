@@ -430,7 +430,13 @@ mod tests {
         assert_eq!(q.find.kind.as_deref(), Some("Concept"));
         assert_eq!(q.find.text.as_deref(), Some("Transformer"));
         assert_eq!(q.related.as_deref(), Some("Algorithm"));
-        assert_eq!(q.filters, vec![Filter::Confidence { op: CmpOp::Gt, value: 90 }]);
+        assert_eq!(
+            q.filters,
+            vec![Filter::Confidence {
+                op: CmpOp::Gt,
+                value: 90
+            }]
+        );
         assert_eq!(q.before.as_deref(), Some("2025-01-01"));
         assert_eq!(q.returns, vec![ReturnTarget::Graph, ReturnTarget::Sources]);
     }

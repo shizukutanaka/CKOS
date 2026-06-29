@@ -35,12 +35,10 @@ pub use session::Session;
 pub mod prelude {
     pub use crate::agent::{AgentInstance, AgentManifest, AgentState, CapabilityRegistry};
     pub use crate::engine::{Engine, ExecutionResult};
-    pub use crate::reflection::{
-        consensus, Consensus, HeuristicReflector, Reflection, Reflector,
-    };
     pub use crate::kql::{
         execute as kql_execute, parse as kql_parse, KqlQuery, KqlResult, NodeMatch, ReturnTarget,
     };
+    pub use crate::reflection::{consensus, Consensus, HeuristicReflector, Reflection, Reflector};
     pub use crate::retrieval::{plan_retrieval, Hit, HitSource, RetrievalStrategy, Retriever};
     pub use crate::session::Session;
 
@@ -50,7 +48,7 @@ pub mod prelude {
     pub use ckos_kernel::task::{Priority, Task, TaskState};
     pub use ckos_kernel::{AgentId, DocumentId, NodeId, RuntimeId, TaskId, WorkflowId};
 
-    pub use ckos_scheduler::{ScoreFactors, Scheduler};
+    pub use ckos_scheduler::{Scheduler, ScoreFactors};
 
     pub use ckos_runtime::{
         EchoRuntime, InferenceRequest, InferenceResponse, Runtime, RuntimeKind, RuntimeRegistry,

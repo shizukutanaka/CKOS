@@ -222,7 +222,10 @@ mod tests {
         assert_eq!(got.confidence, 88);
         assert_eq!(got.body, "line one\n\nline two"); // blank line in body preserved
         assert_eq!(got.embedding, Some(vec![0.5, 0.25]));
-        assert_eq!(got.metadata.get("project").map(String::as_str), Some("ckos"));
+        assert_eq!(
+            got.metadata.get("project").map(String::as_str),
+            Some("ckos")
+        );
     }
 
     #[test]

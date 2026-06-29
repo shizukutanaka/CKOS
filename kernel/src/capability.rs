@@ -90,7 +90,10 @@ mod tests {
 
     #[test]
     fn parses_known_and_custom() {
-        assert_eq!("planning".parse::<Capability>().unwrap(), Capability::Planning);
+        assert_eq!(
+            "planning".parse::<Capability>().unwrap(),
+            Capability::Planning
+        );
         assert_eq!(
             "weather".parse::<Capability>().unwrap(),
             Capability::Custom("weather".into())

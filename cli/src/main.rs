@@ -240,7 +240,10 @@ fn cmd_search(rest: &[String]) -> ExitCode {
     }
     println!("{} hit(s) for {query:?}:", hits.len());
     for h in &hits {
-        println!("  [{:?} {:.2}] {} — {}", h.source, h.score, h.title, h.snippet);
+        println!(
+            "  [{:?} {:.2}] {} — {}",
+            h.source, h.score, h.title, h.snippet
+        );
     }
     ExitCode::SUCCESS
 }

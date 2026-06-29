@@ -146,7 +146,11 @@ impl<'a> Retriever<'a> {
         }
 
         // Deduplicate by title, keeping the highest score.
-        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         let mut seen = std::collections::HashSet::new();
         hits.retain(|h| seen.insert(h.title.clone()));
         hits.truncate(limit);
@@ -248,10 +252,18 @@ mod tests {
     fn keyword_ranks_title_matches_above_body() {
         let mut store = InMemoryStore::new();
         store
-            .write(Document::new("note", "kernel design", "scheduling internals"))
+            .write(Document::new(
+                "note",
+                "kernel design",
+                "scheduling internals",
+            ))
             .unwrap();
         store
-            .write(Document::new("note", "scheduling", "mentions the kernel once"))
+            .write(Document::new(
+                "note",
+                "scheduling",
+                "mentions the kernel once",
+            ))
             .unwrap();
         let graph = KnowledgeGraph::new();
         let retriever = Retriever::new(&store, &graph);

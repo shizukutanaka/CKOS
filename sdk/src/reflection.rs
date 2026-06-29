@@ -50,7 +50,10 @@ impl Reflector for HeuristicReflector {
                 "output failed verification; regenerate with stricter constraints",
             )
         } else if result.output.trim().is_empty() {
-            (40, "verified but empty; tighten the prompt to require content")
+            (
+                40,
+                "verified but empty; tighten the prompt to require content",
+            )
         } else if result.agent.is_none() {
             (
                 70,

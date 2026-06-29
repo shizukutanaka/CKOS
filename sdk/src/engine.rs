@@ -142,7 +142,11 @@ impl Engine {
     }
 
     /// Self-evaluate a batch of results with the given reflector (§921).
-    pub fn reflect(&self, reflector: &dyn Reflector, results: &[ExecutionResult]) -> Vec<Reflection> {
+    pub fn reflect(
+        &self,
+        reflector: &dyn Reflector,
+        results: &[ExecutionResult],
+    ) -> Vec<Reflection> {
         results.iter().map(|r| reflector.reflect(r)).collect()
     }
 }

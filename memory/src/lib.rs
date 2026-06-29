@@ -57,7 +57,11 @@ pub struct Document {
 
 impl Document {
     /// Create a minimal document.
-    pub fn new(doc_type: impl Into<String>, title: impl Into<String>, body: impl Into<String>) -> Self {
+    pub fn new(
+        doc_type: impl Into<String>,
+        title: impl Into<String>,
+        body: impl Into<String>,
+    ) -> Self {
         Document {
             id: DocumentId::new(),
             doc_type: doc_type.into(),
@@ -138,16 +142,9 @@ impl Storage for InMemoryStore {
         let mut hits: Vec<Document> = self
             .docs
             .values()
-            .filter(|d| {
-                query
-                    .doc_type
-                    .as_ref()
-                    .map_or(true, |t| &d.doc_type == t)
-            })
+            .filter(|d| query.doc_type.as_ref().map_or(true, |t| &d.doc_type == t))
             .filter(|d| match &needle {
-                Some(n) => {
-                    d.title.to_lowercase().contains(n) || d.body.to_lowercase().contains(n)
-                }
+                Some(n) => d.title.to_lowercase().contains(n) || d.body.to_lowercase().contains(n),
                 None => true,
             })
             .cloned()

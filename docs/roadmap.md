@@ -46,6 +46,10 @@ so the whole system runs offline.
 - ✅ **KQL** (`sdk::kql`, §962) — Knowledge Query Language: tokeniser +
   recursive-descent parser → typed AST, executor over the graph
   (FIND/RELATED/FILTER); via `ckos kql`. Temporal enforcement (§946) is next.
+- ✅ **CI** (`docs/ci-workflow.yml`, §905) — fmt + clippy + build + test + CLI
+  smoke tests on every push/PR, with `-D warnings`. Copy it to
+  `.github/workflows/ci.yml` to activate (the branch automation can't push
+  workflow files itself). Cross-platform/mobile build matrix is the next step.
 - **API gateway** (REST/gRPC/WebSocket/MCP) over the common Task API — §902.
 
 ## v2.8 — Developer platform & ecosystem
