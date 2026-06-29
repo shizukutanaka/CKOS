@@ -61,7 +61,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 936 | Storage abstraction | ✅ | `memory::Storage` (`InMemoryStore`, `FileStore`; SQL/vector DBs ⏳) |
 | 937 | Unified document model | ✅ | `memory::Document` |
 | 938 | Index pipeline | 🟡 | `knowledge_bus::Reindexer` (embed + insert; parse/chunk/NER ⏳) |
-| 939 | Chunk evolution | ⏳ | pending |
+| 939 | Chunk evolution | 🟡 | `memory::chunk` (Paragraph/Fixed/Adaptive; semantic & hierarchical ⏳) |
 | 940 | Semantic compression | 🟡 | `memory::compress_document`/`summarize`/`keywords` (summary + concept tiers; knowledge tier ⏳) |
 | 941 | Knowledge graph builder | ⏳ | manual `add_node`; automatic extraction pending |
 | 942–943 | Graph versioning / merge | ✅ | `graph::versioning` |

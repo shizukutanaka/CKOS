@@ -9,8 +9,10 @@ use ckos_kernel::error::Result;
 use ckos_kernel::DocumentId;
 use std::collections::HashMap;
 
+mod chunk;
 mod embedding;
 mod file_store;
+pub use chunk::{chunk, ChunkStrategy};
 mod maintenance;
 pub use embedding::{cosine, Embedder, HashingEmbedder};
 pub use file_store::FileStore;
