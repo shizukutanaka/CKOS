@@ -21,6 +21,7 @@ COMMANDS:
     search <dir> <query…>            Hybrid-search a session's stored documents
     kql <query>                      Run a KQL query against a demo knowledge graph
     gc <dir> [--min-confidence N]    Garbage-collect a session's stored documents
+    verify <text…>                   Run the built-in verifier checks on text
     capabilities                     List the built-in capability vocabulary
     version                          Print the CKOS version
     help                             Show this help
@@ -35,6 +36,7 @@ fn main() -> ExitCode {
         Some("search") => cmd_search(&args[1..]),
         Some("kql") => cmd_kql(&args[1..]),
         Some("gc") => cmd_gc(&args[1..]),
+        Some("verify") => cmd_verify(&args[1..]),
         Some("capabilities") => cmd_capabilities(),
         Some("version") => {
             println!("ckos {}", env!("CARGO_PKG_VERSION"));
@@ -124,7 +126,9 @@ fn cmd_run(rest: &[String]) -> ExitCode {
         runtimes.register(Box::new(EchoRuntime::new(vec![cap.clone()])));
         agents.register(AgentManifest::new(format!("{cap}-agent"), cap));
     }
-    let verifier = Verifier::new().with_check(Box::new(NonEmptyCheck));
+    let verifier = Verifier::new()
+        .with_check(Box::new(NonEmptyCheck))
+        .with_check(Box::new(CitationCheck));
     let engine = Engine::new(runtimes, agents, verifier);
 
     println!("intent : {intent}");
@@ -363,6 +367,40 @@ fn cmd_gc(rest: &[String]) -> ExitCode {
             eprintln!("error: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+fn cmd_verify(rest: &[String]) -> ExitCode {
+    if rest.is_empty() {
+        eprintln!("error: `verify` needs text, e.g. `ckos verify 'see [1]'`");
+        return ExitCode::FAILURE;
+    }
+    let text = rest.join(" ");
+    // The full built-in §899 check set.
+    let verifier = Verifier::new()
+        .with_check(Box::new(NonEmptyCheck))
+        .with_check(Box::new(JsonBalanceCheck))
+        .with_check(Box::new(CitationCheck))
+        .with_check(Box::new(ForbiddenContentCheck::new([
+            "begin private key",
+            "password=",
+            "api_key=",
+        ])));
+    let report = verifier.verify(&text);
+    for (name, verdict) in &report.results {
+        let status = match verdict {
+            Verdict::Pass => "pass".to_string(),
+            Verdict::Skip => "skip".to_string(),
+            Verdict::Fail(why) => format!("FAIL — {why}"),
+        };
+        println!("  {name:<16} {status}");
+    }
+    if report.passed() {
+        println!("\nverified: all checks passed");
+        ExitCode::SUCCESS
+    } else {
+        println!("\nverification FAILED");
+        ExitCode::FAILURE
     }
 }
 
