@@ -117,6 +117,16 @@ fn run_session_builds_graph_used_by_search() {
     let s = ckos(&["search", dir.to_str().unwrap(), "Transformer"]);
     assert!(s.status.success());
     assert!(stdout(&s).contains("Graph"));
+
+    // KQL can query the same persisted graph.
+    let k = ckos(&[
+        "kql",
+        "--session",
+        dir.to_str().unwrap(),
+        "FIND Concept \"Transformer\"",
+    ]);
+    assert!(k.status.success());
+    assert!(stdout(&k).contains("Transformer"));
 }
 
 #[test]

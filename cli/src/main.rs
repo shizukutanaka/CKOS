@@ -26,7 +26,8 @@ COMMANDS:
     history <dir>                    Show the execution history of a session
     search <dir> <query…>            Hybrid-search a session's stored documents
     workflow <file>                  Load and execute a workflow definition file
-    kql <query>                      Run a KQL query against a demo knowledge graph
+    kql [--session <dir>] <query>    Run a KQL query (demo graph, or a session's
+                                     persisted graph with --session)
     graph [--dot] <text…>            Extract a knowledge graph from text (§941)
     graph [--dot] --session <dir>    Extract a graph from a session's documents
     gc <dir> [--min-confidence N]    Garbage-collect a session's stored documents
@@ -366,22 +367,8 @@ fn cmd_workflow(rest: &[String]) -> ExitCode {
     }
 }
 
-fn cmd_kql(rest: &[String]) -> ExitCode {
-    if rest.is_empty() {
-        eprintln!("error: usage `ckos kql \"FIND Concept \\\"Transformer\\\" RELATED Algorithm\"`");
-        return ExitCode::FAILURE;
-    }
-    let source = rest.join(" ");
-    let query = match kql_parse(&source) {
-        Ok(q) => q,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    // A small demo knowledge graph to run the query against (§897), with
-    // temporal dates (§946) and provenance (§947).
+/// A small demo knowledge graph for `ckos kql` when no session is given.
+fn demo_graph() -> KnowledgeGraph {
     let mut graph = KnowledgeGraph::new();
     let transformer = graph.add_node(NodeKind::Concept, "Transformer", 96);
     graph.set_date(&transformer, "2017-06-12");
@@ -394,6 +381,41 @@ fn cmd_kql(rest: &[String]) -> ExitCode {
     graph.connect(&transformer, &attention, EdgeKind::References);
     graph.connect(&transformer, &rnn, EdgeKind::References);
     graph.connect(&transformer, &vaswani, EdgeKind::CreatedBy);
+    graph
+}
+
+fn cmd_kql(rest: &[String]) -> ExitCode {
+    // Optional `--session <dir>` queries that session's persisted graph instead
+    // of the built-in demo graph.
+    let (session_dir, rest): (Option<&str>, &[String]) = match rest {
+        [flag, dir, tail @ ..] if flag == "--session" => (Some(dir.as_str()), tail),
+        _ => (None, rest),
+    };
+    if rest.is_empty() {
+        eprintln!("error: usage `ckos kql [--session <dir>] \"FIND Concept \\\"Transformer\\\" RELATED Algorithm\"`");
+        return ExitCode::FAILURE;
+    }
+    let source = rest.join(" ");
+    let query = match kql_parse(&source) {
+        Ok(q) => q,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Either the session's persisted graph (§936) or a small demo graph (§897)
+    // with temporal dates (§946) and provenance (§947).
+    let graph = match session_dir {
+        Some(dir) => match GraphStore::load(Path::new(dir).join(GRAPH_FILE)) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("error: could not load graph from {dir}: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => demo_graph(),
+    };
 
     let show_sources = query.returns.contains(&ReturnTarget::Sources);
     let print_match = |m: &NodeMatch| {

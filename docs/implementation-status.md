@@ -83,7 +83,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 959 | Learning pipeline | 🟡 | reflection persistence + auto-reindex; full loop ⏳ |
 | 960 | Unified knowledge API | 🟡 | `cli` (`search`/`kql`/`history`); network API ⏳ |
 | 961 | AI-native filesystem | ⏳ | proposal |
-| 962 | Knowledge Query Language | ✅ | `sdk::kql` |
+| 962 | Knowledge Query Language | ✅ | `sdk::kql` (`ckos kql`, incl. `--session` over a persisted graph) |
 
 ## Summary
 
