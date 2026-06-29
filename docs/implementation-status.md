@@ -62,7 +62,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 937 | Unified document model | ✅ | `memory::Document` |
 | 938 | Index pipeline | 🟡 | `knowledge_bus::Reindexer` (embed + insert; parse/chunk/NER ⏳) |
 | 939 | Chunk evolution | ⏳ | pending |
-| 940 | Semantic compression | 🟡 | `memory::compress_document` (summary step; concept/knowledge tiers ⏳) |
+| 940 | Semantic compression | 🟡 | `memory::compress_document`/`summarize`/`keywords` (summary + concept tiers; knowledge tier ⏳) |
 | 941 | Knowledge graph builder | ⏳ | manual `add_node`; automatic extraction pending |
 | 942–943 | Graph versioning / merge | ✅ | `graph::versioning` |
 | 944 | Embedding manager | ✅ | `memory::Embedder` / `HashingEmbedder` (real model ⏳) |

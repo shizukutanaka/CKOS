@@ -73,8 +73,9 @@ pub mod prelude {
     };
 
     pub use ckos_memory::{
-        collect as gc_collect, compress_document, cosine, summarize, Document, Embedder, FileStore,
-        GcPolicy, GcReason, GcReport, HashingEmbedder, InMemoryStore, MemoryTier, Query, Storage,
+        collect as gc_collect, compress_document, cosine, keywords, summarize, Document, Embedder,
+        FileStore, GcPolicy, GcReason, GcReport, HashingEmbedder, InMemoryStore, MemoryTier, Query,
+        Storage,
     };
 
     pub use ckos_planner::{HeuristicPlanner, Planner, SubTask};

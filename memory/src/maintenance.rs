@@ -142,8 +142,31 @@ pub fn summarize(text: &str, max_chars: usize) -> String {
     out
 }
 
-/// Compress a document's body in place to a summary, tagging it so the
-/// compression is auditable and not repeated (§940, §953).
+/// Extract up to `top_n` "concept" keywords from text — the concept tier of the
+/// §940 compression ladder (full-text → summary → concept → knowledge). Words
+/// shorter than 4 characters and a small stop-word set are ignored; results are
+/// ranked by frequency, ties broken alphabetically for determinism.
+pub fn keywords(text: &str, top_n: usize) -> Vec<String> {
+    const STOP: &[&str] = &[
+        "this", "that", "with", "from", "have", "will", "into", "over", "they", "them", "then",
+        "than", "your", "which", "their", "there", "about", "would", "could", "should", "been",
+        "were", "what", "when", "where",
+    ];
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for word in text.split(|c: char| !c.is_alphanumeric()) {
+        let w = word.to_lowercase();
+        if w.len() >= 4 && !STOP.contains(&w.as_str()) {
+            *counts.entry(w).or_insert(0) += 1;
+        }
+    }
+    let mut ranked: Vec<(String, usize)> = counts.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    ranked.into_iter().take(top_n).map(|(w, _)| w).collect()
+}
+
+/// Compress a document's body in place to a summary, recording the extracted
+/// concepts, and tagging it so the compression is auditable and not repeated
+/// (§940 summary + concept tiers, §953).
 pub fn compress_document(doc: &mut Document, max_chars: usize) {
     if doc.metadata.contains_key("compressed") {
         return;
@@ -152,10 +175,14 @@ pub fn compress_document(doc: &mut Document, max_chars: usize) {
     if original_len <= max_chars {
         return;
     }
+    let concepts = keywords(&doc.body, 5);
     doc.body = summarize(&doc.body, max_chars);
     doc.metadata.insert("compressed".into(), "true".into());
     doc.metadata
         .insert("original_len".into(), original_len.to_string());
+    if !concepts.is_empty() {
+        doc.metadata.insert("concepts".into(), concepts.join(","));
+    }
 }
 
 #[cfg(test)]
@@ -219,6 +246,15 @@ mod tests {
         assert!(s.starts_with("First sentence here."));
         // Short text is returned unchanged.
         assert_eq!(summarize("short", 30), "short");
+    }
+
+    #[test]
+    fn keywords_rank_by_frequency() {
+        let text = "kernel kernel scheduler kernel scheduler graph the a an";
+        let kw = keywords(text, 2);
+        assert_eq!(kw, vec!["kernel", "scheduler"]); // freq 3, 2; short words dropped
+                                                     // Stop words and short tokens are excluded.
+        assert!(!keywords("this that with from", 5).contains(&"this".to_string()));
     }
 
     #[test]

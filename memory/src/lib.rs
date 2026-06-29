@@ -14,7 +14,9 @@ mod file_store;
 mod maintenance;
 pub use embedding::{cosine, Embedder, HashingEmbedder};
 pub use file_store::FileStore;
-pub use maintenance::{collect, compress_document, summarize, GcPolicy, GcReason, GcReport};
+pub use maintenance::{
+    collect, compress_document, keywords, summarize, GcPolicy, GcReason, GcReport,
+};
 
 /// The six-level memory hierarchy from §896.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
