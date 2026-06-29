@@ -1,0 +1,5 @@
+# Pin the toolchain so local builds and CI agree, and the fmt/clippy gates use
+# the same component versions everywhere.
+[toolchain]
+channel = "stable"
+components = ["clippy", "rustfmt"]
