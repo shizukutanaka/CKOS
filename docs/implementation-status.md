@@ -22,7 +22,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 896 | Memory hierarchy L0–L5 | ✅ | `memory::MemoryTier` |
 | 897 | Knowledge graph | ✅ | `graph` (+ `GraphStore` file persistence) |
 | 898 | Planner | ✅ | `planner` |
-| 899 | Verifier (independent) | ✅ | `verifier` (non-empty, repetition/degeneration, JSON, citation, security-policy) |
+| 899 | Verifier (independent) | ✅ | `verifier` (non-empty, repetition/degeneration, arithmetic, JSON, citation, security-policy) |
 | 900 | Runtime registry | ✅ | `runtime` (trait + registry; real engines ⏳) |
 | 901 | Plugin SDK | 🟡 | `plugins` (tool/registry/permissions; WASM sandbox ⏳) |
 | 902 | API gateway | 🟡 | `cli` done; REST/gRPC/WebSocket/MCP ⏳ |

@@ -214,6 +214,95 @@ impl Check for CitationCheck {
     }
 }
 
+/// Mathematical-consistency check (§899): scans text for simple
+/// `A <op> B = C` equalities (where `op` is `+`, `-`, `*` or `/`) and fails on
+/// the first that does not hold. Operands are non-negative integers; the result
+/// may be negative. Division is only evaluated when exact — ambiguous cases
+/// (`7 / 2 = 3`) are ignored rather than guessed. Text with no equations is
+/// skipped. This is a focused, dependency-free stand-in for full symbolic math.
+pub struct ArithmeticCheck;
+
+fn parse_uint(bytes: &[u8], start: usize) -> Option<(i128, usize)> {
+    let mut i = start;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == start {
+        return None;
+    }
+    let v = std::str::from_utf8(&bytes[start..i]).ok()?.parse().ok()?;
+    Some((v, i))
+}
+
+fn skip_spaces(bytes: &[u8], mut i: usize) -> usize {
+    while matches!(bytes.get(i), Some(b' ' | b'\t')) {
+        i += 1;
+    }
+    i
+}
+
+/// Try to match an `A op B = C` equation at byte offset `i`. Returns
+/// `(correct, rendered)` or `None` if no (evaluable) equation starts here.
+fn match_equation(bytes: &[u8], i: usize) -> Option<(bool, String)> {
+    let (a, i) = parse_uint(bytes, i)?;
+    let i = skip_spaces(bytes, i);
+    let op = *bytes.get(i)?;
+    if !matches!(op, b'+' | b'-' | b'*' | b'/') {
+        return None;
+    }
+    let i = skip_spaces(bytes, i + 1);
+    let (b, i) = parse_uint(bytes, i)?;
+    let i = skip_spaces(bytes, i);
+    if bytes.get(i) != Some(&b'=') {
+        return None;
+    }
+    let i = skip_spaces(bytes, i + 1);
+    let (neg, i) = if bytes.get(i) == Some(&b'-') {
+        (true, i + 1)
+    } else {
+        (false, i)
+    };
+    let (c_abs, _) = parse_uint(bytes, i)?;
+    let c = if neg { -c_abs } else { c_abs };
+    let expected = match op {
+        b'+' => a.checked_add(b)?,
+        b'-' => a.checked_sub(b)?,
+        b'*' => a.checked_mul(b)?,
+        b'/' if b != 0 && a % b == 0 => a / b,
+        _ => return None, // zero/non-exact division: not evaluated
+    };
+    Some((expected == c, format!("{a} {} {b} = {c}", op as char)))
+}
+
+impl Check for ArithmeticCheck {
+    fn name(&self) -> &str {
+        "arithmetic"
+    }
+    fn evaluate(&self, output: &str) -> Verdict {
+        let bytes = output.as_bytes();
+        let mut found = false;
+        let mut i = 0;
+        while i < bytes.len() {
+            // Only attempt at a digit that begins a token (not mid-identifier).
+            let boundary = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+            if bytes[i].is_ascii_digit() && boundary {
+                if let Some((correct, rendered)) = match_equation(bytes, i) {
+                    found = true;
+                    if !correct {
+                        return Verdict::Fail(format!("incorrect arithmetic: {rendered}"));
+                    }
+                }
+            }
+            i += 1;
+        }
+        if found {
+            Verdict::Pass
+        } else {
+            Verdict::Skip
+        }
+    }
+}
+
 /// Security-policy check (§899): reject output containing any forbidden
 /// substring (case-insensitive) — e.g. leaked secrets or disallowed content.
 pub struct ForbiddenContentCheck {
@@ -403,6 +492,24 @@ mod tests {
             .passed());
         // Short output is skipped (too little to judge).
         assert!(v.verify("yes yes").passed());
+    }
+
+    #[test]
+    fn checks_mathematical_consistency() {
+        let v = Verifier::new().with_check(Box::new(ArithmeticCheck));
+        // Correct arithmetic passes; spaced and unspaced both parse.
+        assert!(v.verify("The sum 2 + 2 = 4 is right.").passed());
+        assert!(v.verify("compute 10*10=100 ok").passed());
+        // A negative result is handled.
+        assert!(v.verify("3 - 5 = -2").passed());
+        // A wrong equation fails.
+        let report = v.verify("Clearly 2 + 2 = 5 here.");
+        assert!(!report.passed());
+        assert_eq!(report.failures()[0].0, "arithmetic");
+        // No equation → skipped (e.g. a date is not an equation).
+        assert!(v.verify("Released on 2024-01-01, version 2.5.").passed());
+        // Non-exact division is ignored, not failed.
+        assert!(v.verify("7 / 2 = 3").passed());
     }
 
     #[test]
