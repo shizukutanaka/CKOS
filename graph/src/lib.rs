@@ -163,6 +163,31 @@ impl KnowledgeGraph {
         out
     }
 
+    /// Remove orphaned nodes — those with no incoming or outgoing edges — and
+    /// return how many were removed (§954 GC, "orphaned graph nodes"). Useful
+    /// after deletions or merges that leave isolated nodes behind.
+    pub fn remove_orphans(&mut self) -> usize {
+        use std::collections::HashSet;
+        let mut referenced: HashSet<NodeId> = HashSet::new();
+        for edges in self.adjacency.values() {
+            for e in edges {
+                referenced.insert(e.from.clone());
+                referenced.insert(e.to.clone());
+            }
+        }
+        let orphans: Vec<NodeId> = self
+            .nodes
+            .keys()
+            .filter(|id| !referenced.contains(*id))
+            .cloned()
+            .collect();
+        for id in &orphans {
+            self.nodes.remove(id);
+            self.adjacency.remove(id);
+        }
+        orphans.len()
+    }
+
     /// Number of nodes.
     pub fn len(&self) -> usize {
         self.nodes.len()
@@ -232,6 +257,21 @@ mod tests {
         let two_hop = g.traverse(&a, 2);
         assert_eq!(two_hop.len(), 2);
         assert!(two_hop.iter().any(|n| n.label == "ACME"));
+    }
+
+    #[test]
+    fn removes_orphaned_nodes() {
+        let mut g = KnowledgeGraph::new();
+        let a = g.add_node(NodeKind::Project, "CKOS", 100);
+        let b = g.add_node(NodeKind::Tool, "scheduler", 90);
+        g.add_node(NodeKind::Concept, "orphan", 50); // isolated
+        g.connect(&a, &b, EdgeKind::DependsOn);
+
+        assert_eq!(g.remove_orphans(), 1);
+        assert_eq!(g.len(), 2);
+        assert!(g.nodes().all(|n| n.label != "orphan"));
+        // a and b are connected, so a second pass removes nothing.
+        assert_eq!(g.remove_orphans(), 0);
     }
 
     #[test]

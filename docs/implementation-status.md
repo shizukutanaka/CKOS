@@ -75,7 +75,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 951 | Graph reasoning | ✅ | retrieval graph hits + `graph::traverse` |
 | 952 | Multi-hop planner | ✅ | `graph::traverse` + retriever hop expansion |
 | 953 | Memory consolidation | 🟡 | `memory::compress_document` (sleep-phase worker ⏳) |
-| 954 | Garbage collection | ✅ | `memory::collect` |
+| 954 | Garbage collection | ✅ | `memory::collect` (documents) + `graph::KnowledgeGraph::remove_orphans` (orphaned nodes) |
 | 955 | Data encryption | ⏳ | at-rest/in-transit pending (transport layer) |
 | 956 | Offline-first | ✅ | `FileStore` + std-only build |
 | 957 | Distributed knowledge | ⏳ | sharding/partial-sync pending |
