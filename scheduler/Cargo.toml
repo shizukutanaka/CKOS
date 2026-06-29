@@ -1,0 +1,11 @@
+[package]
+name = "ckos-scheduler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CKOS scheduler: task queue, priority queue, dependency resolver, dispatcher"
+
+[dependencies]
+ckos-kernel.workspace = true

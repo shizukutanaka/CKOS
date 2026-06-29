@@ -1,0 +1,86 @@
+# CKOS — Cognitive Kernel Operating System
+
+> An AI-native cognitive kernel for orchestrating agents, workflows, memory and
+> runtimes. The kernel **does not perform inference** (§891) — it manages tasks,
+> scheduling, memory, runtimes, events, security and resources, so the inference
+> backend (llama.cpp / vLLM / ONNX / MLX …) can change without touching the core.
+
+This repository is the implementation foundation for the CKOS design specified
+in [`docs/`](docs/) (versions v2.5–v2.7). It is a Rust Cargo workspace whose
+crates mirror the module layout in §890 of the spec.
+
+```
+                User / API / GUI
+                       │
+                Workflow Engine            (workflow)
+                       │
+               Cognitive Kernel            (kernel)
+                       │
+ ┌────────┬────────┬────────┬────────┐
+ │Scheduler│Memory │Graph   │Policy  │     (scheduler / memory / graph / policy)
+ └────────┴────────┴────────┴────────┘
+                       │
+             Runtime Abstraction Layer     (runtime)
+                       │
+       llama.cpp / vLLM / ONNX / MLX ...
+```
+
+## Workspace layout
+
+| Crate           | Spec | Responsibility |
+|-----------------|------|----------------|
+| `kernel`        | §891–§894 | Task lifecycle, capabilities, event bus, typed ids, errors |
+| `scheduler`     | §892, §913 | Four-layer scheduler with multi-factor priority scoring |
+| `runtime`       | §900, §924 | Runtime abstraction + registry, capability-based selection |
+| `graph`         | §897, §951–§952 | Typed knowledge graph with multi-hop traversal |
+| `memory`        | §896, §936–§937 | Memory hierarchy, unified document model, storage trait |
+| `planner`       | §898, §920 | Intent → decomposition → dependency-ordered DAG |
+| `verifier`      | §899 | Independent quality/safety checks, decoupled from generation |
+| `policy`        | §929 | RBAC + ABAC authorization, least-privilege by default |
+| `workflow`      | §895 | DAG engine with cycle detection and topological scheduling |
+| `plugins`       | §901, §917–§919 | Tool abstraction, tool registry, permission gate |
+| `sdk`           | §907–§910 | Agent manifests, lifecycle, capability registry, prelude |
+| `cli`           | §902 | `ckos` command-line interface |
+
+## Build & test
+
+```sh
+cargo build            # build everything
+cargo test             # run the unit + doc tests
+cargo run -p ckos-cli -- plan "research the Transformer paper"
+```
+
+Example output:
+
+```
+intent : research the Transformer paper
+workflow: research the Transformer paper (5 step(s))
+
+execution order:
+  1. [retrieval] search sources  (agents available: 1)
+  2. [embedding] generate embeddings  (agents available: 1)
+  3. [reasoning] summarize  (agents available: 1)
+  4. [verification] verify citations  (agents available: 1)
+  5. [reasoning] generate report  (agents available: 1)
+```
+
+## Design principles
+
+- **The kernel never infers.** Orchestration only (§891) — runtimes are pluggable.
+- **Discovery by capability, not name** (§910). Swap an agent without editing workflows.
+- **Generation and verification are separated** (§899) for quality.
+- **Least privilege everywhere** (§919, §929). Tools and agents request scoped permissions.
+- **Offline-first** (§925, §956). Local runtimes rank above remote; in-memory backends are the default.
+- **Dependency-light core.** The current crates are `std`-only, so the workspace builds and tests with no network access.
+
+## Status & roadmap
+
+This is the **kernel foundation**: every subsystem has a working, tested
+in-memory implementation and a trait seam for richer backends (persistent
+storage, networked event bus, WASM-sandboxed plugins, model-backed planner).
+See [`docs/roadmap.md`](docs/roadmap.md) for the implementation priority (§906)
+and the v2.8 plan (developer SDK, Workflow/Agent Studio, ecosystem).
+
+## License
+
+Apache-2.0.

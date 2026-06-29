@@ -1,0 +1,11 @@
+[package]
+name = "ckos-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CKOS runtime abstraction layer and registry (llama.cpp / vLLM / ONNX / MLX ...)"
+
+[dependencies]
+ckos-kernel.workspace = true

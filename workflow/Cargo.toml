@@ -1,0 +1,11 @@
+[package]
+name = "ckos-workflow"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CKOS workflow engine: DAG representation with cycle detection and topological scheduling"
+
+[dependencies]
+ckos-kernel.workspace = true

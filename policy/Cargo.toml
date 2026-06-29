@@ -1,0 +1,11 @@
+[package]
+name = "ckos-policy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CKOS policy engine: RBAC + ABAC authorization with least-privilege defaults"
+
+[dependencies]
+ckos-kernel.workspace = true

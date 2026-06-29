@@ -1,0 +1,11 @@
+[package]
+name = "ckos-verifier"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CKOS verifier: independent quality/safety checks decoupled from generation"
+
+[dependencies]
+ckos-kernel.workspace = true

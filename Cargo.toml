@@ -1,0 +1,46 @@
+# CKOS — Cognitive Kernel Operating System
+#
+# Cargo workspace. See docs/ for the full design specification (v2.5–v2.7).
+# Layout mirrors §890 of the spec: each module is an independent crate.
+[workspace]
+resolver = "2"
+members = [
+    "kernel",
+    "scheduler",
+    "runtime",
+    "graph",
+    "memory",
+    "planner",
+    "verifier",
+    "policy",
+    "workflow",
+    "plugins",
+    "sdk",
+    "cli",
+]
+
+[workspace.package]
+version = "2.7.0"
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0"
+repository = "https://github.com/shizukutanaka/CKOS"
+description = "CKOS — an AI-native cognitive kernel for orchestrating agents, workflows, memory and runtimes"
+
+[workspace.dependencies]
+ckos-kernel = { path = "kernel" }
+ckos-scheduler = { path = "scheduler" }
+ckos-runtime = { path = "runtime" }
+ckos-graph = { path = "graph" }
+ckos-memory = { path = "memory" }
+ckos-planner = { path = "planner" }
+ckos-verifier = { path = "verifier" }
+ckos-policy = { path = "policy" }
+ckos-workflow = { path = "workflow" }
+ckos-plugins = { path = "plugins" }
+ckos-sdk = { path = "sdk" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

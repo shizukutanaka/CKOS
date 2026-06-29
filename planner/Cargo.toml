@@ -1,0 +1,12 @@
+[package]
+name = "ckos-planner"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CKOS planner: turns intent into a dependency-ordered execution DAG"
+
+[dependencies]
+ckos-kernel.workspace = true
+ckos-workflow.workspace = true

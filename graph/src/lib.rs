@@ -1,0 +1,169 @@
+//! # CKOS Knowledge Graph
+//!
+//! Typed nodes and edges (§897) forming the substrate for graph reasoning
+//! (§951) and multi-hop retrieval (§952). The store is in-memory and adjacency
+//! based; a persistent backend (Neo4j/SurrealDB) plugs in behind the same API
+//! via the storage abstraction (§936).
+
+use ckos_kernel::NodeId;
+use std::collections::HashMap;
+
+/// Node categories from §897.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NodeKind {
+    Concept,
+    Document,
+    Person,
+    Organization,
+    Tool,
+    Api,
+    Project,
+    /// Open category for domain-specific nodes.
+    Other(String),
+}
+
+/// Edge relationship types from §897.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EdgeKind {
+    DependsOn,
+    Implements,
+    References,
+    CreatedBy,
+    RelatedTo,
+    /// Open category for domain-specific relations.
+    Other(String),
+}
+
+/// A graph node with an optional confidence score (§948).
+#[derive(Debug, Clone)]
+pub struct Node {
+    pub id: NodeId,
+    pub kind: NodeKind,
+    pub label: String,
+    /// Confidence 0..=100 (§948).
+    pub confidence: u8,
+}
+
+/// A directed, typed edge.
+#[derive(Debug, Clone)]
+pub struct Edge {
+    pub from: NodeId,
+    pub to: NodeId,
+    pub kind: EdgeKind,
+}
+
+/// In-memory knowledge graph.
+#[derive(Default)]
+pub struct KnowledgeGraph {
+    nodes: HashMap<NodeId, Node>,
+    /// Adjacency: source node -> outgoing edges.
+    adjacency: HashMap<NodeId, Vec<Edge>>,
+}
+
+impl KnowledgeGraph {
+    /// Create an empty graph.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Insert (or replace) a node, returning its id.
+    pub fn add_node(&mut self, kind: NodeKind, label: impl Into<String>, confidence: u8) -> NodeId {
+        let id = NodeId::new();
+        self.nodes.insert(
+            id.clone(),
+            Node {
+                id: id.clone(),
+                kind,
+                label: label.into(),
+                confidence: confidence.min(100),
+            },
+        );
+        self.adjacency.entry(id.clone()).or_default();
+        id
+    }
+
+    /// Connect two nodes with a typed edge.
+    pub fn connect(&mut self, from: &NodeId, to: &NodeId, kind: EdgeKind) {
+        self.adjacency.entry(from.clone()).or_default().push(Edge {
+            from: from.clone(),
+            to: to.clone(),
+            kind,
+        });
+    }
+
+    /// Look up a node.
+    pub fn node(&self, id: &NodeId) -> Option<&Node> {
+        self.nodes.get(id)
+    }
+
+    /// Number of nodes.
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Whether the graph is empty.
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+
+    /// Outgoing neighbours of a node.
+    pub fn neighbors(&self, id: &NodeId) -> Vec<&Node> {
+        self.adjacency
+            .get(id)
+            .into_iter()
+            .flatten()
+            .filter_map(|e| self.nodes.get(&e.to))
+            .collect()
+    }
+
+    /// Breadth-first multi-hop traversal up to `max_hops` (§952).
+    ///
+    /// Returns nodes reachable from `start`, nearest first, excluding `start`.
+    pub fn traverse(&self, start: &NodeId, max_hops: usize) -> Vec<&Node> {
+        use std::collections::{HashSet, VecDeque};
+        let mut visited: HashSet<NodeId> = HashSet::new();
+        let mut out = Vec::new();
+        let mut queue: VecDeque<(NodeId, usize)> = VecDeque::new();
+        visited.insert(start.clone());
+        queue.push_back((start.clone(), 0));
+        while let Some((id, hops)) = queue.pop_front() {
+            if hops >= max_hops {
+                continue;
+            }
+            if let Some(edges) = self.adjacency.get(&id) {
+                for e in edges {
+                    if visited.insert(e.to.clone()) {
+                        if let Some(n) = self.nodes.get(&e.to) {
+                            out.push(n);
+                        }
+                        queue.push_back((e.to.clone(), hops + 1));
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn multi_hop_traversal_reaches_distant_nodes() {
+        let mut g = KnowledgeGraph::new();
+        let a = g.add_node(NodeKind::Project, "CKOS", 100);
+        let b = g.add_node(NodeKind::Tool, "scheduler", 90);
+        let c = g.add_node(NodeKind::Organization, "ACME", 80);
+        g.connect(&a, &b, EdgeKind::DependsOn);
+        g.connect(&b, &c, EdgeKind::CreatedBy);
+
+        let one_hop = g.traverse(&a, 1);
+        assert_eq!(one_hop.len(), 1);
+        assert_eq!(one_hop[0].label, "scheduler");
+
+        let two_hop = g.traverse(&a, 2);
+        assert_eq!(two_hop.len(), 2);
+        assert!(two_hop.iter().any(|n| n.label == "ACME"));
+    }
+}

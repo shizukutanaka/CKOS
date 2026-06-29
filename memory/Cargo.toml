@@ -1,0 +1,11 @@
+[package]
+name = "ckos-memory"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CKOS memory hierarchy (L0-L5), unified document model and storage abstraction"
+
+[dependencies]
+ckos-kernel.workspace = true

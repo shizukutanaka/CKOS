@@ -1,0 +1,11 @@
+[package]
+name = "ckos-plugins"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CKOS plugin SDK: tool abstraction, tool registry and plugin kinds"
+
+[dependencies]
+ckos-kernel.workspace = true

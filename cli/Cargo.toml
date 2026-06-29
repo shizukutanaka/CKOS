@@ -1,0 +1,15 @@
+[package]
+name = "ckos-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CKOS command-line interface"
+
+[[bin]]
+name = "ckos"
+path = "src/main.rs"
+
+[dependencies]
+ckos-sdk.workspace = true
