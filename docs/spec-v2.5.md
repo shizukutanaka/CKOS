@@ -113,7 +113,9 @@ Interfaces: REST, gRPC, WebSocket, MCP, CLI — over a common Task API.
 ## §903–§905 Logging, telemetry, CI/CD
 
 - **§903 Audit/log**: time, runtime, model version, plugin, tool, I/O hash,
-  errors. Audit and debug logs are kept separate.
+  errors. Audit and debug logs are kept separate. → `kernel::audit`
+  (`AuditRecord`/`AuditSink`/`InMemoryAuditLog`); the engine audits every task
+  execution (I/O hashed, not stored raw); shown by `ckos run`.
 - **§904 Telemetry**: CPU/GPU/NPU usage, memory, latency, token rate, power —
   fed back into scheduler optimization.
 - **§905 CI/CD**: Windows/Linux/macOS (x64+ARM), Android, iOS; unit,

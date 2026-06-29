@@ -15,6 +15,7 @@
 //! guarantee (§925); an async/distributed driver (§926) can replace it behind
 //! the same surface later.
 
+use ckos_kernel::audit::{AuditRecord, AuditSink, InMemoryAuditLog};
 use ckos_kernel::capability::Capability;
 use ckos_kernel::error::{KernelError, Result};
 use ckos_kernel::event::{Event, EventBus, InMemoryEventBus};
@@ -51,6 +52,7 @@ pub struct Engine {
     agents: CapabilityRegistry,
     verifier: Verifier,
     bus: InMemoryEventBus,
+    audit: InMemoryAuditLog,
 }
 
 impl Engine {
@@ -61,6 +63,7 @@ impl Engine {
             agents,
             verifier,
             bus: InMemoryEventBus::new(),
+            audit: InMemoryAuditLog::new(),
         }
     }
 
@@ -69,7 +72,13 @@ impl Engine {
         &self.bus
     }
 
-    /// Execute one task: select runtime → run → verify, emitting events.
+    /// The audit log of executed tasks (§903).
+    pub fn audit(&self) -> &InMemoryAuditLog {
+        &self.audit
+    }
+
+    /// Execute one task: select runtime → run → verify, emitting events and
+    /// writing an audit record (§903) on every path, success or failure.
     pub fn execute(&self, task: &Task) -> Result<ExecutionResult> {
         self.bus.publish(Event::TaskStarted(task.id.clone()));
 
@@ -79,16 +88,42 @@ impl Engine {
             .first()
             .map(|a| a.manifest.id.clone());
 
-        let runtime = self.runtimes.select(&task.capability)?;
+        let runtime = match self.runtimes.select(&task.capability) {
+            Ok(rt) => rt,
+            Err(e) => {
+                self.audit.record(
+                    AuditRecord::new("task.execute")
+                        .input(&task.description)
+                        .error(e.to_string()),
+                );
+                return Err(e);
+            }
+        };
         let runtime_name = runtime.name().to_string();
-        let response = runtime.run(&InferenceRequest {
+
+        let response = match runtime.run(&InferenceRequest {
             input: task.description.clone(),
             capability: task.capability.clone(),
             max_tokens: 512,
-        })?;
+        }) {
+            Ok(r) => r,
+            Err(e) => {
+                self.audit.record(
+                    AuditRecord::new("task.execute")
+                        .runtime(&runtime_name)
+                        .input(&task.description)
+                        .error(e.to_string()),
+                );
+                return Err(e);
+            }
+        };
 
         let report = self.verifier.verify(&response.output);
         let verified = report.passed();
+        let mut record = AuditRecord::new("task.execute")
+            .runtime(&runtime_name)
+            .input(&task.description)
+            .output(&response.output);
         if verified {
             self.bus.publish(Event::TaskCompleted(task.id.clone()));
         } else {
@@ -98,11 +133,13 @@ impl Engine {
                 .map(|(n, w)| format!("{n}: {w}"))
                 .collect::<Vec<_>>()
                 .join("; ");
+            record = record.error(reason.clone());
             self.bus.publish(Event::TaskFailed {
                 task: task.id.clone(),
                 reason,
             });
         }
+        self.audit.record(record);
 
         Ok(ExecutionResult {
             task: task.id.clone(),
@@ -198,6 +235,11 @@ mod tests {
         // First step is retrieval; it must run before the embedding step.
         assert_eq!(results[0].capability, Capability::Retrieval);
         assert_eq!(completed.load(Ordering::SeqCst), 5);
+
+        // Every step left an audit record, none erroring (§903).
+        assert_eq!(engine.audit().len(), 5);
+        assert_eq!(engine.audit().error_count(), 0);
+        assert!(engine.audit().snapshot().iter().all(|r| r.input_hash != 0));
     }
 
     #[test]
@@ -211,5 +253,7 @@ mod tests {
         let dag = HeuristicPlanner::new().plan("say hello");
         let err = engine.run_workflow(&dag).unwrap_err();
         assert!(matches!(err, KernelError::CapabilityUnavailable(_)));
+        // The failure was still audited.
+        assert_eq!(engine.audit().error_count(), 1);
     }
 }

@@ -42,6 +42,7 @@ pub mod prelude {
     pub use crate::retrieval::{plan_retrieval, Hit, HitSource, RetrievalStrategy, Retriever};
     pub use crate::session::Session;
 
+    pub use ckos_kernel::audit::{AuditRecord, AuditSink, InMemoryAuditLog};
     pub use ckos_kernel::capability::Capability;
     pub use ckos_kernel::error::{KernelError, Result};
     pub use ckos_kernel::event::{Event, EventBus, InMemoryEventBus};

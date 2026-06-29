@@ -148,6 +148,13 @@ fn cmd_run(rest: &[String]) -> ExitCode {
             let ok = results.iter().filter(|r| r.verified).count();
             println!("\n{ok}/{} step(s) verified", results.len());
 
+            // Audit trail (§903): verifiable I/O hashes, no raw payloads.
+            println!(
+                "\naudit: {} record(s), {} error(s)",
+                engine.audit().len(),
+                engine.audit().error_count()
+            );
+
             // Collective reflection over the run (§921–§922).
             let reflections = engine.reflect(&HeuristicReflector::new(), &results);
             let verdict = consensus(&reflections);

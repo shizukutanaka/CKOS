@@ -53,6 +53,10 @@ so the whole system runs offline.
   — garbage collection (expired, low-confidence, duplicate, broken-embedding) and
   semantic compression (summary step); via `ckos gc`. Orphaned-graph-node GC and
   the concept/knowledge compression tiers are next.
+- ✅ **Audit logging** (`kernel::audit`, §903) — every task execution recorded
+  with timestamp, runtime, and FNV-1a I/O hashes (raw payloads not retained);
+  failures audited too. Separate from debug logging; shown by `ckos run`. A
+  persistent/OpenTelemetry audit sink (§933) is the next step.
 - ✅ **CI** (`docs/ci-workflow.yml`, §905) — fmt + clippy + build + test + CLI
   smoke tests on every push/PR, with `-D warnings`. Copy it to
   `.github/workflows/ci.yml` to activate (the branch automation can't push
