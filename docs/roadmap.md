@@ -49,6 +49,10 @@ so the whole system runs offline.
 - ✅ **Agent messaging & service mesh** (`sdk::messaging`, §914–§916) — typed
   Message/Payload, a priority-ordered per-agent MessageBus, and a ServiceMesh
   that routes by capability with round-robin load balancing.
+- ✅ **Enterprise identity** (`policy::IdentityProvider`, §928) — authenticates
+  a token into an Identity (subject/roles/attributes) that feeds the RBAC/ABAC
+  policy engine (§929). StaticTokenProvider for dev; OAuth2/OIDC/SAML/LDAP plug
+  in behind the trait (real verification is the next step).
 - ✅ **Knowledge bus** (`sdk::knowledge_bus`, §923) — graph mutations publish
   `GraphChanged` events; `ReindexQueue` collects changed node ids for an async
   re-index/embedding worker (§938). Wiring the worker to actually re-embed is

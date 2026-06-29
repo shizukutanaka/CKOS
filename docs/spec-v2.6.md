@@ -92,7 +92,10 @@ closing the §904→§913 optimization loop.
 
 ## §928–§933 Enterprise, security, ops
 
-- **§928 Identity**: OAuth2, OIDC, SAML, LDAP, Active Directory.
+- **§928 Identity**: OAuth2, OIDC, SAML, LDAP, Active Directory. →
+  `policy::IdentityProvider` authenticates a token into an `Identity`
+  (subject/roles/attributes) that feeds the policy engine; `StaticTokenProvider`
+  is the in-memory stand-in, real directories implement the same trait.
 - **§929 Authorization**: two layers — RBAC (role) + ABAC (attribute) — applied
   per agent/tool/workflow. → [`policy`](../policy).
 - **§930 Distributed security**: mTLS, cert rotation, message signing, replay

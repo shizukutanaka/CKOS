@@ -81,7 +81,9 @@ pub mod prelude {
 
     pub use ckos_verifier::{Check, JsonBalanceCheck, NonEmptyCheck, Report, Verdict, Verifier};
 
-    pub use ckos_policy::{AbacRule, AccessRequest, PolicyEngine};
+    pub use ckos_policy::{
+        AbacRule, AccessRequest, Identity, IdentityProvider, PolicyEngine, StaticTokenProvider,
+    };
 
     pub use ckos_workflow::{Dag, StepRef};
 

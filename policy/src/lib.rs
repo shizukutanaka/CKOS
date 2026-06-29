@@ -8,6 +8,9 @@
 use ckos_kernel::error::{KernelError, Result};
 use std::collections::{HashMap, HashSet};
 
+pub mod identity;
+pub use identity::{Identity, IdentityProvider, StaticTokenProvider};
+
 /// A request to perform `action` on `resource` by a `subject` with attributes.
 #[derive(Debug, Clone)]
 pub struct AccessRequest {
