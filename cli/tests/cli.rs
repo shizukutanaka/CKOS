@@ -72,6 +72,23 @@ fn kql_runs_against_demo_graph() {
 }
 
 #[test]
+fn graph_extracts_concepts_from_text() {
+    let out = ckos(&["graph", "CKOS uses a Knowledge Graph. CKOS is fast."]);
+    assert!(out.status.success());
+    let s = stdout(&out);
+    assert!(s.contains("CKOS"));
+    assert!(s.contains("Knowledge Graph"));
+    assert!(s.contains("concept(s)"));
+
+    // --dot emits a Graphviz digraph with at least one edge.
+    let dot = ckos(&["graph", "--dot", "CKOS depends on the Scheduler."]);
+    assert!(dot.status.success());
+    let d = stdout(&dot);
+    assert!(d.starts_with("digraph knowledge {"));
+    assert!(d.contains("->"));
+}
+
+#[test]
 fn verify_fails_on_bad_content() {
     let ok = ckos(&["verify", "clean text"]);
     assert!(ok.status.success());

@@ -63,7 +63,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 938 | Index pipeline | 🟡 | `knowledge_bus::Reindexer` (embed + insert; parse/chunk/NER ⏳) |
 | 939 | Chunk evolution | 🟡 | `memory::chunk` (Paragraph/Fixed/Adaptive; semantic & hierarchical ⏳) |
 | 940 | Semantic compression | 🟡 | `memory::compress_document`/`summarize`/`keywords` (summary + concept tiers; knowledge tier ⏳) |
-| 941 | Knowledge graph builder | ⏳ | manual `add_node`; automatic extraction pending |
+| 941 | Knowledge graph builder | 🟡 | `graph::extract` (`extract_concepts`: heuristic entity + co-occurrence extraction, `ckos graph`; statistical NER ⏳) |
 | 942–943 | Graph versioning / merge | ✅ | `graph::versioning` |
 | 944 | Embedding manager | ✅ | `memory::Embedder` / `HashingEmbedder` (real model ⏳) |
 | 945 | Cross-modal embedding | ⏳ | single-space design; modality encoders pending |
@@ -96,7 +96,8 @@ fall into three buckets, all deliberate:
    traits (`Runtime`, `Storage`, `Embedder`, `AuditSink`, `EventBus`,
    `IdentityProvider`) exist; only the concrete impls are pending.
 2. **App / deployment targets** — desktop, mobile, Kubernetes, Docker Compose.
-3. **Advanced data-pipeline features** — automatic graph extraction (NER),
-   chunk strategies, cross-modal encoders, sharding.
+3. **Advanced data-pipeline features** — statistical graph extraction
+   (heuristic extraction shipped in `graph::extract`; NER model pending),
+   semantic/hierarchical chunking, cross-modal encoders, sharding.
 
 See [`roadmap.md`](roadmap.md) for sequencing.

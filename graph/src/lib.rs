@@ -8,7 +8,9 @@
 use ckos_kernel::NodeId;
 use std::collections::HashMap;
 
+pub mod extract;
 pub mod versioning;
+pub use extract::ExtractReport;
 pub use versioning::{GraphRepo, MergeConflict, MergeReport, MergeStrategy, VersionId};
 
 /// Node categories from §897.
@@ -90,6 +92,14 @@ impl KnowledgeGraph {
         );
         self.adjacency.entry(id.clone()).or_default();
         id
+    }
+
+    /// Raise a node's confidence to at least `floor` (used when re-observing an
+    /// entity during extraction, §941/§948). Never lowers an existing score.
+    pub fn bump_confidence(&mut self, id: &NodeId, floor: u8) {
+        if let Some(n) = self.nodes.get_mut(id) {
+            n.confidence = n.confidence.max(floor.min(100));
+        }
     }
 
     /// Attach a temporal date (ISO string) to a node (§946).

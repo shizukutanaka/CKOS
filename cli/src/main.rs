@@ -22,6 +22,8 @@ COMMANDS:
     search <dir> <query…>            Hybrid-search a session's stored documents
     workflow <file>                  Load and execute a workflow definition file
     kql <query>                      Run a KQL query against a demo knowledge graph
+    graph [--dot] <text…>            Extract a knowledge graph from text (§941)
+    graph [--dot] --session <dir>    Extract a graph from a session's documents
     gc <dir> [--min-confidence N]    Garbage-collect a session's stored documents
     verify <text…>                   Run the built-in verifier checks on text
     capabilities                     List the built-in capability vocabulary
@@ -38,6 +40,7 @@ fn main() -> ExitCode {
         Some("search") => cmd_search(&args[1..]),
         Some("workflow") => cmd_workflow(&args[1..]),
         Some("kql") => cmd_kql(&args[1..]),
+        Some("graph") => cmd_graph(&args[1..]),
         Some("gc") => cmd_gc(&args[1..]),
         Some("verify") => cmd_verify(&args[1..]),
         Some("capabilities") => cmd_capabilities(),
@@ -380,6 +383,65 @@ fn cmd_kql(rest: &[String]) -> ExitCode {
     if query.related.is_some() {
         println!("related ({}):", result.related.len());
         result.related.iter().for_each(&print_match);
+    }
+    ExitCode::SUCCESS
+}
+
+fn cmd_graph(rest: &[String]) -> ExitCode {
+    // Optional leading `--dot` flag.
+    let (dot, rest): (bool, &[String]) = match rest {
+        [flag, tail @ ..] if flag == "--dot" => (true, tail),
+        _ => (false, rest),
+    };
+
+    // Source the text: either a session's documents or inline arguments.
+    let text = match rest {
+        [flag, dir] if flag == "--session" => {
+            let store = match FileStore::open(dir) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("error: could not open session {dir}: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            // Empty query (limit 0) returns every stored document.
+            match store.search(&Query::default()) {
+                Ok(docs) => docs
+                    .iter()
+                    .map(|d| format!("{}. {}", d.title, d.body))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        args if !args.is_empty() => args.join(" "),
+        _ => {
+            eprintln!(
+                "error: usage `ckos graph [--dot] <text…>` or `ckos graph [--dot] --session <dir>`"
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let mut graph = KnowledgeGraph::new();
+    let report = graph.extract_concepts(&text);
+
+    if dot {
+        print!("{}", graph.to_dot());
+        return ExitCode::SUCCESS;
+    }
+
+    println!(
+        "extracted {} concept(s), {} relation(s) ({} reinforced)",
+        report.nodes_added, report.edges_added, report.nodes_reinforced
+    );
+    let mut nodes: Vec<_> = graph.nodes().collect();
+    nodes.sort_by(|a, b| b.confidence.cmp(&a.confidence).then(a.label.cmp(&b.label)));
+    for n in nodes {
+        println!("  - {} [{:?}] conf={}", n.label, n.kind, n.confidence);
     }
     ExitCode::SUCCESS
 }
