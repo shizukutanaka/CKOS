@@ -68,7 +68,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 944 | Embedding manager | ✅ | `memory::Embedder` / `HashingEmbedder` (real model ⏳) |
 | 945 | Cross-modal embedding | ⏳ | single-space design; modality encoders pending |
 | 946 | Temporal knowledge | ✅ | `graph::Node::date` + KQL `BEFORE`/`AFTER` |
-| 947 | Provenance engine | ✅ | `graph::Node::provenance` (+ KQL `RETURN Sources`) |
+| 947 | Provenance engine | ✅ | `graph::Node::provenance`; extraction stamps source (`extract_concepts_with_provenance`); KQL `RETURN Sources` |
 | 948 | Confidence score | ✅ | `Node::confidence`, `Document::confidence` |
 | 949 | Retrieval planner | ✅ | `retrieval::plan_retrieval` |
 | 950 | Hybrid search | ✅ | `retrieval::Retriever` (keyword + vector + graph) |

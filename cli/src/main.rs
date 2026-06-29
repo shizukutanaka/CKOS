@@ -224,7 +224,10 @@ fn cmd_run(rest: &[String]) -> ExitCode {
                     text.push('\n');
                     text.push_str(&r.output);
                 }
-                let report = graph.extract_concepts(&text);
+                // Record where this knowledge came from (§947) so KQL
+                // `RETURN Sources` is meaningful on the session graph.
+                let report =
+                    graph.extract_concepts_with_provenance(&text, Some(&format!("run:{intent}")));
                 match GraphStore::save(&graph_path, &graph) {
                     Ok(()) => println!(
                         "graph updated: +{} concept(s), +{} relation(s) ({} total node(s))",
@@ -484,7 +487,12 @@ fn cmd_graph(rest: &[String]) -> ExitCode {
     };
 
     let mut graph = KnowledgeGraph::new();
-    let report = graph.extract_concepts(&text);
+    // Tag concepts from a session build with a documents provenance (§947);
+    // inline text has no durable source.
+    let report = match session_dir {
+        Some(_) => graph.extract_concepts_with_provenance(&text, Some("session documents")),
+        None => graph.extract_concepts(&text),
+    };
 
     // Persist the extracted graph so `ckos search` can use it across runs (§936).
     if let Some(dir) = session_dir {

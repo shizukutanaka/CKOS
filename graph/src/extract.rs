@@ -218,6 +218,18 @@ impl KnowledgeGraph {
     ///
     /// Returns an [`ExtractReport`] describing what changed.
     pub fn extract_concepts(&mut self, text: &str) -> ExtractReport {
+        self.extract_concepts_with_provenance(text, None)
+    }
+
+    /// Like [`extract_concepts`](Self::extract_concepts), but stamps every
+    /// *newly created* node with `provenance` (§947) — e.g. the document, run or
+    /// session the knowledge came from. Reinforced nodes keep their original
+    /// source. `None` leaves new nodes unsourced.
+    pub fn extract_concepts_with_provenance(
+        &mut self,
+        text: &str,
+        provenance: Option<&str>,
+    ) -> ExtractReport {
         // Existing label (lowercased) -> node id, so repeated runs reuse nodes.
         let mut index: HashMap<String, NodeId> = self
             .nodes()
@@ -260,6 +272,9 @@ impl KnowledgeGraph {
                     .cloned()
                     .unwrap_or_else(|| lower.clone());
                 let id = self.add_node(classify(&display), display, conf);
+                if let Some(src) = provenance {
+                    self.set_provenance(&id, src);
+                }
                 index.insert(lower.clone(), id.clone());
                 label_for.insert(lower.clone(), id.clone());
                 report.nodes_added += 1;
@@ -357,6 +372,22 @@ mod tests {
         assert_eq!(kind("Acme Corp"), Some(NodeKind::Organization));
         // Plain concepts are not misclassified.
         assert_eq!(kind("Transformer"), Some(NodeKind::Concept));
+    }
+
+    #[test]
+    fn provenance_is_stamped_on_new_nodes_only() {
+        let mut g = KnowledgeGraph::new();
+        g.extract_concepts_with_provenance("CKOS is great.", Some("doc:intro"));
+        let ckos = g.nodes().find(|n| n.label == "CKOS").unwrap();
+        assert_eq!(ckos.provenance.as_deref(), Some("doc:intro"));
+
+        // A later pass from a different source reinforces CKOS but keeps its
+        // original provenance, while a brand-new node gets the new source.
+        g.extract_concepts_with_provenance("CKOS ships Telemetry.", Some("doc:v2"));
+        let ckos = g.nodes().find(|n| n.label == "CKOS").unwrap();
+        assert_eq!(ckos.provenance.as_deref(), Some("doc:intro"));
+        let tel = g.nodes().find(|n| n.label == "Telemetry").unwrap();
+        assert_eq!(tel.provenance.as_deref(), Some("doc:v2"));
     }
 
     #[test]
