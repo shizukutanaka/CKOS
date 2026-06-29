@@ -45,21 +45,40 @@ crates mirror the module layout in §890 of the spec.
 ## Build & test
 
 ```sh
-cargo build            # build everything
-cargo test             # run the unit + doc tests
-cargo run -p ckos-cli -- plan "research the Transformer paper"   # plan only
-cargo run -p ckos-cli -- run  "research the Transformer paper"   # plan + execute
-cargo run -p ckos-cli -- run --session ./sess "research X"       # execute + persist
-cargo run -p ckos-cli -- history ./sess                          # resume: show past runs
-cargo run -p ckos-cli -- search ./sess "summary report"          # hybrid search
-cargo run -p ckos-cli -- kql 'FIND Concept "Transformer" RELATED Algorithm'  # KQL
-cargo run -p ckos-cli -- gc ./sess                               # garbage-collect
-cargo run -p ckos-cli -- verify 'see [1]'                        # run verifier checks
-cargo run -p ckos-cli -- plan --dot "research X" | dot -Tsvg     # Graphviz workflow
-cargo run -p ckos-cli -- workflow pipeline.wf                    # run a workflow file
+cargo build            # build everything (std-only, no network needed)
+cargo test             # run the unit + integration + doc tests
+cargo run -p ckos-cli -- help    # list commands
 ```
 
-Example output:
+## Command reference
+
+Every command is `ckos <command> [args]`. Flags (`--dot`, `--session`) may
+appear in any position, and `ckos <command> --help` prints per-command usage.
+
+| Command | What it does | Example |
+|---------|--------------|---------|
+| `plan [--dot] <intent…>` | Decompose an intent into a workflow DAG | `ckos plan "research the Transformer paper"` |
+| `run [--session <dir>] <intent…>` | Plan + execute; with `--session`, persist the run and grow its knowledge graph | `ckos run --session ./sess "research X"` |
+| `history <dir>` | Show a session's past runs | `ckos history ./sess` |
+| `search <dir> <query…>` | Hybrid keyword + vector + graph search over a session | `ckos search ./sess "summary"` |
+| `graph [--dot] <text…>` / `graph [--dot] --session <dir>` | Extract a typed knowledge graph from text or a session's docs | `ckos graph --session ./sess` |
+| `kql [--session <dir>] <query>` | Run a Knowledge Query Language query | `ckos kql 'FIND Concept "Transformer" RELATED Algorithm'` |
+| `gc <dir> [--min-confidence N]` | Garbage-collect low-value documents | `ckos gc ./sess --min-confidence 30` |
+| `verify <text…>` | Run the independent §899 checks (non-empty, repetition, arithmetic, JSON, citations, security) | `ckos verify 'see [1]'` |
+| `capabilities` | List the built-in capability vocabulary | `ckos capabilities` |
+| `workflow <file>` | Load and execute a workflow definition file | `ckos workflow pipeline.wf` |
+| `version` | Print the CKOS version | `ckos version` |
+
+### A typical session flow
+
+```sh
+ckos run --session ./sess "research the Transformer paper by Vaswani"  # execute + learn
+ckos search ./sess "Transformer"        # hybrid search (keyword + graph hits)
+ckos kql --session ./sess 'FIND Concept "Transformer" RETURN Graph + Sources'
+ckos plan --dot "research X" | dot -Tsvg > plan.svg                    # visualize a plan
+```
+
+`plan` output:
 
 ```
 intent : research the Transformer paper
@@ -71,6 +90,18 @@ execution order:
   3. [reasoning] summarize  (agents available: 1)
   4. [verification] verify citations  (agents available: 1)
   5. [reasoning] generate report  (agents available: 1)
+```
+
+### Knowledge Query Language (KQL, §962)
+
+```text
+FIND Concept "Transformer"          # select by kind and/or quoted text (or *)
+RELATED Algorithm                   # one hop to neighbours of a given kind
+FILTER (Confidence > 90 AND Confidence < 99) OR NOT Confidence < 50
+BEFORE 2025-01-01                   # temporal bounds (also AFTER)
+ORDER BY Confidence DESC            # ranking (ASC/DESC)
+LIMIT 10                            # cap results
+RETURN Graph + Sources             # shape output (Documents/Graph/Sources)
 ```
 
 ## Design principles
