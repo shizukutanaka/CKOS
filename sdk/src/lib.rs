@@ -47,6 +47,9 @@ pub mod prelude {
     pub use ckos_kernel::error::{KernelError, Result};
     pub use ckos_kernel::event::{Event, EventBus, InMemoryEventBus};
     pub use ckos_kernel::task::{Priority, Task, TaskState};
+    pub use ckos_kernel::telemetry::{
+        InMemoryTelemetry, NullProbe, ResourceProbe, ResourceSnapshot, TaskMetrics, TelemetrySink,
+    };
     pub use ckos_kernel::{AgentId, DocumentId, NodeId, RuntimeId, TaskId, WorkflowId};
 
     pub use ckos_scheduler::{Scheduler, ScoreFactors};

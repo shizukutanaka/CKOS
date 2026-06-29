@@ -53,6 +53,10 @@ so the whole system runs offline.
   — garbage collection (expired, low-confidence, duplicate, broken-embedding) and
   semantic compression (summary step); via `ckos gc`. Orphaned-graph-node GC and
   the concept/knowledge compression tiers are next.
+- ✅ **Telemetry** (`kernel::telemetry`, §904) — per-task latency/token metrics
+  aggregated (mean latency per runtime, token throughput) to feed scheduler
+  `runtime_fit` (§913); `ResourceProbe` seam for CPU/GPU/NPU. Shown by
+  `ckos run`. A real hardware probe + Prometheus export (§933) are next.
 - ✅ **Audit logging** (`kernel::audit`, §903) — every task execution recorded
   with timestamp, runtime, and FNV-1a I/O hashes (raw payloads not retained);
   failures audited too. Separate from debug logging; shown by `ckos run`. A

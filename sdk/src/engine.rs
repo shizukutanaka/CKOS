@@ -20,11 +20,13 @@ use ckos_kernel::capability::Capability;
 use ckos_kernel::error::{KernelError, Result};
 use ckos_kernel::event::{Event, EventBus, InMemoryEventBus};
 use ckos_kernel::task::Task;
+use ckos_kernel::telemetry::{InMemoryTelemetry, TaskMetrics, TelemetrySink};
 use ckos_kernel::TaskId;
 use ckos_runtime::{InferenceRequest, RuntimeRegistry};
 use ckos_scheduler::Scheduler;
 use ckos_verifier::Verifier;
 use ckos_workflow::Dag;
+use std::time::Instant;
 
 use crate::agent::CapabilityRegistry;
 use crate::reflection::{Reflection, Reflector};
@@ -53,6 +55,7 @@ pub struct Engine {
     verifier: Verifier,
     bus: InMemoryEventBus,
     audit: InMemoryAuditLog,
+    telemetry: InMemoryTelemetry,
 }
 
 impl Engine {
@@ -64,6 +67,7 @@ impl Engine {
             verifier,
             bus: InMemoryEventBus::new(),
             audit: InMemoryAuditLog::new(),
+            telemetry: InMemoryTelemetry::new(),
         }
     }
 
@@ -75,6 +79,11 @@ impl Engine {
     /// The audit log of executed tasks (§903).
     pub fn audit(&self) -> &InMemoryAuditLog {
         &self.audit
+    }
+
+    /// Telemetry aggregated across executed tasks (§904).
+    pub fn telemetry(&self) -> &InMemoryTelemetry {
+        &self.telemetry
     }
 
     /// Execute one task: select runtime → run → verify, emitting events and
@@ -101,6 +110,7 @@ impl Engine {
         };
         let runtime_name = runtime.name().to_string();
 
+        let started = Instant::now();
         let response = match runtime.run(&InferenceRequest {
             input: task.description.clone(),
             capability: task.capability.clone(),
@@ -117,6 +127,12 @@ impl Engine {
                 return Err(e);
             }
         };
+        // Record latency/token telemetry for scheduler optimisation (§904, §913).
+        self.telemetry.record(TaskMetrics {
+            runtime: runtime_name.clone(),
+            latency_ms: started.elapsed().as_millis() as u64,
+            tokens: response.tokens,
+        });
 
         let report = self.verifier.verify(&response.output);
         let verified = report.passed();
@@ -240,6 +256,11 @@ mod tests {
         assert_eq!(engine.audit().len(), 5);
         assert_eq!(engine.audit().error_count(), 0);
         assert!(engine.audit().snapshot().iter().all(|r| r.input_hash != 0));
+
+        // Telemetry captured one sample per step (§904).
+        assert_eq!(engine.telemetry().len(), 5);
+        assert!(engine.telemetry().total_tokens() > 0);
+        assert!(engine.telemetry().mean_latency_for("echo").is_some());
     }
 
     #[test]

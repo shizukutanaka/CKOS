@@ -7,6 +7,7 @@
 //! - capabilities, the vocabulary agents are matched by ([`capability`])
 //! - the event bus for loosely-coupled module communication ([`event`])
 //! - audit logging, kept separate from debug logging ([`audit`])
+//! - telemetry feeding scheduler optimisation ([`telemetry`])
 //! - typed identifiers ([`id`])
 //! - a shared error taxonomy ([`error`])
 //!
@@ -22,6 +23,7 @@ pub mod error;
 pub mod event;
 pub mod id;
 pub mod task;
+pub mod telemetry;
 
 pub use audit::{AuditRecord, AuditSink, InMemoryAuditLog};
 pub use capability::Capability;
@@ -29,3 +31,6 @@ pub use error::{KernelError, Result};
 pub use event::{Event, EventBus, InMemoryEventBus};
 pub use id::{AgentId, DocumentId, NodeId, RuntimeId, TaskId, WorkflowId};
 pub use task::{Priority, Task, TaskState};
+pub use telemetry::{
+    InMemoryTelemetry, NullProbe, ResourceProbe, ResourceSnapshot, TaskMetrics, TelemetrySink,
+};

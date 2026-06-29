@@ -117,7 +117,11 @@ Interfaces: REST, gRPC, WebSocket, MCP, CLI — over a common Task API.
   (`AuditRecord`/`AuditSink`/`InMemoryAuditLog`); the engine audits every task
   execution (I/O hashed, not stored raw); shown by `ckos run`.
 - **§904 Telemetry**: CPU/GPU/NPU usage, memory, latency, token rate, power —
-  fed back into scheduler optimization.
+  fed back into scheduler optimization. → `kernel::telemetry`: per-task
+  `TaskMetrics` (latency/tokens) aggregated by `InMemoryTelemetry` (mean latency
+  per runtime feeds `ScoreFactors.runtime_fit`); hardware counters via the
+  `ResourceProbe` seam (`NullProbe` default). The engine records each run;
+  `ckos run` prints the summary.
 - **§905 CI/CD**: Windows/Linux/macOS (x64+ARM), Android, iOS; unit,
   integration, workflow, performance and regression tests.
 

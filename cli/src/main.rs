@@ -155,6 +155,15 @@ fn cmd_run(rest: &[String]) -> ExitCode {
                 engine.audit().error_count()
             );
 
+            // Telemetry (§904): latency / token throughput.
+            let tel = engine.telemetry();
+            println!(
+                "telemetry: {} tokens, mean latency {:.1}ms, {:.0} tok/s",
+                tel.total_tokens(),
+                tel.mean_latency_ms().unwrap_or(0.0),
+                tel.mean_tokens_per_sec()
+            );
+
             // Collective reflection over the run (§921–§922).
             let reflections = engine.reflect(&HeuristicReflector::new(), &results);
             let verdict = consensus(&reflections);
