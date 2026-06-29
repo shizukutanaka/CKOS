@@ -7,7 +7,7 @@
 //! branches. Conflicts (same identity, differing attributes) are resolved by a
 //! [`MergeStrategy`] and reported in a [`MergeReport`].
 
-use crate::{EdgeKind, KnowledgeGraph, Node, NodeKind};
+use crate::{EdgeKind, KnowledgeGraph, Node};
 use std::collections::{HashMap, HashSet};
 
 /// A monotonically assigned version number.
@@ -59,28 +59,11 @@ pub struct GraphRepo {
 
 /// Semantic identity of a node: kind token + lowercased label.
 fn identity(node: &Node) -> String {
-    let kind = match &node.kind {
-        NodeKind::Concept => "concept",
-        NodeKind::Document => "document",
-        NodeKind::Person => "person",
-        NodeKind::Organization => "organization",
-        NodeKind::Tool => "tool",
-        NodeKind::Api => "api",
-        NodeKind::Project => "project",
-        NodeKind::Other(s) => s,
-    };
-    format!("{}:{}", kind.to_lowercase(), node.label.to_lowercase())
+    format!("{}:{}", node.kind.as_token(), node.label.to_lowercase())
 }
 
 fn edge_token(kind: &EdgeKind) -> String {
-    match kind {
-        EdgeKind::DependsOn => "depends_on".into(),
-        EdgeKind::Implements => "implements".into(),
-        EdgeKind::References => "references".into(),
-        EdgeKind::CreatedBy => "created_by".into(),
-        EdgeKind::RelatedTo => "related_to".into(),
-        EdgeKind::Other(s) => s.to_lowercase(),
-    }
+    kind.as_token()
 }
 
 impl GraphRepo {

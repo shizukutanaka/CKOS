@@ -89,6 +89,40 @@ fn graph_extracts_concepts_from_text() {
 }
 
 #[test]
+fn graph_persists_to_session_and_search_uses_it() {
+    // A temp session directory removed on drop.
+    struct TempDir(PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("ckos-graph-sess-{}-{n}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _guard = TempDir(dir.clone());
+
+    // Seed a document directly in the FileStore format (header + blank + body).
+    std::fs::write(
+        dir.join("note1.doc"),
+        "doc_type: note\ntitle: Intro\nconfidence: 100\n\nCKOS uses a Knowledge Graph.\n",
+    )
+    .unwrap();
+
+    // Build and persist the graph from the session's documents.
+    let g = ckos(&["graph", "--session", dir.to_str().unwrap()]);
+    assert!(g.status.success());
+    assert!(stdout(&g).contains("CKOS"));
+    assert!(dir.join("graph.kg").exists(), "graph.kg should be written");
+
+    // Search now loads the persisted graph and yields a Graph-sourced hit.
+    let s = ckos(&["search", dir.to_str().unwrap(), "CKOS"]);
+    assert!(s.status.success());
+    assert!(stdout(&s).contains("Graph"), "expected a graph-sourced hit");
+}
+
+#[test]
 fn verify_fails_on_bad_content() {
     let ok = ckos(&["verify", "clean text"]);
     assert!(ok.status.success());

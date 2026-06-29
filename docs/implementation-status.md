@@ -20,7 +20,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 894 | Event bus | ✅ | `kernel::event` |
 | 895 | Workflow DAG | ✅ | `workflow::Dag` |
 | 896 | Memory hierarchy L0–L5 | ✅ | `memory::MemoryTier` |
-| 897 | Knowledge graph | ✅ | `graph` |
+| 897 | Knowledge graph | ✅ | `graph` (+ `GraphStore` file persistence) |
 | 898 | Planner | ✅ | `planner` |
 | 899 | Verifier (independent) | ✅ | `verifier` (non-empty, JSON, citation, security-policy) |
 | 900 | Runtime registry | ✅ | `runtime` (trait + registry; real engines ⏳) |
@@ -58,7 +58,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | § | Topic | Status | Where |
 |---|-------|--------|-------|
 | 935 | Data layer | ✅ | `memory` + `graph` |
-| 936 | Storage abstraction | ✅ | `memory::Storage` (`InMemoryStore`, `FileStore`; SQL/vector DBs ⏳) |
+| 936 | Storage abstraction | ✅ | `memory::Storage` (`InMemoryStore`, `FileStore`) + `graph::GraphStore` (graph persistence); SQL/vector DBs ⏳ |
 | 937 | Unified document model | ✅ | `memory::Document` |
 | 938 | Index pipeline | 🟡 | `knowledge_bus::ingest_text` (extract → queue) + `Reindexer` (embed + insert); deep parse/chunk ⏳ |
 | 939 | Chunk evolution | 🟡 | `memory::chunk` (Paragraph/Fixed/Adaptive; semantic & hierarchical ⏳) |

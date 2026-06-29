@@ -5,7 +5,11 @@
 //! the agents that would be selected by capability.
 
 use ckos_sdk::prelude::*;
+use std::path::Path;
 use std::process::ExitCode;
+
+/// Filename under a session directory holding the persisted knowledge graph.
+const GRAPH_FILE: &str = "graph.kg";
 
 const HELP: &str = "\
 ckos — Cognitive Kernel OS
@@ -263,8 +267,10 @@ fn cmd_search(rest: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    // Documents persist; the graph is rebuilt per process, so it is empty here.
-    let graph = KnowledgeGraph::new();
+    // Load the persisted knowledge graph (empty if none has been built yet),
+    // so graph-based hits work across processes (§936). Build it with
+    // `ckos graph --session <dir>`.
+    let graph = GraphStore::load(Path::new(dir).join(GRAPH_FILE)).unwrap_or_default();
     let embedder = HashingEmbedder::default();
     let retriever = Retriever::with_embedder(&store, &graph, &embedder);
     let hits = retriever.search(&query, 10);
@@ -394,8 +400,9 @@ fn cmd_graph(rest: &[String]) -> ExitCode {
         _ => (false, rest),
     };
 
-    // Source the text: either a session's documents or inline arguments.
-    let text = match rest {
+    // Source the text: either a session's documents or inline arguments. When a
+    // session is given, remember its directory so we can persist the graph.
+    let (text, session_dir): (String, Option<&str>) = match rest {
         [flag, dir] if flag == "--session" => {
             let store = match FileStore::open(dir) {
                 Ok(s) => s,
@@ -405,7 +412,7 @@ fn cmd_graph(rest: &[String]) -> ExitCode {
                 }
             };
             // Empty query (limit 0) returns every stored document.
-            match store.search(&Query::default()) {
+            let text = match store.search(&Query::default()) {
                 Ok(docs) => docs
                     .iter()
                     .map(|d| format!("{}. {}", d.title, d.body))
@@ -415,9 +422,10 @@ fn cmd_graph(rest: &[String]) -> ExitCode {
                     eprintln!("error: {e}");
                     return ExitCode::FAILURE;
                 }
-            }
+            };
+            (text, Some(dir.as_str()))
         }
-        args if !args.is_empty() => args.join(" "),
+        args if !args.is_empty() => (args.join(" "), None),
         _ => {
             eprintln!(
                 "error: usage `ckos graph [--dot] <text…>` or `ckos graph [--dot] --session <dir>`"
@@ -428,6 +436,16 @@ fn cmd_graph(rest: &[String]) -> ExitCode {
 
     let mut graph = KnowledgeGraph::new();
     let report = graph.extract_concepts(&text);
+
+    // Persist the extracted graph so `ckos search` can use it across runs (§936).
+    if let Some(dir) = session_dir {
+        let path = Path::new(dir).join(GRAPH_FILE);
+        if let Err(e) = GraphStore::save(&path, &graph) {
+            eprintln!("warning: could not save graph to {}: {e}", path.display());
+        } else {
+            eprintln!("graph saved to {}", path.display());
+        }
+    }
 
     if dot {
         print!("{}", graph.to_dot());

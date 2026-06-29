@@ -70,8 +70,8 @@ pub mod prelude {
     };
 
     pub use ckos_graph::{
-        EdgeKind, GraphRepo, KnowledgeGraph, MergeConflict, MergeReport, MergeStrategy, Node,
-        NodeKind, VersionId,
+        EdgeKind, GraphRepo, GraphStore, KnowledgeGraph, MergeConflict, MergeReport, MergeStrategy,
+        Node, NodeKind, VersionId,
     };
 
     pub use ckos_memory::{

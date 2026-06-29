@@ -9,8 +9,10 @@ use ckos_kernel::NodeId;
 use std::collections::HashMap;
 
 pub mod extract;
+pub mod store;
 pub mod versioning;
 pub use extract::ExtractReport;
+pub use store::GraphStore;
 pub use versioning::{GraphRepo, MergeConflict, MergeReport, MergeStrategy, VersionId};
 
 /// Node categories from §897.
@@ -27,6 +29,38 @@ pub enum NodeKind {
     Other(String),
 }
 
+impl NodeKind {
+    /// Canonical lowercase token for this kind, used by persistence (§936) and
+    /// versioning identity (§942). `Other(s)` is emitted verbatim (lowercased).
+    pub fn as_token(&self) -> String {
+        match self {
+            NodeKind::Concept => "concept".into(),
+            NodeKind::Document => "document".into(),
+            NodeKind::Person => "person".into(),
+            NodeKind::Organization => "organization".into(),
+            NodeKind::Tool => "tool".into(),
+            NodeKind::Api => "api".into(),
+            NodeKind::Project => "project".into(),
+            NodeKind::Other(s) => s.to_lowercase(),
+        }
+    }
+
+    /// Parse a token produced by [`NodeKind::as_token`]; unknown tokens become
+    /// [`NodeKind::Other`] so custom kinds round-trip.
+    pub fn from_token(token: &str) -> NodeKind {
+        match token.to_lowercase().as_str() {
+            "concept" => NodeKind::Concept,
+            "document" => NodeKind::Document,
+            "person" => NodeKind::Person,
+            "organization" => NodeKind::Organization,
+            "tool" => NodeKind::Tool,
+            "api" => NodeKind::Api,
+            "project" => NodeKind::Project,
+            other => NodeKind::Other(other.to_string()),
+        }
+    }
+}
+
 /// Edge relationship types from §897.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EdgeKind {
@@ -37,6 +71,34 @@ pub enum EdgeKind {
     RelatedTo,
     /// Open category for domain-specific relations.
     Other(String),
+}
+
+impl EdgeKind {
+    /// Canonical snake_case token for this relation, used by persistence (§936)
+    /// and versioning (§942). `Other(s)` is emitted verbatim (lowercased).
+    pub fn as_token(&self) -> String {
+        match self {
+            EdgeKind::DependsOn => "depends_on".into(),
+            EdgeKind::Implements => "implements".into(),
+            EdgeKind::References => "references".into(),
+            EdgeKind::CreatedBy => "created_by".into(),
+            EdgeKind::RelatedTo => "related_to".into(),
+            EdgeKind::Other(s) => s.to_lowercase(),
+        }
+    }
+
+    /// Parse a token produced by [`EdgeKind::as_token`]; unknown tokens become
+    /// [`EdgeKind::Other`] so custom relations round-trip.
+    pub fn from_token(token: &str) -> EdgeKind {
+        match token.to_lowercase().as_str() {
+            "depends_on" => EdgeKind::DependsOn,
+            "implements" => EdgeKind::Implements,
+            "references" => EdgeKind::References,
+            "created_by" => EdgeKind::CreatedBy,
+            "related_to" => EdgeKind::RelatedTo,
+            other => EdgeKind::Other(other.to_string()),
+        }
+    }
 }
 
 /// A graph node with an optional confidence score (§948).
@@ -92,6 +154,14 @@ impl KnowledgeGraph {
         );
         self.adjacency.entry(id.clone()).or_default();
         id
+    }
+
+    /// Insert a fully-formed node, preserving its [`NodeId`]. Unlike
+    /// [`KnowledgeGraph::add_node`], which mints a fresh id, this keeps the
+    /// node's existing id so persisted edges still resolve after a reload (§936).
+    pub fn insert(&mut self, node: Node) {
+        self.adjacency.entry(node.id.clone()).or_default();
+        self.nodes.insert(node.id.clone(), node);
     }
 
     /// Raise a node's confidence to at least `floor` (used when re-observing an
