@@ -43,6 +43,9 @@ so the whole system runs offline.
 - ✅ **Embeddings** (`memory::Embedder`/`HashingEmbedder`/`cosine`, §944) —
   dependency-free vector embeddings; sessions embed persisted outputs so
   semantic search works across restarts. Next: a real embedding-model backend.
+- ✅ **KQL** (`sdk::kql`, §962) — Knowledge Query Language: tokeniser +
+  recursive-descent parser → typed AST, executor over the graph
+  (FIND/RELATED/FILTER); via `ckos kql`. Temporal enforcement (§946) is next.
 - **API gateway** (REST/gRPC/WebSocket/MCP) over the common Task API — §902.
 
 ## v2.8 — Developer platform & ecosystem

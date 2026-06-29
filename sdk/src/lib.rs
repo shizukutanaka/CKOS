@@ -19,12 +19,14 @@
 
 pub mod agent;
 pub mod engine;
+pub mod kql;
 pub mod reflection;
 pub mod retrieval;
 pub mod session;
 
 pub use agent::{AgentInstance, AgentManifest, AgentState, CapabilityRegistry};
 pub use engine::{Engine, ExecutionResult};
+pub use kql::{execute as kql_execute, parse as kql_parse, KqlQuery, KqlResult};
 pub use reflection::{consensus, Consensus, HeuristicReflector, Reflection, Reflector};
 pub use retrieval::{plan_retrieval, Hit, HitSource, RetrievalStrategy, Retriever};
 pub use session::Session;
@@ -35,6 +37,9 @@ pub mod prelude {
     pub use crate::engine::{Engine, ExecutionResult};
     pub use crate::reflection::{
         consensus, Consensus, HeuristicReflector, Reflection, Reflector,
+    };
+    pub use crate::kql::{
+        execute as kql_execute, parse as kql_parse, KqlQuery, KqlResult, NodeMatch, ReturnTarget,
     };
     pub use crate::retrieval::{plan_retrieval, Hit, HitSource, RetrievalStrategy, Retriever};
     pub use crate::session::Session;

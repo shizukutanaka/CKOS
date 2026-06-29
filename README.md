@@ -52,6 +52,7 @@ cargo run -p ckos-cli -- run  "research the Transformer paper"   # plan + execut
 cargo run -p ckos-cli -- run --session ./sess "research X"       # execute + persist
 cargo run -p ckos-cli -- history ./sess                          # resume: show past runs
 cargo run -p ckos-cli -- search ./sess "summary report"          # hybrid search
+cargo run -p ckos-cli -- kql 'FIND Concept "Transformer" RELATED Algorithm'  # KQL
 ```
 
 Example output:

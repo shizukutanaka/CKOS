@@ -101,3 +101,7 @@ graph, attachments`. → `memory::Document`.
   ```
 
   compiled down to graph/vector/full-text searches.
+  → `sdk::kql`: `parse` (tokeniser + recursive-descent → AST) and `execute`
+  (runs against the knowledge graph); `ckos kql "<query>"` demos it. Supports
+  `FIND`, `RELATED`, `FILTER Confidence`, `BEFORE`/`AFTER`, `RETURN`. Temporal
+  bounds parse but are not yet enforced (§946 pending).

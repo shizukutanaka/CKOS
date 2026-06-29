@@ -19,6 +19,7 @@ COMMANDS:
                                      persisting the run when --session is given
     history <dir>                    Show the execution history of a session
     search <dir> <query…>            Hybrid-search a session's stored documents
+    kql <query>                      Run a KQL query against a demo knowledge graph
     capabilities                     List the built-in capability vocabulary
     version                          Print the CKOS version
     help                             Show this help
@@ -31,6 +32,7 @@ fn main() -> ExitCode {
         Some("run") => cmd_run(&args[1..]),
         Some("history") => cmd_history(&args[1..]),
         Some("search") => cmd_search(&args[1..]),
+        Some("kql") => cmd_kql(&args[1..]),
         Some("capabilities") => cmd_capabilities(),
         Some("version") => {
             println!("ckos {}", env!("CARGO_PKG_VERSION"));
@@ -239,6 +241,44 @@ fn cmd_search(rest: &[String]) -> ExitCode {
     println!("{} hit(s) for {query:?}:", hits.len());
     for h in &hits {
         println!("  [{:?} {:.2}] {} — {}", h.source, h.score, h.title, h.snippet);
+    }
+    ExitCode::SUCCESS
+}
+
+fn cmd_kql(rest: &[String]) -> ExitCode {
+    if rest.is_empty() {
+        eprintln!("error: usage `ckos kql \"FIND Concept \\\"Transformer\\\" RELATED Algorithm\"`");
+        return ExitCode::FAILURE;
+    }
+    let source = rest.join(" ");
+    let query = match kql_parse(&source) {
+        Ok(q) => q,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // A small demo knowledge graph to run the query against (§897).
+    let mut graph = KnowledgeGraph::new();
+    let transformer = graph.add_node(NodeKind::Concept, "Transformer", 96);
+    let attention = graph.add_node(NodeKind::Other("algorithm".into()), "Attention", 93);
+    let rnn = graph.add_node(NodeKind::Other("algorithm".into()), "RNN", 55);
+    let vaswani = graph.add_node(NodeKind::Person, "Vaswani", 90);
+    graph.connect(&transformer, &attention, EdgeKind::References);
+    graph.connect(&transformer, &rnn, EdgeKind::References);
+    graph.connect(&transformer, &vaswani, EdgeKind::CreatedBy);
+
+    let result = kql_execute(&query, &graph);
+    println!("primary ({}):", result.primary.len());
+    for m in &result.primary {
+        println!("  - {} [{}] conf={}", m.label, m.kind, m.confidence);
+    }
+    if query.related.is_some() {
+        println!("related ({}):", result.related.len());
+        for m in &result.related {
+            println!("  - {} [{}] conf={}", m.label, m.kind, m.confidence);
+        }
     }
     ExitCode::SUCCESS
 }
