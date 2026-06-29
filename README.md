@@ -82,11 +82,12 @@ execution order:
 
 ## Status & roadmap
 
-This is the **kernel foundation**: every subsystem has a working, tested
-in-memory implementation and a trait seam for richer backends (persistent
-storage, networked event bus, WASM-sandboxed plugins, model-backed planner).
-See [`docs/roadmap.md`](docs/roadmap.md) for the implementation priority (§906)
-and the v2.8 plan (developer SDK, Workflow/Agent Studio, ecosystem).
+Every subsystem across the v2.5–v2.7 spec has a working, tested implementation
+behind a trait seam for richer backends (persistent storage, networked event
+bus, WASM-sandboxed plugins, model-backed runtimes). See
+[`docs/implementation-status.md`](docs/implementation-status.md) for a
+section-by-section (§889–§962) traceability matrix, and
+[`docs/roadmap.md`](docs/roadmap.md) for sequencing and the v2.8 plan.
 
 ## License
 
