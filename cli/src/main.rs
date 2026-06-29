@@ -591,18 +591,7 @@ fn cmd_verify(rest: &[String]) -> ExitCode {
     }
     let text = rest.join(" ");
     // The full built-in §899 check set.
-    let verifier = Verifier::new()
-        .with_check(Box::new(NonEmptyCheck))
-        .with_check(Box::new(RepetitionCheck::new()))
-        .with_check(Box::new(ArithmeticCheck))
-        .with_check(Box::new(JsonBalanceCheck))
-        .with_check(Box::new(CitationCheck))
-        .with_check(Box::new(ForbiddenContentCheck::new([
-            "begin private key",
-            "password=",
-            "api_key=",
-        ])));
-    let report = verifier.verify(&text);
+    let report = Verifier::builtin().verify(&text);
     for (name, verdict) in &report.results {
         let status = match verdict {
             Verdict::Pass => "pass".to_string(),

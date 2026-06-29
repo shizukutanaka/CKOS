@@ -195,6 +195,31 @@ impl KnowledgeGraph {
         });
     }
 
+    /// Remove a node and every edge touching it (incoming or outgoing),
+    /// returning whether the node existed (§897 mutation; supports retraction in
+    /// the learning loop §959). Use [`remove_orphans`](Self::remove_orphans) to
+    /// sweep only isolated nodes.
+    pub fn remove_node(&mut self, id: &NodeId) -> bool {
+        let existed = self.nodes.remove(id).is_some();
+        self.adjacency.remove(id); // outgoing edges
+                                   // Incoming edges: drop any edge pointing at `id` from other nodes.
+        for edges in self.adjacency.values_mut() {
+            edges.retain(|e| &e.to != id);
+        }
+        existed
+    }
+
+    /// Remove all edges from `from` to `to` of the given `kind`, returning how
+    /// many were removed.
+    pub fn remove_edge(&mut self, from: &NodeId, to: &NodeId, kind: &EdgeKind) -> usize {
+        let Some(edges) = self.adjacency.get_mut(from) else {
+            return 0;
+        };
+        let before = edges.len();
+        edges.retain(|e| !(&e.to == to && &e.kind == kind));
+        before - edges.len()
+    }
+
     /// Look up a node.
     pub fn node(&self, id: &NodeId) -> Option<&Node> {
         self.nodes.get(id)
@@ -337,6 +362,29 @@ mod tests {
         let two_hop = g.traverse(&a, 2);
         assert_eq!(two_hop.len(), 2);
         assert!(two_hop.iter().any(|n| n.label == "ACME"));
+    }
+
+    #[test]
+    fn removes_nodes_and_edges() {
+        let mut g = KnowledgeGraph::new();
+        let a = g.add_node(NodeKind::Project, "CKOS", 100);
+        let b = g.add_node(NodeKind::Tool, "scheduler", 90);
+        let c = g.add_node(NodeKind::Tool, "runtime", 90);
+        g.connect(&a, &b, EdgeKind::DependsOn);
+        g.connect(&a, &c, EdgeKind::DependsOn);
+        g.connect(&b, &c, EdgeKind::RelatedTo);
+
+        // Remove one specific edge.
+        assert_eq!(g.remove_edge(&a, &b, &EdgeKind::DependsOn), 1);
+        assert_eq!(g.remove_edge(&a, &b, &EdgeKind::DependsOn), 0); // already gone
+        assert_eq!(g.edges().count(), 2);
+
+        // Removing node `c` drops both its incoming edges (a->c, b->c).
+        assert!(g.remove_node(&c));
+        assert!(!g.remove_node(&c)); // already gone
+        assert_eq!(g.len(), 2);
+        assert_eq!(g.edges().count(), 0);
+        assert!(g.node(&c).is_none());
     }
 
     #[test]

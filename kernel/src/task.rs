@@ -13,6 +13,8 @@
 use crate::capability::Capability;
 use crate::error::{KernelError, Result};
 use crate::id::{TaskId, WorkflowId};
+use std::fmt;
+use std::str::FromStr;
 
 /// The lifecycle state of a task (§893).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -77,6 +79,38 @@ pub enum Priority {
     Normal,
     High,
     Critical,
+}
+
+impl Priority {
+    /// Canonical lowercase token.
+    pub fn as_token(&self) -> &'static str {
+        match self {
+            Priority::Low => "low",
+            Priority::Normal => "normal",
+            Priority::High => "high",
+            Priority::Critical => "critical",
+        }
+    }
+}
+
+impl fmt::Display for Priority {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_token())
+    }
+}
+
+impl FromStr for Priority {
+    type Err = KernelError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "low" => Ok(Priority::Low),
+            "normal" => Ok(Priority::Normal),
+            "high" => Ok(Priority::High),
+            "critical" => Ok(Priority::Critical),
+            other => Err(KernelError::other(format!("unknown priority: {other}"))),
+        }
+    }
 }
 
 /// A unit of work tracked by the kernel and scheduler.
@@ -164,6 +198,21 @@ impl Task {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn priority_display_fromstr_round_trip() {
+        for p in [
+            Priority::Low,
+            Priority::Normal,
+            Priority::High,
+            Priority::Critical,
+        ] {
+            assert_eq!(p.to_string().parse::<Priority>().unwrap(), p);
+        }
+        assert!("nonsense".parse::<Priority>().is_err());
+        // Ordering still holds (used by the scheduler).
+        assert!(Priority::Critical > Priority::Low);
+    }
 
     #[test]
     fn happy_path_runs_to_completion() {

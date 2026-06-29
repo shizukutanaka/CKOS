@@ -10,6 +10,8 @@ use ckos_kernel::capability::Capability;
 use ckos_kernel::error::{KernelError, Result};
 use ckos_kernel::RuntimeId;
 use std::collections::HashMap;
+use std::fmt;
+use std::str::FromStr;
 
 /// Where a runtime executes (§924, §925).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +26,40 @@ pub enum RuntimeKind {
     Edge,
     /// Remote cluster / cloud runtime.
     Cloud,
+}
+
+impl RuntimeKind {
+    /// Canonical lowercase token.
+    pub fn as_token(&self) -> &'static str {
+        match self {
+            RuntimeKind::Cpu => "cpu",
+            RuntimeKind::Gpu => "gpu",
+            RuntimeKind::Npu => "npu",
+            RuntimeKind::Edge => "edge",
+            RuntimeKind::Cloud => "cloud",
+        }
+    }
+}
+
+impl fmt::Display for RuntimeKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_token())
+    }
+}
+
+impl FromStr for RuntimeKind {
+    type Err = KernelError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "cpu" => Ok(RuntimeKind::Cpu),
+            "gpu" => Ok(RuntimeKind::Gpu),
+            "npu" => Ok(RuntimeKind::Npu),
+            "edge" => Ok(RuntimeKind::Edge),
+            "cloud" => Ok(RuntimeKind::Cloud),
+            other => Err(KernelError::other(format!("unknown runtime kind: {other}"))),
+        }
+    }
 }
 
 /// A request handed to a runtime. Kept engine-agnostic on purpose.
@@ -179,6 +215,20 @@ impl Runtime for EchoRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_kind_display_fromstr_round_trip() {
+        for k in [
+            RuntimeKind::Cpu,
+            RuntimeKind::Gpu,
+            RuntimeKind::Npu,
+            RuntimeKind::Edge,
+            RuntimeKind::Cloud,
+        ] {
+            assert_eq!(k.to_string().parse::<RuntimeKind>().unwrap(), k);
+        }
+        assert!("quantum".parse::<RuntimeKind>().is_err());
+    }
 
     #[test]
     fn selects_supporting_runtime() {

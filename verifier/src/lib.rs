@@ -76,6 +76,24 @@ impl Verifier {
         self
     }
 
+    /// A verifier preconfigured with all built-in checks (§899): non-empty,
+    /// repetition/degeneration, arithmetic consistency, JSON balance, citations,
+    /// and a default security policy. A single discoverable entry point so the
+    /// CLI and SDK don't each hand-assemble the set.
+    pub fn builtin() -> Self {
+        Verifier::new()
+            .with_check(Box::new(NonEmptyCheck))
+            .with_check(Box::new(RepetitionCheck::new()))
+            .with_check(Box::new(ArithmeticCheck))
+            .with_check(Box::new(JsonBalanceCheck))
+            .with_check(Box::new(CitationCheck))
+            .with_check(Box::new(ForbiddenContentCheck::new([
+                "begin private key",
+                "password=",
+                "api_key=",
+            ])))
+    }
+
     /// Evaluate all registered checks and aggregate.
     pub fn verify(&self, output: &str) -> Report {
         Report {
@@ -492,6 +510,19 @@ mod tests {
             .passed());
         // Short output is skipped (too little to judge).
         assert!(v.verify("yes yes").passed());
+    }
+
+    #[test]
+    fn builtin_runs_all_checks() {
+        let v = Verifier::builtin();
+        // Clean prose passes everything.
+        assert!(v.verify("A concise, correct sentence.").passed());
+        // The builtin set catches each concern.
+        assert!(!v.verify("2 + 2 = 5").passed()); // arithmetic
+        assert!(!v.verify("api_key=SECRET").passed()); // security policy
+        let report = v.verify("x");
+        // Every check ran (six concerns).
+        assert_eq!(report.results.len(), 6);
     }
 
     #[test]
