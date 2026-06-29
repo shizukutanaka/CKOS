@@ -30,6 +30,9 @@ so the whole system runs offline.
 - ✅ **Synchronous execution loop** (`sdk::engine::Engine`) wiring planner →
   scheduler → runtime → verifier with events; `ckos run` exercises it.
   An **async/distributed** driver (§926) can replace it behind the same surface.
+- ✅ **Reflection loop** (`sdk::reflection`) — per-task self-evaluation (§921)
+  and cross-agent consensus (§922), persistable to memory for the §959 learning
+  loop; surfaced in `ckos run`.
 - **API gateway** (REST/gRPC/WebSocket/MCP) over the common Task API — §902.
 
 ## v2.8 — Developer platform & ecosystem

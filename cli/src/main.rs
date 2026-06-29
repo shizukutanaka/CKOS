@@ -133,6 +133,14 @@ fn cmd_run(rest: &[String]) -> ExitCode {
             }
             let ok = results.iter().filter(|r| r.verified).count();
             println!("\n{ok}/{} step(s) verified", results.len());
+
+            // Collective reflection over the run (§921–§922).
+            let reflections = engine.reflect(&HeuristicReflector::new(), &results);
+            let verdict = consensus(&reflections);
+            println!("\nreflection: consensus score {}/100", verdict.score);
+            for hint in &verdict.hints {
+                println!("  - {hint}");
+            }
             ExitCode::SUCCESS
         }
         Err(e) => {

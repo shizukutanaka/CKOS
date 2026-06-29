@@ -19,14 +19,19 @@
 
 pub mod agent;
 pub mod engine;
+pub mod reflection;
 
 pub use agent::{AgentInstance, AgentManifest, AgentState, CapabilityRegistry};
 pub use engine::{Engine, ExecutionResult};
+pub use reflection::{consensus, Consensus, HeuristicReflector, Reflection, Reflector};
 
 /// One-stop import surface for applications building on CKOS.
 pub mod prelude {
     pub use crate::agent::{AgentInstance, AgentManifest, AgentState, CapabilityRegistry};
     pub use crate::engine::{Engine, ExecutionResult};
+    pub use crate::reflection::{
+        consensus, Consensus, HeuristicReflector, Reflection, Reflector,
+    };
 
     pub use ckos_kernel::capability::Capability;
     pub use ckos_kernel::error::{KernelError, Result};

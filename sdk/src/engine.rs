@@ -26,6 +26,7 @@ use ckos_verifier::Verifier;
 use ckos_workflow::Dag;
 
 use crate::agent::CapabilityRegistry;
+use crate::reflection::{Reflection, Reflector};
 
 /// Outcome of executing a single task.
 #[derive(Debug, Clone)]
@@ -138,6 +139,11 @@ impl Engine {
             results.push(result);
         }
         Ok(results)
+    }
+
+    /// Self-evaluate a batch of results with the given reflector (§921).
+    pub fn reflect(&self, reflector: &dyn Reflector, results: &[ExecutionResult]) -> Vec<Reflection> {
+        results.iter().map(|r| reflector.reflect(r)).collect()
     }
 }
 
