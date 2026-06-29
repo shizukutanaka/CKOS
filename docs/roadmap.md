@@ -20,6 +20,14 @@ trait seam at every point the spec asks for substitutability (see
 [`architecture.md`](architecture.md)). Each subsystem ships an in-memory default
 so the whole system runs offline.
 
+## Integration coverage
+
+`sdk/tests/end_to_end.rs` drives the whole pipeline through the public prelude:
+plan → execute → verify → reflect → persist/resume → retrieve, plus audit,
+telemetry, the telemetry→scheduler loop, KQL, knowledge-bus auto-reindex,
+identity→policy, signed messaging, and graph versioning — a regression guard
+over the full surface.
+
 ## Near-term backend work
 
 - ✅ **Persistent storage** — `memory::FileStore` gives durable, dependency-free
