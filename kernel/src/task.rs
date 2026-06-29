@@ -70,18 +70,13 @@ impl TaskState {
 }
 
 /// Scheduling priority used by the scheduler's priority queue (§892, §913).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum Priority {
     Low,
+    #[default]
     Normal,
     High,
     Critical,
-}
-
-impl Default for Priority {
-    fn default() -> Self {
-        Priority::Normal
-    }
 }
 
 /// A unit of work tracked by the kernel and scheduler.

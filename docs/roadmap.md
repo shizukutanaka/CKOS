@@ -27,8 +27,9 @@ so the whole system runs offline.
 - **Real runtimes** behind `runtime::Runtime` (llama.cpp via FFI, ONNX for
   embeddings) — §900.
 - **Networked event bus** behind `kernel::EventBus` for the service mesh — §916.
-- **Async execution loop** wiring planner → scheduler → runtime → verifier into a
-  running engine.
+- ✅ **Synchronous execution loop** (`sdk::engine::Engine`) wiring planner →
+  scheduler → runtime → verifier with events; `ckos run` exercises it.
+  An **async/distributed** driver (§926) can replace it behind the same surface.
 - **API gateway** (REST/gRPC/WebSocket/MCP) over the common Task API — §902.
 
 ## v2.8 — Developer platform & ecosystem

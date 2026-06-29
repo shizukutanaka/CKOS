@@ -54,7 +54,11 @@ changing callers:
 7. **Authorize** — `policy::PolicyEngine` and `plugins::ToolRegistry` enforce
    RBAC/ABAC and least-privilege tool permissions (§919, §929).
 
-The `ckos plan …` CLI command walks steps 1–4 today.
+`sdk::engine::Engine` now drives the whole loop: `run_workflow` submits the
+DAG's tasks to the scheduler (each task carries its dependency ids), dispatches
+them in dependency order, runs each on a selected runtime, verifies the output,
+and emits lifecycle events. `ckos plan …` shows steps 1–4; `ckos run …` executes
+all seven end-to-end (offline, via the echo runtime).
 
 ## Design constraints honoured
 

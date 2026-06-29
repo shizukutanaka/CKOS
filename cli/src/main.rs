@@ -15,6 +15,7 @@ USAGE:
 
 COMMANDS:
     plan <intent...>    Decompose an intent into a workflow DAG
+    run <intent...>     Plan and execute a workflow end-to-end
     capabilities        List the built-in capability vocabulary
     version             Print the CKOS version
     help                Show this help
@@ -24,6 +25,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("plan") => cmd_plan(&args[1..]),
+        Some("run") => cmd_run(&args[1..]),
         Some("capabilities") => cmd_capabilities(),
         Some("version") => {
             println!("ckos {}", env!("CARGO_PKG_VERSION"));
@@ -82,6 +84,59 @@ fn cmd_plan(rest: &[String]) -> ExitCode {
         }
         None => {
             eprintln!("error: workflow contains a cycle and cannot be scheduled");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_run(rest: &[String]) -> ExitCode {
+    if rest.is_empty() {
+        eprintln!("error: `run` needs an intent, e.g. `ckos run research transformers`");
+        return ExitCode::FAILURE;
+    }
+    let intent = rest.join(" ");
+    let dag = HeuristicPlanner::new().plan(&intent);
+
+    // Assemble a fully offline engine: an echo runtime and a demo agent per
+    // capability, plus a non-empty output check on the verifier.
+    let mut runtimes = RuntimeRegistry::new();
+    let mut agents = CapabilityRegistry::new();
+    for cap in [
+        Capability::Retrieval,
+        Capability::Embedding,
+        Capability::Reasoning,
+        Capability::Verification,
+    ] {
+        runtimes.register(Box::new(EchoRuntime::new(vec![cap.clone()])));
+        agents.register(AgentManifest::new(format!("{cap}-agent"), cap));
+    }
+    let verifier = Verifier::new().with_check(Box::new(NonEmptyCheck));
+    let engine = Engine::new(runtimes, agents, verifier);
+
+    println!("intent : {intent}");
+    println!("workflow: {} ({} step(s))\n", dag.name(), dag.len());
+
+    match engine.run_workflow(&dag) {
+        Ok(results) => {
+            for (i, r) in results.iter().enumerate() {
+                let mark = if r.verified { "ok" } else { "FAIL" };
+                let agent = r.agent.as_deref().unwrap_or("<none>");
+                println!(
+                    "  {}. [{}] {} via {}/{}  -> {}",
+                    i + 1,
+                    r.capability,
+                    mark,
+                    agent,
+                    r.runtime,
+                    r.output
+                );
+            }
+            let ok = results.iter().filter(|r| r.verified).count();
+            println!("\n{ok}/{} step(s) verified", results.len());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
             ExitCode::FAILURE
         }
     }

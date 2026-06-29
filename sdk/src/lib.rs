@@ -18,12 +18,15 @@
 //! ```
 
 pub mod agent;
+pub mod engine;
 
 pub use agent::{AgentInstance, AgentManifest, AgentState, CapabilityRegistry};
+pub use engine::{Engine, ExecutionResult};
 
 /// One-stop import surface for applications building on CKOS.
 pub mod prelude {
     pub use crate::agent::{AgentInstance, AgentManifest, AgentState, CapabilityRegistry};
+    pub use crate::engine::{Engine, ExecutionResult};
 
     pub use ckos_kernel::capability::Capability;
     pub use ckos_kernel::error::{KernelError, Result};

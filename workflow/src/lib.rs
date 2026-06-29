@@ -45,8 +45,17 @@ impl Dag {
     }
 
     /// Add a step depending on zero or more existing steps. Returns its handle.
+    ///
+    /// The dependency steps' task ids are copied into the new task's
+    /// [`Task::depends_on`] so the task is self-describing and can be handed
+    /// straight to the scheduler, whose dependency resolver gates on task ids.
     pub fn add_step(&mut self, mut task: Task, deps: &[StepRef]) -> StepRef {
         task.workflow = Some(self.id.clone());
+        for r in deps {
+            if let Some(dep_step) = self.steps.get(r.0) {
+                task.depends_on.push(dep_step.task.id.clone());
+            }
+        }
         let idx = self.steps.len();
         self.steps.push(Step {
             task,
@@ -129,6 +138,11 @@ mod tests {
         assert_eq!(order.len(), 3);
         assert_eq!(order[0], a); // root first
         assert_eq!(dag.roots(), vec![a]);
+
+        // Dependency edges are copied into the task so the scheduler can gate on
+        // them: step `b` depends on step `a`'s task id.
+        let a_id = dag.task(a).unwrap().id.clone();
+        assert_eq!(dag.task(b).unwrap().depends_on, vec![a_id]);
     }
 
     #[test]
