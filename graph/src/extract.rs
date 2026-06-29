@@ -7,7 +7,9 @@
 //!
 //! * **Entities** — maximal runs of capitalized words (`Knowledge Graph`) and
 //!   all-caps acronyms (`CKOS`, `API`). Common capitalized stop-words at the
-//!   start of a sentence (`The`, `This`, …) are filtered out.
+//!   start of a sentence (`The`, `This`, …) are filtered out. Entities whose
+//!   last word is an organization marker (`Corp`, `Institute`, …) are typed as
+//!   `Organization`; everything else defaults to `Concept`.
 //! * **Relations** — the connective text between two adjacent entities is mapped
 //!   to a typed edge (`depends on` → `DependsOn`, `implements` → `Implements`,
 //!   `created by` → `CreatedBy`, `uses`/`references` → `References`); any other
@@ -162,6 +164,51 @@ fn confidence_for(count: usize) -> u8 {
     (45 + (count.saturating_sub(1) * 15)).min(100) as u8
 }
 
+/// Final-word markers that reliably indicate an organization (§897). Matched
+/// case-insensitively against the last word of an entity phrase, so the rule is
+/// conservative — "Knowledge Graph" or "Transformer" stay [`NodeKind::Concept`].
+const ORG_SUFFIXES: &[&str] = &[
+    "inc",
+    "corp",
+    "corporation",
+    "llc",
+    "ltd",
+    "co",
+    "company",
+    "foundation",
+    "institute",
+    "university",
+    "college",
+    "lab",
+    "labs",
+    "group",
+    "systems",
+    "technologies",
+    "industries",
+    "ventures",
+    "partners",
+    "association",
+    "consortium",
+    "organization",
+];
+
+/// Classify an entity label into a [`NodeKind`]. Defaults to
+/// [`NodeKind::Concept`]; only promotes to [`NodeKind::Organization`] when the
+/// last word is an unambiguous organization marker, keeping false positives low.
+fn classify(label: &str) -> NodeKind {
+    let last = label
+        .split_whitespace()
+        .next_back()
+        .unwrap_or("")
+        .trim_matches(|c: char| !c.is_alphanumeric())
+        .to_lowercase();
+    if ORG_SUFFIXES.contains(&last.as_str()) {
+        NodeKind::Organization
+    } else {
+        NodeKind::Concept
+    }
+}
+
 impl KnowledgeGraph {
     /// Heuristically extract concept nodes and co-occurrence edges from `text`,
     /// accumulating into this graph (§941). Entities already present (matched by
@@ -212,7 +259,7 @@ impl KnowledgeGraph {
                     .find(|e| e.to_lowercase() == *lower)
                     .cloned()
                     .unwrap_or_else(|| lower.clone());
-                let id = self.add_node(NodeKind::Concept, display, conf);
+                let id = self.add_node(classify(&display), display, conf);
                 index.insert(lower.clone(), id.clone());
                 label_for.insert(lower.clone(), id.clone());
                 report.nodes_added += 1;
@@ -296,6 +343,20 @@ mod tests {
             g.edges().filter(|e| e.kind == EdgeKind::RelatedTo).count(),
             1
         );
+    }
+
+    #[test]
+    fn organization_suffixes_are_classified() {
+        let mut g = KnowledgeGraph::new();
+        g.extract_concepts(
+            "The Allen Institute studies AI. Acme Corp ships products. \
+             The Transformer is a model.",
+        );
+        let kind = |label: &str| g.nodes().find(|n| n.label == label).map(|n| n.kind.clone());
+        assert_eq!(kind("Allen Institute"), Some(NodeKind::Organization));
+        assert_eq!(kind("Acme Corp"), Some(NodeKind::Organization));
+        // Plain concepts are not misclassified.
+        assert_eq!(kind("Transformer"), Some(NodeKind::Concept));
     }
 
     #[test]
