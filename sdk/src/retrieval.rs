@@ -11,6 +11,7 @@
 
 use ckos_graph::KnowledgeGraph;
 use ckos_memory::{cosine, Embedder, Query, Storage};
+use std::collections::VecDeque;
 
 /// Which source a hit came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -236,6 +237,66 @@ impl<'a> Retriever<'a> {
     }
 }
 
+/// An LRU cache of query → ranked hits (§958 search cache). Repeated popular
+/// queries skip the hybrid-search work. Bounded capacity; the least-recently
+/// used entry is evicted when full.
+pub struct SearchCache {
+    capacity: usize,
+    entries: std::collections::HashMap<String, Vec<Hit>>,
+    /// Front = least-recently used, back = most-recently used.
+    order: VecDeque<String>,
+}
+
+impl SearchCache {
+    /// Create a cache holding at most `capacity` queries (min 1).
+    pub fn new(capacity: usize) -> Self {
+        SearchCache {
+            capacity: capacity.max(1),
+            entries: std::collections::HashMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    fn touch(&mut self, query: &str) {
+        if let Some(pos) = self.order.iter().position(|q| q == query) {
+            self.order.remove(pos);
+        }
+        self.order.push_back(query.to_string());
+    }
+
+    /// Look up cached hits for a query, marking it most-recently used.
+    pub fn get(&mut self, query: &str) -> Option<Vec<Hit>> {
+        if self.entries.contains_key(query) {
+            self.touch(query);
+            self.entries.get(query).cloned()
+        } else {
+            None
+        }
+    }
+
+    /// Cache the hits for a query, evicting the LRU entry if over capacity.
+    pub fn put(&mut self, query: impl Into<String>, hits: Vec<Hit>) {
+        let query = query.into();
+        self.entries.insert(query.clone(), hits);
+        self.touch(&query);
+        while self.entries.len() > self.capacity {
+            if let Some(evicted) = self.order.pop_front() {
+                self.entries.remove(&evicted);
+            }
+        }
+    }
+
+    /// Number of cached queries.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether the cache is empty.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,6 +307,28 @@ mod tests {
     fn planner_deepens_for_relational_questions() {
         assert_eq!(plan_retrieval("what is a transformer").max_hops, 1);
         assert_eq!(plan_retrieval("what depends on the kernel").max_hops, 2);
+    }
+
+    #[test]
+    fn search_cache_hits_misses_and_evicts_lru() {
+        let hit = |title: &str| Hit {
+            title: title.into(),
+            snippet: String::new(),
+            score: 1.0,
+            source: HitSource::Keyword,
+        };
+        let mut cache = SearchCache::new(2);
+        assert!(cache.get("a").is_none()); // miss
+        cache.put("a", vec![hit("ra")]);
+        cache.put("b", vec![hit("rb")]);
+        // Hit refreshes "a" as most-recently used.
+        assert_eq!(cache.get("a").unwrap()[0].title, "ra");
+        // Adding "c" evicts the LRU, which is now "b".
+        cache.put("c", vec![hit("rc")]);
+        assert_eq!(cache.len(), 2);
+        assert!(cache.get("b").is_none());
+        assert!(cache.get("a").is_some());
+        assert!(cache.get("c").is_some());
     }
 
     #[test]

@@ -33,7 +33,7 @@ pub use knowledge_bus::{KnowledgeBus, ReindexQueue, Reindexer};
 pub use kql::{execute as kql_execute, parse as kql_parse, KqlQuery, KqlResult};
 pub use messaging::{Message, MessageBus, Payload, ServiceMesh};
 pub use reflection::{consensus, Consensus, HeuristicReflector, Reflection, Reflector};
-pub use retrieval::{plan_retrieval, Hit, HitSource, RetrievalStrategy, Retriever};
+pub use retrieval::{plan_retrieval, Hit, HitSource, RetrievalStrategy, Retriever, SearchCache};
 pub use security::{sign, ReplayGuard, SecurityError, SignedEnvelope, Signer};
 pub use session::Session;
 
@@ -47,7 +47,9 @@ pub mod prelude {
     };
     pub use crate::messaging::{Message, MessageBus, Payload, ServiceMesh};
     pub use crate::reflection::{consensus, Consensus, HeuristicReflector, Reflection, Reflector};
-    pub use crate::retrieval::{plan_retrieval, Hit, HitSource, RetrievalStrategy, Retriever};
+    pub use crate::retrieval::{
+        plan_retrieval, Hit, HitSource, RetrievalStrategy, Retriever, SearchCache,
+    };
     pub use crate::security::{sign, ReplayGuard, SecurityError, SignedEnvelope, Signer};
     pub use crate::session::Session;
 

@@ -79,7 +79,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 955 | Data encryption | ⏳ | at-rest/in-transit pending (transport layer) |
 | 956 | Offline-first | ✅ | `FileStore` + std-only build |
 | 957 | Distributed knowledge | ⏳ | sharding/partial-sync pending |
-| 958 | Search cache | ⏳ | pending |
+| 958 | Search cache | ✅ | `sdk::retrieval::SearchCache` (LRU query→hits cache) |
 | 959 | Learning pipeline | 🟡 | reflection persistence + auto-reindex; full loop ⏳ |
 | 960 | Unified knowledge API | 🟡 | `cli` (`search`/`kql`/`history`); network API ⏳ |
 | 961 | AI-native filesystem | ⏳ | proposal |
