@@ -89,7 +89,9 @@ pub fn consensus(reflections: &[Reflection]) -> Consensus {
         };
     }
     let sum: u32 = reflections.iter().map(|r| r.score as u32).sum();
-    let score = (sum / reflections.len() as u32) as u8;
+    // Mean of per-reflection scores (each 0..=100), so it always fits a u8;
+    // clamp makes that invariant explicit rather than relying on a bare cast.
+    let score = (sum / reflections.len() as u32).min(100) as u8;
     let mut hints = Vec::new();
     for r in reflections {
         if !hints.contains(&r.hint) {

@@ -216,28 +216,38 @@ fn cmd_run(rest: &[String]) -> ExitCode {
                 // (§941 extraction → §936 persistence), accumulating into any
                 // graph already saved so `ckos search` gains graph context.
                 let graph_path = Path::new(dir).join(GRAPH_FILE);
-                let mut graph = GraphStore::load(&graph_path).unwrap_or_default();
-                // Extract from the intent (which carries the proper nouns the
-                // user named) as well as the step outputs.
-                let mut text = intent.clone();
-                for r in &results {
-                    text.push('\n');
-                    text.push_str(&r.output);
-                }
-                // Record where this knowledge came from (§947) so KQL
-                // `RETURN Sources` is meaningful on the session graph.
-                let report =
-                    graph.extract_concepts_with_provenance(&text, Some(&format!("run:{intent}")));
-                match GraphStore::save(&graph_path, &graph) {
-                    Ok(()) => println!(
-                        "graph updated: +{} concept(s), +{} relation(s) ({} total node(s))",
-                        report.nodes_added,
-                        report.edges_added,
-                        graph.len()
-                    ),
+                // If an existing graph can't be read, skip the update rather than
+                // clobber a possibly-recoverable file with a fresh one.
+                match GraphStore::load(&graph_path) {
+                    Ok(mut graph) => {
+                        // Extract from the intent (which carries the proper nouns
+                        // the user named) as well as the step outputs.
+                        let mut text = intent.clone();
+                        for r in &results {
+                            text.push('\n');
+                            text.push_str(&r.output);
+                        }
+                        // Record where this knowledge came from (§947) so KQL
+                        // `RETURN Sources` is meaningful on the session graph.
+                        let report = graph.extract_concepts_with_provenance(
+                            &text,
+                            Some(&format!("run:{intent}")),
+                        );
+                        match GraphStore::save(&graph_path, &graph) {
+                            Ok(()) => println!(
+                                "graph updated: +{} concept(s), +{} relation(s) ({} total node(s))",
+                                report.nodes_added,
+                                report.edges_added,
+                                graph.len()
+                            ),
+                            Err(e) => eprintln!(
+                                "warning: could not save graph to {}: {e}",
+                                graph_path.display()
+                            ),
+                        }
+                    }
                     Err(e) => eprintln!(
-                        "warning: could not save graph to {}: {e}",
-                        graph_path.display()
+                        "warning: could not load existing graph ({e}); skipping graph update"
                     ),
                 }
             }
@@ -300,8 +310,15 @@ fn cmd_search(rest: &[String]) -> ExitCode {
     };
     // Load the persisted knowledge graph (empty if none has been built yet),
     // so graph-based hits work across processes (§936). Build it with
-    // `ckos graph --session <dir>`.
-    let graph = GraphStore::load(Path::new(dir).join(GRAPH_FILE)).unwrap_or_default();
+    // `ckos graph --session <dir>`. A genuine read/parse error is surfaced
+    // rather than silently treated as an empty graph.
+    let graph = match GraphStore::load(Path::new(dir).join(GRAPH_FILE)) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("warning: could not load graph ({e}); searching documents only");
+            KnowledgeGraph::default()
+        }
+    };
     let embedder = HashingEmbedder::default();
     let retriever = Retriever::with_embedder(&store, &graph, &embedder);
     let hits = retriever.search(&query, 10);

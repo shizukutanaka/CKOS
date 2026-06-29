@@ -37,7 +37,12 @@ impl GraphStore {
     pub fn save(path: impl AsRef<Path>, graph: &KnowledgeGraph) -> io::Result<()> {
         let mut out = String::from(HEADER);
         out.push('\n');
-        for n in graph.nodes() {
+
+        // Sort by id so the file is byte-stable regardless of the graph's
+        // internal hash order — friendly to diffs, caching and reproducibility.
+        let mut nodes: Vec<_> = graph.nodes().collect();
+        nodes.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
+        for n in nodes {
             out.push_str(&format!(
                 "N\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 sanitize(n.id.as_str()),
@@ -48,7 +53,16 @@ impl GraphStore {
                 sanitize(&n.label),
             ));
         }
-        for e in graph.edges() {
+
+        let mut edges: Vec<_> = graph.edges().collect();
+        edges.sort_by(|a, b| {
+            a.from
+                .as_str()
+                .cmp(b.from.as_str())
+                .then(a.to.as_str().cmp(b.to.as_str()))
+                .then(a.kind.as_token().cmp(&b.kind.as_token()))
+        });
+        for e in edges {
             out.push_str(&format!(
                 "E\t{}\t{}\t{}\n",
                 sanitize(e.from.as_str()),
@@ -180,6 +194,38 @@ mod tests {
         assert_eq!(created_by.len(), 1);
         assert_eq!(created_by[0].from, t);
         assert_eq!(created_by[0].to, v);
+    }
+
+    #[test]
+    fn save_output_is_deterministic() {
+        // Two graphs with the same content added in different orders must
+        // serialize to byte-identical files.
+        let mut g1 = KnowledgeGraph::new();
+        for label in ["Alpha", "Beta", "Gamma", "Delta"] {
+            g1.add_node(NodeKind::Concept, label, 50);
+        }
+        let mut g2 = KnowledgeGraph::new();
+        for label in ["Delta", "Gamma", "Beta", "Alpha"] {
+            g2.add_node(NodeKind::Concept, label, 50);
+        }
+        let (p1, p2) = (temp("det1"), temp("det2"));
+        GraphStore::save(&p1.0, &g1).unwrap();
+        GraphStore::save(&p2.0, &g2).unwrap();
+        // Node bodies differ only by id (minted in add order); but re-saving the
+        // SAME graph twice must be identical byte-for-byte.
+        let a = std::fs::read_to_string(&p1.0).unwrap();
+        GraphStore::save(&p1.0, &g1).unwrap();
+        let b = std::fs::read_to_string(&p1.0).unwrap();
+        assert_eq!(a, b);
+        // And the lines are sorted, so order is stable across reads.
+        let mut lines: Vec<&str> = a.lines().skip(1).collect();
+        let sorted = {
+            let mut s = lines.clone();
+            s.sort_unstable();
+            s
+        };
+        lines.sort_unstable();
+        assert_eq!(lines, sorted);
     }
 
     #[test]

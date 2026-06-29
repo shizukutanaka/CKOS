@@ -139,10 +139,7 @@ fn serialize(doc: &Document) -> String {
 /// Decode a document from the on-disk format. Tolerant: unknown headers are
 /// ignored and missing fields fall back to defaults.
 fn deserialize(id: DocumentId, content: &str) -> Document {
-    let (header, body) = match content.find("\n\n") {
-        Some(idx) => (&content[..idx], &content[idx + 2..]),
-        None => (content, ""),
-    };
+    let (header, body) = content.split_once("\n\n").unwrap_or((content, ""));
 
     let mut doc = Document::new("", "", body.to_string());
     doc.id = id;
