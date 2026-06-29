@@ -576,6 +576,7 @@ fn cmd_verify(rest: &[String]) -> ExitCode {
     // The full built-in §899 check set.
     let verifier = Verifier::new()
         .with_check(Box::new(NonEmptyCheck))
+        .with_check(Box::new(RepetitionCheck::new()))
         .with_check(Box::new(JsonBalanceCheck))
         .with_check(Box::new(CitationCheck))
         .with_check(Box::new(ForbiddenContentCheck::new([

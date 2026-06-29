@@ -245,6 +245,107 @@ impl Check for ForbiddenContentCheck {
     }
 }
 
+/// Degeneration check (§899): flags pathological repetition — a common
+/// generation failure mode where output collapses into a loop. Two signals,
+/// both std-only:
+///
+/// * **Consecutive runs** — the same token repeated more than `max_run` times
+///   in a row (`"go go go go go go"`).
+/// * **Low diversity** — for outputs of at least `min_tokens` words, a
+///   unique/total token ratio below `min_diversity`.
+///
+/// Short outputs are skipped, since repetition is only meaningful at length.
+pub struct RepetitionCheck {
+    max_run: usize,
+    min_tokens: usize,
+    min_diversity: f32,
+}
+
+impl RepetitionCheck {
+    /// Sensible defaults: >6 consecutive identical tokens, or <25% unique words
+    /// across an output of 12+ words.
+    pub fn new() -> Self {
+        RepetitionCheck {
+            max_run: 6,
+            min_tokens: 12,
+            min_diversity: 0.25,
+        }
+    }
+
+    /// Customise the thresholds.
+    pub fn with_thresholds(max_run: usize, min_tokens: usize, min_diversity: f32) -> Self {
+        RepetitionCheck {
+            max_run,
+            min_tokens,
+            min_diversity,
+        }
+    }
+}
+
+impl Default for RepetitionCheck {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Normalise a token for comparison: lowercase, outer punctuation stripped.
+fn norm_token(tok: &str) -> &str {
+    tok.trim_matches(|c: char| !c.is_alphanumeric())
+}
+
+impl Check for RepetitionCheck {
+    fn name(&self) -> &str {
+        "repetition"
+    }
+    fn evaluate(&self, output: &str) -> Verdict {
+        let tokens: Vec<String> = output
+            .split_whitespace()
+            .map(|t| norm_token(t).to_lowercase())
+            .filter(|t| !t.is_empty())
+            .collect();
+        if tokens.is_empty() {
+            return Verdict::Skip;
+        }
+
+        // Longest run of consecutive identical tokens. This signal applies at any
+        // length — a short all-identical loop is still degenerate.
+        let mut run = 1usize;
+        let mut max_seen = 1usize;
+        let mut worst = tokens[0].as_str();
+        for w in tokens.windows(2) {
+            if w[0] == w[1] {
+                run += 1;
+                if run > max_seen {
+                    max_seen = run;
+                    worst = w[1].as_str();
+                }
+            } else {
+                run = 1;
+            }
+        }
+        if max_seen > self.max_run {
+            return Verdict::Fail(format!(
+                "token {worst:?} repeated {max_seen} times consecutively"
+            ));
+        }
+
+        // The diversity ratio is only meaningful once there are enough tokens.
+        if tokens.len() < self.min_tokens {
+            return Verdict::Pass;
+        }
+        let unique: std::collections::HashSet<&str> = tokens.iter().map(String::as_str).collect();
+        let diversity = unique.len() as f32 / tokens.len() as f32;
+        if diversity < self.min_diversity {
+            return Verdict::Fail(format!(
+                "low lexical diversity ({:.0}% unique of {} tokens)",
+                diversity * 100.0,
+                tokens.len()
+            ));
+        }
+        Verdict::Pass
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,6 +380,29 @@ mod tests {
         assert_eq!(report.failures()[0].0, "citations");
         // No citations → skipped.
         assert!(v.verify("plain prose").passed());
+    }
+
+    #[test]
+    fn detects_degenerate_repetition() {
+        let v = Verifier::new().with_check(Box::new(RepetitionCheck::new()));
+        // Healthy prose (varied vocabulary, 14 words) passes the diversity path.
+        assert!(v
+            .verify(
+                "The kernel orchestrates agents and verifies their output, but never \
+                 performs any inference of its own."
+            )
+            .passed());
+        // A consecutive-token loop fails.
+        let loopy = "go go go go go go go go go go";
+        let report = v.verify(loopy);
+        assert!(!report.passed());
+        assert_eq!(report.failures()[0].0, "repetition");
+        // Low-diversity output fails on the ratio signal.
+        assert!(!v
+            .verify("buy buy now buy buy now buy buy now buy buy now")
+            .passed());
+        // Short output is skipped (too little to judge).
+        assert!(v.verify("yes yes").passed());
     }
 
     #[test]
