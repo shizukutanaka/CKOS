@@ -44,6 +44,7 @@ pub mod prelude {
     pub use crate::knowledge_bus::{KnowledgeBus, ReindexQueue, Reindexer};
     pub use crate::kql::{
         execute as kql_execute, parse as kql_parse, KqlQuery, KqlResult, NodeMatch, ReturnTarget,
+        SortDir,
     };
     pub use crate::messaging::{Message, MessageBus, Payload, ServiceMesh};
     pub use crate::reflection::{consensus, Consensus, HeuristicReflector, Reflection, Reflector};

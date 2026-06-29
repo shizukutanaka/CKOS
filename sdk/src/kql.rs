@@ -8,6 +8,8 @@
 //! RELATED Algorithm
 //! FILTER Confidence > 90
 //! BEFORE 2025-01-01
+//! ORDER BY Confidence DESC
+//! LIMIT 10
 //! RETURN Graph + Sources
 //! ```
 //!
@@ -35,8 +37,20 @@ pub struct KqlQuery {
     pub before: Option<String>,
     /// Optional `AFTER <date>` bound.
     pub after: Option<String>,
+    /// Optional `ORDER [BY] Confidence [ASC|DESC]` direction. Results are always
+    /// returned in a deterministic order; this overrides the default.
+    pub order: Option<SortDir>,
+    /// Optional `LIMIT <n>` cap on each of the primary/related result sets.
+    pub limit: Option<usize>,
     /// `RETURN` targets; defaults to `[Documents]` when omitted.
     pub returns: Vec<ReturnTarget>,
+}
+
+/// Sort direction for `ORDER BY Confidence`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortDir {
+    Asc,
+    Desc,
 }
 
 /// What `FIND` selects: an optional node kind and/or quoted text.
@@ -242,7 +256,7 @@ pub fn parse(input: &str) -> Result<KqlQuery, KqlError> {
     if let Some(Tok::Word(w)) = p.peek() {
         let is_clause = matches!(
             w.to_ascii_uppercase().as_str(),
-            "RELATED" | "FILTER" | "BEFORE" | "AFTER" | "RETURN"
+            "RELATED" | "FILTER" | "BEFORE" | "AFTER" | "ORDER" | "LIMIT" | "RETURN"
         );
         if !is_clause {
             if w == "*" {
@@ -267,6 +281,8 @@ pub fn parse(input: &str) -> Result<KqlQuery, KqlError> {
         filters: Vec::new(),
         before: None,
         after: None,
+        order: None,
+        limit: None,
         returns: Vec::new(),
     };
 
@@ -282,6 +298,8 @@ pub fn parse(input: &str) -> Result<KqlQuery, KqlError> {
             "FILTER" => q.filters.push(parse_filter(&mut p)?),
             "BEFORE" => q.before = Some(p.next_word()?),
             "AFTER" => q.after = Some(p.next_word()?),
+            "ORDER" => q.order = Some(parse_order(&mut p)?),
+            "LIMIT" => q.limit = Some(parse_limit(&mut p)?),
             "RETURN" => q.returns = parse_returns(&mut p)?,
             other => return err(format!("unknown clause: {other}")),
         }
@@ -307,6 +325,30 @@ fn parse_filter(p: &mut Parser) -> Result<Filter, KqlError> {
         .parse()
         .map_err(|_| KqlError("FILTER Confidence value must be 0..=255".into()))?;
     Ok(Filter::Confidence { op, value })
+}
+
+/// Parse `ORDER [BY] Confidence [ASC|DESC]`. The optional `BY` and the field
+/// name (only `Confidence` is sortable) are accepted for readability; direction
+/// defaults to `DESC` (highest confidence first).
+fn parse_order(p: &mut Parser) -> Result<SortDir, KqlError> {
+    p.eat_keyword("BY"); // optional
+    let field = p.next_word()?;
+    if !field.eq_ignore_ascii_case("Confidence") {
+        return err(format!("can only ORDER BY Confidence, found {field}"));
+    }
+    // Optional trailing direction.
+    if p.eat_keyword("ASC") {
+        Ok(SortDir::Asc)
+    } else {
+        p.eat_keyword("DESC");
+        Ok(SortDir::Desc)
+    }
+}
+
+fn parse_limit(p: &mut Parser) -> Result<usize, KqlError> {
+    p.next_word()?
+        .parse()
+        .map_err(|_| KqlError("LIMIT needs a non-negative integer".into()))
 }
 
 fn parse_returns(p: &mut Parser) -> Result<Vec<ReturnTarget>, KqlError> {
@@ -356,16 +398,25 @@ pub struct KqlResult {
 
 /// Lowercase token for a node kind (mirrors §897 kinds).
 fn kind_token(kind: &NodeKind) -> String {
-    match kind {
-        NodeKind::Concept => "concept".into(),
-        NodeKind::Document => "document".into(),
-        NodeKind::Person => "person".into(),
-        NodeKind::Organization => "organization".into(),
-        NodeKind::Tool => "tool".into(),
-        NodeKind::Api => "api".into(),
-        NodeKind::Project => "project".into(),
-        NodeKind::Other(s) => s.to_lowercase(),
+    kind.as_token()
+}
+
+/// Order a result set deterministically and apply any `LIMIT`. Without an
+/// explicit `ORDER`, results are sorted by descending confidence then label, so
+/// output is stable regardless of the graph's internal hash order.
+fn order_and_limit(mut v: Vec<NodeMatch>, query: &KqlQuery) -> Vec<NodeMatch> {
+    let dir = query.order.unwrap_or(SortDir::Desc);
+    v.sort_by(|a, b| {
+        let by_conf = match dir {
+            SortDir::Desc => b.confidence.cmp(&a.confidence),
+            SortDir::Asc => a.confidence.cmp(&b.confidence),
+        };
+        by_conf.then_with(|| a.label.cmp(&b.label))
+    });
+    if let Some(n) = query.limit {
+        v.truncate(n);
     }
+    v
 }
 
 fn passes_filters(node: &Node, filters: &[Filter]) -> bool {
@@ -456,10 +507,9 @@ pub fn execute(query: &KqlQuery, graph: &KnowledgeGraph) -> KqlResult {
         }
     }
 
-    KqlResult {
-        primary: primary_nodes.iter().map(|n| to_match(n)).collect(),
-        related,
-    }
+    let primary = order_and_limit(primary_nodes.iter().map(|n| to_match(n)).collect(), query);
+    let related = order_and_limit(related, query);
+    KqlResult { primary, related }
 }
 
 #[cfg(test)]
@@ -521,6 +571,38 @@ mod tests {
         // Only the high-confidence algorithm passes the filter.
         assert_eq!(res.related.len(), 1);
         assert_eq!(res.related[0].label, "Attention");
+    }
+
+    #[test]
+    fn orders_and_limits_results() {
+        let mut g = KnowledgeGraph::new();
+        g.add_node(NodeKind::Concept, "Low", 30);
+        g.add_node(NodeKind::Concept, "High", 95);
+        g.add_node(NodeKind::Concept, "Mid", 60);
+
+        // Default ordering is by descending confidence, deterministically.
+        let res = execute(&parse("FIND Concept").unwrap(), &g);
+        let labels: Vec<&str> = res.primary.iter().map(|m| m.label.as_str()).collect();
+        assert_eq!(labels, vec!["High", "Mid", "Low"]);
+
+        // LIMIT caps the set after ordering.
+        let res = execute(&parse("FIND Concept LIMIT 2").unwrap(), &g);
+        let labels: Vec<&str> = res.primary.iter().map(|m| m.label.as_str()).collect();
+        assert_eq!(labels, vec!["High", "Mid"]);
+
+        // ORDER BY Confidence ASC reverses it.
+        let res = execute(
+            &parse("FIND Concept ORDER BY Confidence ASC LIMIT 1").unwrap(),
+            &g,
+        );
+        assert_eq!(res.primary.len(), 1);
+        assert_eq!(res.primary[0].label, "Low");
+    }
+
+    #[test]
+    fn rejects_bad_order_and_limit() {
+        assert!(parse("FIND Concept ORDER BY Label").is_err()); // only Confidence
+        assert!(parse("FIND Concept LIMIT abc").is_err()); // non-numeric
     }
 
     #[test]
