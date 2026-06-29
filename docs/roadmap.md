@@ -48,8 +48,11 @@ so the whole system runs offline.
   (FIND/RELATED/FILTER/BEFORE/AFTER, RETURN Sources); via `ckos kql`.
 - ✅ **Agent messaging & service mesh** (`sdk::messaging`, §914–§916) — typed
   Message/Payload, a priority-ordered per-agent MessageBus, and a ServiceMesh
-  that routes by capability with round-robin load balancing. mTLS/signing/replay
-  protection (§930) are the next, security-focused additions.
+  that routes by capability with round-robin load balancing.
+- ✅ **Distributed security** (`sdk::security`, §930) — message signing +
+  replay protection (signature, freshness window, nonce uniqueness) via
+  Signer/SignedEnvelope/ReplayGuard. Swap the demo keyed-hash for HMAC-SHA256
+  and add mTLS/cert rotation at the transport layer for production.
 - ✅ **Graph versioning** (`graph::GraphRepo`, §942/§943) — Git-like
   commit/branch/checkout/log over graph snapshots, plus merge by semantic node
   identity with PreferOurs/PreferTheirs/HigherConfidence strategies and a

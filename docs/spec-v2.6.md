@@ -92,7 +92,10 @@ confidence — not FIFO. → `scheduler::ScoreFactors`.
 - **§929 Authorization**: two layers — RBAC (role) + ABAC (attribute) — applied
   per agent/tool/workflow. → [`policy`](../policy).
 - **§930 Distributed security**: mTLS, cert rotation, message signing, replay
-  protection, audit logs.
+  protection, audit logs. → `sdk::security`: `Signer` seals messages into a
+  `SignedEnvelope` (nonce + timestamp + signature); `ReplayGuard` verifies the
+  signature, freshness window and nonce uniqueness. mTLS/cert rotation are
+  transport concerns layered below; audit is `kernel::audit`.
 - **§931 Kubernetes**: each agent as a Deployment, autoscaled.
 - **§932 Docker Compose (dev)**: kernel + planner/reasoner/verifier agents +
   graph-db + vector-db + redis.

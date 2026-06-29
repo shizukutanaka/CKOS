@@ -23,6 +23,7 @@ pub mod kql;
 pub mod messaging;
 pub mod reflection;
 pub mod retrieval;
+pub mod security;
 pub mod session;
 
 pub use agent::{AgentInstance, AgentManifest, AgentState, CapabilityRegistry};
@@ -31,6 +32,7 @@ pub use kql::{execute as kql_execute, parse as kql_parse, KqlQuery, KqlResult};
 pub use messaging::{Message, MessageBus, Payload, ServiceMesh};
 pub use reflection::{consensus, Consensus, HeuristicReflector, Reflection, Reflector};
 pub use retrieval::{plan_retrieval, Hit, HitSource, RetrievalStrategy, Retriever};
+pub use security::{sign, ReplayGuard, SecurityError, SignedEnvelope, Signer};
 pub use session::Session;
 
 /// One-stop import surface for applications building on CKOS.
@@ -43,6 +45,7 @@ pub mod prelude {
     pub use crate::messaging::{Message, MessageBus, Payload, ServiceMesh};
     pub use crate::reflection::{consensus, Consensus, HeuristicReflector, Reflection, Reflector};
     pub use crate::retrieval::{plan_retrieval, Hit, HitSource, RetrievalStrategy, Retriever};
+    pub use crate::security::{sign, ReplayGuard, SecurityError, SignedEnvelope, Signer};
     pub use crate::session::Session;
 
     pub use ckos_kernel::audit::{AuditRecord, AuditSink, InMemoryAuditLog};
