@@ -19,6 +19,7 @@
 
 pub mod agent;
 pub mod engine;
+pub mod knowledge_bus;
 pub mod kql;
 pub mod messaging;
 pub mod reflection;
@@ -28,6 +29,7 @@ pub mod session;
 
 pub use agent::{AgentInstance, AgentManifest, AgentState, CapabilityRegistry};
 pub use engine::{Engine, ExecutionResult};
+pub use knowledge_bus::{KnowledgeBus, ReindexQueue};
 pub use kql::{execute as kql_execute, parse as kql_parse, KqlQuery, KqlResult};
 pub use messaging::{Message, MessageBus, Payload, ServiceMesh};
 pub use reflection::{consensus, Consensus, HeuristicReflector, Reflection, Reflector};
@@ -39,6 +41,7 @@ pub use session::Session;
 pub mod prelude {
     pub use crate::agent::{AgentInstance, AgentManifest, AgentState, CapabilityRegistry};
     pub use crate::engine::{Engine, ExecutionResult};
+    pub use crate::knowledge_bus::{KnowledgeBus, ReindexQueue};
     pub use crate::kql::{
         execute as kql_execute, parse as kql_parse, KqlQuery, KqlResult, NodeMatch, ReturnTarget,
     };

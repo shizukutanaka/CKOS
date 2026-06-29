@@ -49,6 +49,10 @@ so the whole system runs offline.
 - ✅ **Agent messaging & service mesh** (`sdk::messaging`, §914–§916) — typed
   Message/Payload, a priority-ordered per-agent MessageBus, and a ServiceMesh
   that routes by capability with round-robin load balancing.
+- ✅ **Knowledge bus** (`sdk::knowledge_bus`, §923) — graph mutations publish
+  `GraphChanged` events; `ReindexQueue` collects changed node ids for an async
+  re-index/embedding worker (§938). Wiring the worker to actually re-embed is
+  the next step.
 - ✅ **Distributed security** (`sdk::security`, §930) — message signing +
   replay protection (signature, freshness window, nonce uniqueness) via
   Signer/SignedEnvelope/ReplayGuard. Swap the demo keyed-hash for HMAC-SHA256

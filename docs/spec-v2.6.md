@@ -76,7 +76,9 @@ closing the §904→§913 optimization loop.
 - **§922 Collective reflection**: planner/reasoner/verifier → consensus → memory
   update. → `sdk::reflection::consensus`.
 - **§923 Knowledge bus**: graph updates flow as events so embeddings re-generate
-  automatically. → `kernel::Event::GraphChanged`.
+  automatically. → `sdk::knowledge_bus::KnowledgeBus` publishes
+  `Event::GraphChanged` on every mutation; `ReindexQueue` is a ready-made
+  subscriber that collects changed node ids for an async re-index worker (§938).
 
 ## §924–§927 Runtime pool, edge, distribution, sessions
 
