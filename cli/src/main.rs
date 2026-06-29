@@ -11,6 +11,55 @@ use std::process::ExitCode;
 /// Filename under a session directory holding the persisted knowledge graph.
 const GRAPH_FILE: &str = "graph.kg";
 
+/// Remove the first occurrence of a boolean flag `name` from `args`, returning
+/// whether it was present and the remaining positional args. Lets flags appear
+/// in any position, consistently across commands.
+fn take_flag(args: &[String], name: &str) -> (bool, Vec<String>) {
+    let mut present = false;
+    let mut rest = Vec::with_capacity(args.len());
+    for a in args {
+        if !present && a == name {
+            present = true;
+        } else {
+            rest.push(a.clone());
+        }
+    }
+    (present, rest)
+}
+
+/// Remove the first `--flag <value>` pair from `args`, returning the value (if
+/// the flag was present) and the remaining positional args. Errors if the flag
+/// appears with no following value.
+fn take_value_flag(
+    args: &[String],
+    name: &str,
+) -> std::result::Result<(Option<String>, Vec<String>), String> {
+    let mut value = None;
+    let mut rest = Vec::with_capacity(args.len());
+    let mut i = 0;
+    while i < args.len() {
+        if value.is_none() && args[i] == name {
+            match args.get(i + 1) {
+                Some(v) => {
+                    value = Some(v.clone());
+                    i += 2;
+                    continue;
+                }
+                None => return Err(format!("{name} needs a value")),
+            }
+        }
+        rest.push(args[i].clone());
+        i += 1;
+    }
+    Ok((value, rest))
+}
+
+/// Whether the user asked for help on a (sub)command: `-h`/`--help` as the
+/// first argument.
+fn wants_help(args: &[String]) -> bool {
+    matches!(args.first().map(String::as_str), Some("-h" | "--help"))
+}
+
 const HELP: &str = "\
 ckos — Cognitive Kernel OS
 
@@ -73,11 +122,12 @@ fn demo_capabilities() -> Vec<Capability> {
 }
 
 fn cmd_plan(rest: &[String]) -> ExitCode {
-    // Optional `--dot` flag emits Graphviz instead of the step listing.
-    let (dot, intent_args): (bool, &[String]) = match rest {
-        [flag, tail @ ..] if flag == "--dot" => (true, tail),
-        _ => (false, rest),
-    };
+    if wants_help(rest) {
+        println!("usage: ckos plan [--dot] <intent…>\n  Decompose an intent into a workflow DAG; --dot emits Graphviz.");
+        return ExitCode::SUCCESS;
+    }
+    // Optional `--dot` flag (any position) emits Graphviz instead of the listing.
+    let (dot, intent_args) = take_flag(rest, "--dot");
     if intent_args.is_empty() {
         eprintln!("error: `plan` needs an intent, e.g. `ckos plan research transformers`");
         return ExitCode::FAILURE;
@@ -124,11 +174,19 @@ fn cmd_plan(rest: &[String]) -> ExitCode {
 }
 
 fn cmd_run(rest: &[String]) -> ExitCode {
-    // Optional `--session <dir>` prefix; the remainder is the intent.
-    let (session_dir, intent_args): (Option<&str>, &[String]) = match rest {
-        [flag, dir, tail @ ..] if flag == "--session" => (Some(dir.as_str()), tail),
-        _ => (None, rest),
+    if wants_help(rest) {
+        println!("usage: ckos run [--session <dir>] <intent…>\n  Plan and execute end-to-end; --session persists the run and grows its graph.");
+        return ExitCode::SUCCESS;
+    }
+    // Optional `--session <dir>` in any position; the remainder is the intent.
+    let (session_dir, intent_args) = match take_value_flag(rest, "--session") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
     };
+    let session_dir = session_dir.as_deref();
     if intent_args.is_empty() {
         eprintln!("error: `run` needs an intent, e.g. `ckos run research transformers`");
         return ExitCode::FAILURE;
@@ -405,12 +463,20 @@ fn demo_graph() -> KnowledgeGraph {
 }
 
 fn cmd_kql(rest: &[String]) -> ExitCode {
-    // Optional `--session <dir>` queries that session's persisted graph instead
-    // of the built-in demo graph.
-    let (session_dir, rest): (Option<&str>, &[String]) = match rest {
-        [flag, dir, tail @ ..] if flag == "--session" => (Some(dir.as_str()), tail),
-        _ => (None, rest),
+    if wants_help(rest) {
+        println!("usage: ckos kql [--session <dir>] <query>\n  Run a KQL query against the demo graph, or a session's persisted graph with --session.");
+        return ExitCode::SUCCESS;
+    }
+    // Optional `--session <dir>` (any position) queries that session's persisted
+    // graph instead of the built-in demo graph.
+    let (session_dir, rest) = match take_value_flag(rest, "--session") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
     };
+    let session_dir = session_dir.as_deref();
     if rest.is_empty() {
         eprintln!("error: usage `ckos kql [--session <dir>] \"FIND Concept \\\"Transformer\\\" RELATED Algorithm\"`");
         return ExitCode::FAILURE;
@@ -463,16 +529,24 @@ fn cmd_kql(rest: &[String]) -> ExitCode {
 }
 
 fn cmd_graph(rest: &[String]) -> ExitCode {
-    // Optional leading `--dot` flag.
-    let (dot, rest): (bool, &[String]) = match rest {
-        [flag, tail @ ..] if flag == "--dot" => (true, tail),
-        _ => (false, rest),
+    if wants_help(rest) {
+        println!("usage: ckos graph [--dot] <text…> | ckos graph [--dot] --session <dir>\n  Extract a knowledge graph from text or a session's documents; --dot emits Graphviz.");
+        return ExitCode::SUCCESS;
+    }
+    // Flags may appear in any position.
+    let (dot, rest) = take_flag(rest, "--dot");
+    let (session_dir, rest) = match take_value_flag(&rest, "--session") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
     };
+    let session_dir = session_dir.as_deref();
 
-    // Source the text: either a session's documents or inline arguments. When a
-    // session is given, remember its directory so we can persist the graph.
-    let (text, session_dir): (String, Option<&str>) = match rest {
-        [flag, dir] if flag == "--session" => {
+    // Source the text: either a session's documents or inline arguments.
+    let text: String = match session_dir {
+        Some(dir) => {
             let store = match FileStore::open(dir) {
                 Ok(s) => s,
                 Err(e) => {
@@ -481,7 +555,7 @@ fn cmd_graph(rest: &[String]) -> ExitCode {
                 }
             };
             // Empty query (limit 0) returns every stored document.
-            let text = match store.search(&Query::default()) {
+            match store.search(&Query::default()) {
                 Ok(docs) => docs
                     .iter()
                     .map(|d| format!("{}. {}", d.title, d.body))
@@ -491,11 +565,10 @@ fn cmd_graph(rest: &[String]) -> ExitCode {
                     eprintln!("error: {e}");
                     return ExitCode::FAILURE;
                 }
-            };
-            (text, Some(dir.as_str()))
+            }
         }
-        args if !args.is_empty() => (args.join(" "), None),
-        _ => {
+        None if !rest.is_empty() => rest.join(" "),
+        None => {
             eprintln!(
                 "error: usage `ckos graph [--dot] <text…>` or `ckos graph [--dot] --session <dir>`"
             );

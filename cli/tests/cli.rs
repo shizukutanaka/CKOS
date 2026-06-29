@@ -179,6 +179,30 @@ fn unknown_command_fails() {
 }
 
 #[test]
+fn flags_work_in_any_position() {
+    // --dot after the intent is accepted (position-independent flags).
+    let trailing = ckos(&["plan", "research X", "--dot"]);
+    assert!(trailing.status.success());
+    assert!(stdout(&trailing).starts_with("digraph workflow {"));
+
+    // Same result as the leading-flag form.
+    let leading = ckos(&["plan", "--dot", "research X"]);
+    assert_eq!(stdout(&leading), stdout(&trailing));
+}
+
+#[test]
+fn per_command_help_is_shown() {
+    for cmd in ["plan", "run", "graph", "kql"] {
+        let out = ckos(&[cmd, "--help"]);
+        assert!(out.status.success(), "{cmd} --help should succeed");
+        assert!(
+            stdout(&out).contains("usage:"),
+            "{cmd} --help should print usage"
+        );
+    }
+}
+
+#[test]
 fn workflow_file_executes() {
     // Unique temp file, removed on drop.
     struct TempFile(PathBuf);
