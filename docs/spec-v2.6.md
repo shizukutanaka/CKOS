@@ -23,7 +23,8 @@ runtime: [photon, llama.cpp]
 permissions: [graph.read, graph.write, tool.search]
 priority: high
 ```
-→ `sdk::agent::AgentManifest`.
+→ `sdk::agent::AgentManifest`; `AgentManifest::from_manifest` parses this exact
+YAML-style config (dependency-free), so agents can be defined in files.
 
 ## §909 Agent lifecycle
 

@@ -20,6 +20,8 @@ pub struct AgentManifest {
     pub description: String,
     /// Capabilities this agent provides (§910, §911).
     pub capabilities: Vec<Capability>,
+    /// Memory tiers the agent needs, by name e.g. `working`, `graph` (§908).
+    pub memory: Vec<String>,
     /// Runtimes the agent can run on, by name (§908).
     pub runtimes: Vec<String>,
     /// Permission tokens the agent requests (§908, §919).
@@ -36,10 +38,140 @@ impl AgentManifest {
             version: "0.1.0".into(),
             description: String::new(),
             capabilities: vec![capability],
+            memory: Vec::new(),
             runtimes: Vec::new(),
             permissions: Vec::new(),
             priority: Priority::Normal,
         }
+    }
+
+    /// Parse a manifest from the §908 YAML-style config:
+    ///
+    /// ```text
+    /// id: planner
+    /// version: 1.2.0
+    /// description: Planning Agent
+    /// capabilities:
+    /// - planning
+    /// - decomposition
+    /// memory: [working, graph]
+    /// runtime:
+    /// - llama.cpp
+    /// permissions:
+    /// - graph.read
+    /// priority: high
+    /// ```
+    ///
+    /// Scalars are `key: value`; lists are either a `key:` header followed by
+    /// `- item` lines or an inline `key: [a, b]`. Unknown keys are ignored;
+    /// `id` is required. Dependency-free (no YAML crate).
+    pub fn from_manifest(text: &str) -> Result<Self> {
+        let mut id = None;
+        let mut version = "0.1.0".to_string();
+        let mut description = String::new();
+        let mut capabilities = Vec::new();
+        let mut memory = Vec::new();
+        let mut runtimes = Vec::new();
+        let mut permissions = Vec::new();
+        let mut priority = Priority::Normal;
+        let mut current_list: Option<&str> = None;
+
+        for raw in text.lines() {
+            let line = raw.trim_end();
+            if line.trim().is_empty() || line.trim_start().starts_with('#') {
+                continue;
+            }
+            // List item under the active list key.
+            if let Some(item) = line.trim_start().strip_prefix("- ") {
+                if let Some(key) = current_list {
+                    push_list_item(
+                        key,
+                        item.trim(),
+                        &mut capabilities,
+                        &mut memory,
+                        &mut runtimes,
+                        &mut permissions,
+                    );
+                }
+                continue;
+            }
+            let Some((key, value)) = line.split_once(':') else {
+                continue;
+            };
+            let key = key.trim();
+            let value = value.trim();
+            current_list = None;
+            match key {
+                "id" => id = Some(value.to_string()),
+                "version" => version = value.to_string(),
+                "description" => description = value.to_string(),
+                "priority" => priority = parse_priority(value),
+                "capabilities" | "memory" | "runtime" | "runtimes" | "permissions" => {
+                    let target = if key == "runtime" { "runtimes" } else { key };
+                    if value.is_empty() {
+                        current_list = Some(target); // items follow on `- ` lines
+                    } else if let Some(inline) =
+                        value.strip_prefix('[').and_then(|v| v.strip_suffix(']'))
+                    {
+                        for item in inline.split(',') {
+                            let item = item.trim();
+                            if !item.is_empty() {
+                                push_list_item(
+                                    target,
+                                    item,
+                                    &mut capabilities,
+                                    &mut memory,
+                                    &mut runtimes,
+                                    &mut permissions,
+                                );
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let id = id.ok_or_else(|| KernelError::other("manifest missing required `id`"))?;
+        Ok(AgentManifest {
+            id,
+            version,
+            description,
+            capabilities,
+            memory,
+            runtimes,
+            permissions,
+            priority,
+        })
+    }
+}
+
+fn parse_priority(value: &str) -> Priority {
+    match value.to_ascii_lowercase().as_str() {
+        "low" => Priority::Low,
+        "high" => Priority::High,
+        "critical" => Priority::Critical,
+        _ => Priority::Normal,
+    }
+}
+
+#[allow(clippy::ptr_arg)]
+fn push_list_item(
+    key: &str,
+    item: &str,
+    capabilities: &mut Vec<Capability>,
+    memory: &mut Vec<String>,
+    runtimes: &mut Vec<String>,
+    permissions: &mut Vec<String>,
+) {
+    match key {
+        "capabilities" => {
+            capabilities.push(item.parse().unwrap_or(Capability::Custom(item.into())))
+        }
+        "memory" => memory.push(item.to_string()),
+        "runtimes" => runtimes.push(item.to_string()),
+        "permissions" => permissions.push(item.to_string()),
+        _ => {}
     }
 }
 
@@ -161,6 +293,48 @@ mod tests {
         assert_eq!(reg.discover(&Capability::Planning).len(), 2);
         assert_eq!(reg.discover(&Capability::Coding).len(), 1);
         assert_eq!(reg.discover(&Capability::Vision).len(), 0);
+    }
+
+    #[test]
+    fn parses_the_spec_manifest() {
+        let text = "\
+id: planner
+version: 1.2.0
+description: Planning Agent
+capabilities:
+- planning
+- decomposition
+memory:
+- working
+- graph
+runtime:
+- photon
+- llama.cpp
+permissions:
+- graph.read
+- graph.write
+priority: high";
+        let m = AgentManifest::from_manifest(text).unwrap();
+        assert_eq!(m.id, "planner");
+        assert_eq!(m.version, "1.2.0");
+        assert_eq!(m.description, "Planning Agent");
+        assert_eq!(m.capabilities.len(), 2);
+        assert_eq!(m.capabilities[0], Capability::Planning);
+        assert_eq!(
+            m.capabilities[1],
+            Capability::Custom("decomposition".into())
+        );
+        assert_eq!(m.memory, vec!["working", "graph"]);
+        assert_eq!(m.runtimes, vec!["photon", "llama.cpp"]);
+        assert_eq!(m.permissions, vec!["graph.read", "graph.write"]);
+        assert_eq!(m.priority, Priority::High);
+    }
+
+    #[test]
+    fn parses_inline_lists_and_requires_id() {
+        let m = AgentManifest::from_manifest("id: x\ncapabilities: [coding, vision]").unwrap();
+        assert_eq!(m.capabilities, vec![Capability::Coding, Capability::Vision]);
+        assert!(AgentManifest::from_manifest("version: 1.0").is_err());
     }
 
     #[test]
