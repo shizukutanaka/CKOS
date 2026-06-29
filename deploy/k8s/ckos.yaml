@@ -1,0 +1,67 @@
+# Kubernetes manifests for CKOS (§931).
+#
+# Each agent role (planner, reasoner, verifier) is the same `ckos` image run
+# with a different command; this manifest deploys the kernel image with a
+# HorizontalPodAutoscaler for the "autoscale" the spec calls for. The data
+# layer (Neo4j / Qdrant / Redis, see docker-compose.yml) is expected to be
+# provided by managed services or their respective operators in-cluster.
+#
+# Apply with: kubectl apply -f deploy/k8s/ckos.yaml
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ckos
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ckos-kernel
+  namespace: ckos
+  labels:
+    app: ckos
+    component: kernel
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ckos
+      component: kernel
+  template:
+    metadata:
+      labels:
+        app: ckos
+        component: kernel
+    spec:
+      containers:
+        - name: ckos
+          image: ckos:dev
+          imagePullPolicy: IfNotPresent
+          args: ["help"]
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ckos-kernel
+  namespace: ckos
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ckos-kernel
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
