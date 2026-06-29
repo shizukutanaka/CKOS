@@ -131,6 +131,38 @@ impl KnowledgeGraph {
         self.adjacency.values().flatten()
     }
 
+    /// Render the graph as a Graphviz DOT digraph for visualization (a building
+    /// block for the v2.8 Graph Explorer). Node labels show the kind, label and
+    /// confidence; edges are typed.
+    pub fn to_dot(&self) -> String {
+        // Stable per-node index so node names are clean identifiers.
+        let index: HashMap<&NodeId, usize> = self
+            .nodes
+            .keys()
+            .enumerate()
+            .map(|(i, id)| (id, i))
+            .collect();
+        let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+
+        let mut out = String::from("digraph knowledge {\n");
+        for (id, node) in &self.nodes {
+            let i = index[id];
+            out.push_str(&format!(
+                "  n{i} [label=\"{} [{:?}] {}\"];\n",
+                esc(&node.label),
+                node.kind,
+                node.confidence
+            ));
+        }
+        for edge in self.edges() {
+            if let (Some(&f), Some(&t)) = (index.get(&edge.from), index.get(&edge.to)) {
+                out.push_str(&format!("  n{f} -> n{t} [label=\"{:?}\"];\n", edge.kind));
+            }
+        }
+        out.push_str("}\n");
+        out
+    }
+
     /// Number of nodes.
     pub fn len(&self) -> usize {
         self.nodes.len()
@@ -200,6 +232,19 @@ mod tests {
         let two_hop = g.traverse(&a, 2);
         assert_eq!(two_hop.len(), 2);
         assert!(two_hop.iter().any(|n| n.label == "ACME"));
+    }
+
+    #[test]
+    fn exports_graphviz_dot() {
+        let mut g = KnowledgeGraph::new();
+        let a = g.add_node(NodeKind::Project, "CKOS", 100);
+        let b = g.add_node(NodeKind::Tool, "scheduler", 90);
+        g.connect(&a, &b, EdgeKind::DependsOn);
+        let dot = g.to_dot();
+        assert!(dot.starts_with("digraph knowledge {"));
+        assert!(dot.contains("CKOS"));
+        assert!(dot.contains("DependsOn"));
+        assert_eq!(dot.matches("->").count(), 1);
     }
 
     #[test]

@@ -55,6 +55,7 @@ cargo run -p ckos-cli -- search ./sess "summary report"          # hybrid search
 cargo run -p ckos-cli -- kql 'FIND Concept "Transformer" RELATED Algorithm'  # KQL
 cargo run -p ckos-cli -- gc ./sess                               # garbage-collect
 cargo run -p ckos-cli -- verify 'see [1]'                        # run verifier checks
+cargo run -p ckos-cli -- plan --dot "research X" | dot -Tsvg     # Graphviz workflow
 ```
 
 Example output:

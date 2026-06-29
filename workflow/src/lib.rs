@@ -17,6 +17,11 @@ struct Step {
     deps: Vec<usize>,
 }
 
+/// Escape a string for use inside a Graphviz double-quoted label.
+pub(crate) fn dot_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 /// A workflow DAG (§895).
 pub struct Dag {
     id: WorkflowId,
@@ -77,6 +82,27 @@ impl Dag {
     /// Borrow the task behind a step handle.
     pub fn task(&self, step: StepRef) -> Option<&Task> {
         self.steps.get(step.0).map(|s| &s.task)
+    }
+
+    /// Render the DAG as a Graphviz DOT digraph for visualization (a building
+    /// block for the v2.8 Workflow Studio). Nodes show the step description and
+    /// capability; edges are dependencies.
+    pub fn to_dot(&self) -> String {
+        let mut s = String::from("digraph workflow {\n  rankdir=LR;\n");
+        for (i, step) in self.steps.iter().enumerate() {
+            s.push_str(&format!(
+                "  n{i} [label=\"{}\\n[{}]\"];\n",
+                dot_escape(&step.task.description),
+                step.task.capability
+            ));
+        }
+        for (i, step) in self.steps.iter().enumerate() {
+            for d in &step.deps {
+                s.push_str(&format!("  n{d} -> n{i};\n"));
+            }
+        }
+        s.push_str("}\n");
+        s
     }
 
     /// Steps with no dependencies — the initial parallel frontier.
@@ -143,6 +169,18 @@ mod tests {
         // them: step `b` depends on step `a`'s task id.
         let a_id = dag.task(a).unwrap().id.clone();
         assert_eq!(dag.task(b).unwrap().depends_on, vec![a_id]);
+    }
+
+    #[test]
+    fn exports_graphviz_dot() {
+        let mut dag = Dag::new("pipeline");
+        let a = dag.add_step(Task::new("a", Capability::Retrieval), &[]);
+        dag.add_step(Task::new("b", Capability::Reasoning), &[a]);
+        let dot = dag.to_dot();
+        assert!(dot.starts_with("digraph workflow {"));
+        assert!(dot.contains("n0 -> n1;")); // dependency edge
+        assert!(dot.contains("[retrieval]"));
+        assert!(dot.trim_end().ends_with('}'));
     }
 
     #[test]

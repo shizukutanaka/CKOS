@@ -14,7 +14,8 @@ USAGE:
     ckos <COMMAND> [ARGS]
 
 COMMANDS:
-    plan <intent...>                 Decompose an intent into a workflow DAG
+    plan [--dot] <intent...>         Decompose an intent into a workflow DAG
+                                     (--dot emits Graphviz)
     run [--session <dir>] <intent…>  Plan and execute a workflow end-to-end,
                                      persisting the run when --session is given
     history <dir>                    Show the execution history of a session
@@ -69,12 +70,22 @@ fn demo_capabilities() -> [Capability; 7] {
 }
 
 fn cmd_plan(rest: &[String]) -> ExitCode {
-    if rest.is_empty() {
+    // Optional `--dot` flag emits Graphviz instead of the step listing.
+    let (dot, intent_args): (bool, &[String]) = match rest {
+        [flag, tail @ ..] if flag == "--dot" => (true, tail),
+        _ => (false, rest),
+    };
+    if intent_args.is_empty() {
         eprintln!("error: `plan` needs an intent, e.g. `ckos plan research transformers`");
         return ExitCode::FAILURE;
     }
-    let intent = rest.join(" ");
+    let intent = intent_args.join(" ");
     let dag = HeuristicPlanner::new().plan(&intent);
+
+    if dot {
+        print!("{}", dag.to_dot());
+        return ExitCode::SUCCESS;
+    }
 
     // Register one demo agent per capability so we can show discovery.
     let mut registry = CapabilityRegistry::new();
