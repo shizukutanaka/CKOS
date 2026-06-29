@@ -51,9 +51,10 @@ pub trait Planner {
     }
 }
 
-/// A dependency-free heuristic planner producing the canonical research
-/// pipeline from §895 when it recognises a "research"-shaped intent, and a
-/// generic single-step plan otherwise.
+/// A dependency-free heuristic planner that classifies an intent (research,
+/// coding, translation, question, or generic) and emits the matching capability
+/// pipeline — the research case being the canonical §895 flow. A model-backed
+/// planner can replace it behind the [`Planner`] trait.
 #[derive(Default)]
 pub struct HeuristicPlanner;
 
@@ -64,48 +65,75 @@ impl HeuristicPlanner {
     }
 }
 
+/// Intent categories the heuristic planner recognises.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Intent {
+    Research,
+    Coding,
+    Translation,
+    Question,
+    Generic,
+}
+
+fn classify(intent: &str) -> Intent {
+    let q = intent.to_lowercase();
+    let any = |keys: &[&str]| keys.iter().any(|k| q.contains(k));
+    if any(&["research", "paper", "論文", "report", "レポート"]) {
+        Intent::Research
+    } else if any(&[
+        "code",
+        "implement",
+        "function",
+        "bug",
+        "refactor",
+        "コード",
+        "関数",
+        "実装",
+    ]) {
+        Intent::Coding
+    } else if any(&["translate", "translation", "翻訳"]) {
+        Intent::Translation
+    } else if intent.trim_end().ends_with('?')
+        || any(&[
+            "what", "why", "how", "explain", "なに", "なぜ", "どう", "説明",
+        ])
+    {
+        Intent::Question
+    } else {
+        Intent::Generic
+    }
+}
+
 impl Planner for HeuristicPlanner {
     fn decompose(&self, intent: &str) -> Vec<SubTask> {
-        let lower = intent.to_lowercase();
-        let looks_like_research = ["research", "paper", "論文", "report", "レポート"]
-            .iter()
-            .any(|k| lower.contains(k));
-
-        if looks_like_research {
+        let step = |desc: &str, cap: Capability, deps: Vec<usize>| SubTask {
+            description: desc.into(),
+            capability: cap,
+            depends_on: deps,
+        };
+        match classify(intent) {
             // §895: search -> embed -> summarize -> verify citations -> report
-            vec![
-                SubTask {
-                    description: "search sources".into(),
-                    capability: Capability::Retrieval,
-                    depends_on: vec![],
-                },
-                SubTask {
-                    description: "generate embeddings".into(),
-                    capability: Capability::Embedding,
-                    depends_on: vec![0],
-                },
-                SubTask {
-                    description: "summarize".into(),
-                    capability: Capability::Reasoning,
-                    depends_on: vec![1],
-                },
-                SubTask {
-                    description: "verify citations".into(),
-                    capability: Capability::Verification,
-                    depends_on: vec![2],
-                },
-                SubTask {
-                    description: "generate report".into(),
-                    capability: Capability::Reasoning,
-                    depends_on: vec![3],
-                },
-            ]
-        } else {
-            vec![SubTask {
-                description: intent.to_string(),
-                capability: Capability::Reasoning,
-                depends_on: vec![],
-            }]
+            Intent::Research => vec![
+                step("search sources", Capability::Retrieval, vec![]),
+                step("generate embeddings", Capability::Embedding, vec![0]),
+                step("summarize", Capability::Reasoning, vec![1]),
+                step("verify citations", Capability::Verification, vec![2]),
+                step("generate report", Capability::Reasoning, vec![3]),
+            ],
+            // plan -> write code -> verify (static analysis, §899)
+            Intent::Coding => vec![
+                step("plan implementation", Capability::Planning, vec![]),
+                step("write code", Capability::Coding, vec![0]),
+                step("verify code", Capability::Verification, vec![1]),
+            ],
+            // single translation step
+            Intent::Translation => vec![step("translate", Capability::Translation, vec![])],
+            // retrieve context -> answer
+            Intent::Question => vec![
+                step("retrieve context", Capability::Retrieval, vec![]),
+                step("answer", Capability::Reasoning, vec![0]),
+            ],
+            Intent::Generic => vec![step(intent, Capability::Reasoning, vec![])],
         }
     }
 }
@@ -126,5 +154,40 @@ mod tests {
     fn generic_intent_is_single_step() {
         let dag = HeuristicPlanner::new().plan("say hello");
         assert_eq!(dag.len(), 1);
+    }
+
+    #[test]
+    fn coding_intent_plans_code_and_verify() {
+        let dag = HeuristicPlanner::new().plan("implement a function to sort a list");
+        assert_eq!(dag.len(), 3);
+        let order = dag.topological_order().unwrap();
+        assert_eq!(dag.task(order[0]).unwrap().capability, Capability::Planning);
+        assert!(dag
+            .topological_order()
+            .unwrap()
+            .iter()
+            .any(|s| dag.task(*s).unwrap().capability == Capability::Coding));
+    }
+
+    #[test]
+    fn question_intent_retrieves_then_answers() {
+        let dag = HeuristicPlanner::new().plan("why is the sky blue?");
+        assert_eq!(dag.len(), 2);
+        let order = dag.topological_order().unwrap();
+        assert_eq!(
+            dag.task(order[0]).unwrap().capability,
+            Capability::Retrieval
+        );
+    }
+
+    #[test]
+    fn translation_intent_is_single_translation_step() {
+        let dag = HeuristicPlanner::new().plan("translate this to French");
+        assert_eq!(dag.len(), 1);
+        let order = dag.topological_order().unwrap();
+        assert_eq!(
+            dag.task(order[0]).unwrap().capability,
+            Capability::Translation
+        );
     }
 }

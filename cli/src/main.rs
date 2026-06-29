@@ -54,6 +54,20 @@ fn main() -> ExitCode {
     }
 }
 
+/// Capabilities the demo CLI provides agents/runtimes for — enough to run any
+/// intent the heuristic planner produces.
+fn demo_capabilities() -> [Capability; 7] {
+    [
+        Capability::Planning,
+        Capability::Retrieval,
+        Capability::Embedding,
+        Capability::Reasoning,
+        Capability::Verification,
+        Capability::Coding,
+        Capability::Translation,
+    ]
+}
+
 fn cmd_plan(rest: &[String]) -> ExitCode {
     if rest.is_empty() {
         eprintln!("error: `plan` needs an intent, e.g. `ckos plan research transformers`");
@@ -64,12 +78,7 @@ fn cmd_plan(rest: &[String]) -> ExitCode {
 
     // Register one demo agent per capability so we can show discovery.
     let mut registry = CapabilityRegistry::new();
-    for cap in [
-        Capability::Retrieval,
-        Capability::Embedding,
-        Capability::Reasoning,
-        Capability::Verification,
-    ] {
+    for cap in demo_capabilities() {
         registry.register(AgentManifest::new(format!("{cap}-agent"), cap));
     }
 
@@ -117,12 +126,7 @@ fn cmd_run(rest: &[String]) -> ExitCode {
     // capability, plus a non-empty output check on the verifier.
     let mut runtimes = RuntimeRegistry::new();
     let mut agents = CapabilityRegistry::new();
-    for cap in [
-        Capability::Retrieval,
-        Capability::Embedding,
-        Capability::Reasoning,
-        Capability::Verification,
-    ] {
+    for cap in demo_capabilities() {
         runtimes.register(Box::new(EchoRuntime::new(vec![cap.clone()])));
         agents.register(AgentManifest::new(format!("{cap}-agent"), cap));
     }
