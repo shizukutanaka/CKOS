@@ -20,6 +20,7 @@ COMMANDS:
                                      persisting the run when --session is given
     history <dir>                    Show the execution history of a session
     search <dir> <query…>            Hybrid-search a session's stored documents
+    workflow <file>                  Load and execute a workflow definition file
     kql <query>                      Run a KQL query against a demo knowledge graph
     gc <dir> [--min-confidence N]    Garbage-collect a session's stored documents
     verify <text…>                   Run the built-in verifier checks on text
@@ -35,6 +36,7 @@ fn main() -> ExitCode {
         Some("run") => cmd_run(&args[1..]),
         Some("history") => cmd_history(&args[1..]),
         Some("search") => cmd_search(&args[1..]),
+        Some("workflow") => cmd_workflow(&args[1..]),
         Some("kql") => cmd_kql(&args[1..]),
         Some("gc") => cmd_gc(&args[1..]),
         Some("verify") => cmd_verify(&args[1..]),
@@ -283,6 +285,57 @@ fn cmd_search(rest: &[String]) -> ExitCode {
         );
     }
     ExitCode::SUCCESS
+}
+
+fn cmd_workflow(rest: &[String]) -> ExitCode {
+    let Some(path) = rest.first() else {
+        eprintln!("error: `workflow` needs a definition file, e.g. `ckos workflow pipeline.wf`");
+        return ExitCode::FAILURE;
+    };
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("error: could not read {path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let dag = match Dag::from_definition(&text) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Demo engine that can serve any capability the definition uses.
+    let mut runtimes = RuntimeRegistry::new();
+    let mut agents = CapabilityRegistry::new();
+    for cap in demo_capabilities() {
+        runtimes.register(Box::new(EchoRuntime::new(vec![cap.clone()])));
+        agents.register(AgentManifest::new(format!("{cap}-agent"), cap));
+    }
+    let engine = Engine::new(
+        runtimes,
+        agents,
+        Verifier::new().with_check(Box::new(NonEmptyCheck)),
+    );
+
+    println!("workflow: {} ({} step(s))\n", dag.name(), dag.len());
+    match engine.run_workflow(&dag) {
+        Ok(results) => {
+            for (i, r) in results.iter().enumerate() {
+                let mark = if r.verified { "ok" } else { "FAIL" };
+                println!("  {}. [{}] {} -> {}", i + 1, r.capability, mark, r.output);
+            }
+            let ok = results.iter().filter(|r| r.verified).count();
+            println!("\n{ok}/{} step(s) verified", results.len());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn cmd_kql(rest: &[String]) -> ExitCode {

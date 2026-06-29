@@ -5,8 +5,11 @@
 //! and [`Dag::topological_order`] yields a legal execution order (or `None` if
 //! a cycle was introduced — the "acyclic" invariant is checked, not assumed).
 
+use ckos_kernel::capability::Capability;
+use ckos_kernel::error::{KernelError, Result};
 use ckos_kernel::task::Task;
 use ckos_kernel::WorkflowId;
+use std::collections::HashMap;
 
 /// A handle to a step within a [`Dag`]. Cheap to copy and pass around.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -82,6 +85,80 @@ impl Dag {
     /// Borrow the task behind a step handle.
     pub fn task(&self, step: StepRef) -> Option<&Task> {
         self.steps.get(step.0).map(|s| &s.task)
+    }
+
+    /// Load a DAG from a declarative definition (§920 workflow compiler):
+    ///
+    /// ```text
+    /// workflow: research pipeline
+    /// step search: retrieval
+    /// step embed: embedding <- search
+    /// step summarize: reasoning <- embed
+    /// step report: reasoning <- summarize
+    /// ```
+    ///
+    /// Each `step <name>: <capability> [<- dep, …]` line adds a node; deps name
+    /// earlier steps. Requiring deps to be already-defined keeps the graph
+    /// acyclic by construction. Dependency-free (no YAML/TOML crate).
+    pub fn from_definition(text: &str) -> Result<Dag> {
+        let mut name = "workflow".to_string();
+        let mut dag: Option<Dag> = None;
+        let mut refs: HashMap<String, StepRef> = HashMap::new();
+
+        for raw in text.lines() {
+            let line = raw.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("workflow:") {
+                name = rest.trim().to_string();
+                continue;
+            }
+            let Some(rest) = line.strip_prefix("step ") else {
+                return Err(KernelError::other(format!("unexpected line: {line}")));
+            };
+            let (step_name, spec) = rest
+                .split_once(':')
+                .ok_or_else(|| KernelError::other(format!("step missing ':' — {line}")))?;
+            let step_name = step_name.trim();
+            if step_name.is_empty() {
+                return Err(KernelError::other("step missing a name"));
+            }
+            let (cap_part, dep_part) = match spec.split_once("<-") {
+                Some((c, d)) => (c.trim(), Some(d.trim())),
+                None => (spec.trim(), None),
+            };
+            if cap_part.is_empty() {
+                return Err(KernelError::other(format!(
+                    "step {step_name} missing capability"
+                )));
+            }
+            let capability: Capability = cap_part
+                .parse()
+                .unwrap_or(Capability::Custom(cap_part.into()));
+
+            let mut deps = Vec::new();
+            if let Some(d) = dep_part {
+                for dep in d.split(',') {
+                    let dep = dep.trim();
+                    if dep.is_empty() {
+                        continue;
+                    }
+                    let r = refs.get(dep).copied().ok_or_else(|| {
+                        KernelError::other(format!(
+                            "step {step_name} depends on unknown step {dep}"
+                        ))
+                    })?;
+                    deps.push(r);
+                }
+            }
+
+            let dag = dag.get_or_insert_with(|| Dag::new(&name));
+            let r = dag.add_step(Task::new(step_name, capability), &deps);
+            refs.insert(step_name.to_string(), r);
+        }
+
+        dag.ok_or_else(|| KernelError::other("workflow has no steps"))
     }
 
     /// Render the DAG as a Graphviz DOT digraph for visualization (a building
@@ -169,6 +246,32 @@ mod tests {
         // them: step `b` depends on step `a`'s task id.
         let a_id = dag.task(a).unwrap().id.clone();
         assert_eq!(dag.task(b).unwrap().depends_on, vec![a_id]);
+    }
+
+    #[test]
+    fn loads_from_definition() {
+        let text = "\
+workflow: research pipeline
+step search: retrieval
+step embed: embedding <- search
+step summarize: reasoning <- embed
+step report: reasoning <- summarize, search";
+        let dag = Dag::from_definition(text).unwrap();
+        assert_eq!(dag.name(), "research pipeline");
+        assert_eq!(dag.len(), 4);
+        let order = dag.topological_order().unwrap();
+        assert_eq!(order.len(), 4);
+        // search has no deps → it is a root.
+        assert_eq!(dag.roots().len(), 1);
+    }
+
+    #[test]
+    fn rejects_unknown_dependency() {
+        // Dag isn't Debug, so avoid unwrap_err and match explicitly.
+        match Dag::from_definition("step a: coding <- ghost") {
+            Err(e) => assert!(e.to_string().contains("unknown step")),
+            Ok(_) => panic!("expected an error for the unknown dependency"),
+        }
     }
 
     #[test]
