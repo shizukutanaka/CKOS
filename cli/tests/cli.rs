@@ -1,0 +1,111 @@
+//! Integration tests for the `ckos` binary — runs the built executable and
+//! asserts on its output and exit codes, guarding the CLI surface against
+//! argument-parsing regressions. Dependency-free: Cargo exposes the binary path
+//! via `CARGO_BIN_EXE_ckos`.
+
+use std::path::PathBuf;
+use std::process::{Command, Output};
+use std::sync::atomic::{AtomicU32, Ordering};
+
+fn ckos(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_ckos"))
+        .args(args)
+        .output()
+        .expect("failed to run ckos")
+}
+
+fn stdout(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+#[test]
+fn version_and_help() {
+    let v = ckos(&["version"]);
+    assert!(v.status.success());
+    assert!(stdout(&v).contains("ckos"));
+
+    // No args prints help and succeeds.
+    let h = ckos(&[]);
+    assert!(h.status.success());
+    assert!(stdout(&h).contains("USAGE"));
+}
+
+#[test]
+fn capabilities_lists_vocabulary() {
+    let out = ckos(&["capabilities"]);
+    assert!(out.status.success());
+    let s = stdout(&out);
+    assert!(s.contains("planning"));
+    assert!(s.contains("verification"));
+}
+
+#[test]
+fn plan_and_run_research() {
+    let plan = ckos(&["plan", "research the Transformer paper"]);
+    assert!(plan.status.success());
+    assert!(stdout(&plan).contains("execution order"));
+
+    let run = ckos(&["run", "research the Transformer paper"]);
+    assert!(run.status.success());
+    let s = stdout(&run);
+    assert!(s.contains("5/5 step(s) verified"));
+    assert!(s.contains("audit:"));
+    assert!(s.contains("telemetry:"));
+}
+
+#[test]
+fn plan_dot_emits_graphviz() {
+    let out = ckos(&["plan", "--dot", "research X"]);
+    assert!(out.status.success());
+    let s = stdout(&out);
+    assert!(s.starts_with("digraph workflow {"));
+    assert!(s.contains("->"));
+}
+
+#[test]
+fn kql_runs_against_demo_graph() {
+    let out = ckos(&["kql", "FIND Concept \"Transformer\" RELATED Algorithm"]);
+    assert!(out.status.success());
+    let s = stdout(&out);
+    assert!(s.contains("Transformer"));
+    assert!(s.contains("Attention"));
+}
+
+#[test]
+fn verify_fails_on_bad_content() {
+    let ok = ckos(&["verify", "clean text"]);
+    assert!(ok.status.success());
+
+    let bad = ckos(&["verify", "dangling [9] and password=secret"]);
+    assert!(!bad.status.success()); // non-zero exit on verification failure
+}
+
+#[test]
+fn unknown_command_fails() {
+    let out = ckos(&["wat"]);
+    assert!(!out.status.success());
+}
+
+#[test]
+fn workflow_file_executes() {
+    // Unique temp file, removed on drop.
+    struct TempFile(PathBuf);
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::SeqCst);
+    let path = std::env::temp_dir().join(format!("ckos-cli-{}-{n}.wf", std::process::id()));
+    std::fs::write(
+        &path,
+        "workflow: demo\nstep fetch: retrieval\nstep think: reasoning <- fetch\n",
+    )
+    .unwrap();
+    let _guard = TempFile(path.clone());
+
+    let out = ckos(&["workflow", path.to_str().unwrap()]);
+    assert!(out.status.success());
+    assert!(stdout(&out).contains("2/2 step(s) verified"));
+}
