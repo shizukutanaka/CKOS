@@ -1,15 +1,17 @@
 //! # Automatic knowledge-graph extraction (§941)
 //!
 //! A dependency-free, heuristic entity/relation extractor. It turns free text
-//! into [`Concept`](crate::NodeKind::Concept) nodes and `RelatedTo` edges so the
-//! graph can be seeded automatically from documents (§938 index pipeline) rather
-//! than only by hand. The heuristics are deliberately simple and std-only:
+//! into [`Concept`](crate::NodeKind::Concept) nodes and typed edges so the graph
+//! can be seeded automatically from documents (§938 index pipeline) rather than
+//! only by hand. The heuristics are deliberately simple and std-only:
 //!
 //! * **Entities** — maximal runs of capitalized words (`Knowledge Graph`) and
 //!   all-caps acronyms (`CKOS`, `API`). Common capitalized stop-words at the
 //!   start of a sentence (`The`, `This`, …) are filtered out.
-//! * **Relations** — two distinct entities mentioned in the same sentence are
-//!   linked with a `RelatedTo` edge (co-occurrence).
+//! * **Relations** — the connective text between two adjacent entities is mapped
+//!   to a typed edge (`depends on` → `DependsOn`, `implements` → `Implements`,
+//!   `created by` → `CreatedBy`, `uses`/`references` → `References`); any other
+//!   co-occurring pair falls back to `RelatedTo`.
 //! * **Confidence** — scales with how often an entity is seen, so terms that
 //!   recur across the corpus are trusted more (§948).
 //!
@@ -63,36 +65,87 @@ fn is_entity_token(tok: &str) -> bool {
     }
 }
 
-/// Extract maximal capitalized phrases from one sentence.
-fn entities_in_sentence(sentence: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let mut current: Vec<&str> = Vec::new();
-    let tokens: Vec<&str> = sentence.split_whitespace().collect();
+/// A parsed sentence: the entity phrases in order plus the connective text
+/// between each consecutive pair (`gaps[i]` lies between `entities[i]` and
+/// `entities[i+1]`), used to type the relation edge.
+struct SentenceParse {
+    entities: Vec<String>,
+    gaps: Vec<String>,
+}
 
-    let flush = |current: &mut Vec<&str>, out: &mut Vec<String>| {
-        if current.is_empty() {
-            return;
-        }
-        // Drop a leading stop-word ("The Scheduler" -> "Scheduler").
-        while current.first().map(|w| is_stop(w)).unwrap_or(false) {
-            current.remove(0);
-        }
-        if !current.is_empty() {
-            out.push(current.join(" "));
-        }
-        current.clear();
+/// Drop leading stop-words from a candidate entity run ("The Scheduler" ->
+/// "Scheduler"); returns the joined phrase or `None` if nothing remains.
+fn finish_entity(current: &mut Vec<&str>) -> Option<String> {
+    while current.first().map(|w| is_stop(w)).unwrap_or(false) {
+        current.remove(0);
+    }
+    let phrase = if current.is_empty() {
+        None
+    } else {
+        Some(current.join(" "))
     };
+    current.clear();
+    phrase
+}
 
-    for raw in tokens {
+/// Extract entity phrases and the connective text between them from a sentence.
+fn parse_sentence(sentence: &str) -> SentenceParse {
+    let mut entities: Vec<String> = Vec::new();
+    let mut gaps: Vec<String> = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    let mut gap: Vec<String> = Vec::new();
+
+    for raw in sentence.split_whitespace() {
         let tok = trim_token(raw);
         if is_entity_token(tok) {
             current.push(tok);
         } else {
-            flush(&mut current, &mut out);
+            if let Some(e) = finish_entity(&mut current) {
+                if !entities.is_empty() {
+                    gaps.push(std::mem::take(&mut gap).join(" "));
+                }
+                entities.push(e);
+            }
+            // Connective words count toward the gap once we have an entity.
+            if !entities.is_empty() && !tok.is_empty() {
+                gap.push(tok.to_lowercase());
+            }
         }
     }
-    flush(&mut current, &mut out);
-    out
+    if let Some(e) = finish_entity(&mut current) {
+        if !entities.is_empty() {
+            gaps.push(std::mem::take(&mut gap).join(" "));
+        }
+        entities.push(e);
+    }
+    SentenceParse { entities, gaps }
+}
+
+/// Map connective text between two entities to a typed relation (§897 edges).
+/// Falls back to `RelatedTo` for plain co-occurrence.
+fn relation_for(gap: &str) -> EdgeKind {
+    if gap.contains("created by")
+        || gap.contains("authored by")
+        || gap.contains("developed by")
+        || gap.contains("written by")
+        || gap.contains("built by")
+        || gap.contains("made by")
+    {
+        EdgeKind::CreatedBy
+    } else if gap.contains("depend") || gap.contains("require") || gap.contains("needs") {
+        EdgeKind::DependsOn
+    } else if gap.contains("implement") || gap.contains("provides") || gap.contains("realizes") {
+        EdgeKind::Implements
+    } else if gap.contains("reference")
+        || gap.contains("uses")
+        || gap.contains("calls")
+        || gap.contains("cites")
+        || gap.contains("invokes")
+    {
+        EdgeKind::References
+    } else {
+        EdgeKind::RelatedTo
+    }
 }
 
 /// Split text into sentences on terminators and newlines.
@@ -127,14 +180,14 @@ impl KnowledgeGraph {
         // Count mentions across the whole text first, so confidence reflects the
         // full corpus rather than first-seen order.
         let mut counts: HashMap<String, usize> = HashMap::new();
-        let parsed: Vec<Vec<String>> = sentences(text)
+        let parsed: Vec<SentenceParse> = sentences(text)
             .into_iter()
             .map(|s| {
-                let ents = entities_in_sentence(s);
-                for e in &ents {
+                let parse = parse_sentence(s);
+                for e in &parse.entities {
                     *counts.entry(e.to_lowercase()).or_default() += 1;
                 }
-                ents
+                parse
             })
             .collect();
 
@@ -155,7 +208,7 @@ impl KnowledgeGraph {
                 // Recover a display label (first-seen casing) from the parses.
                 let display = parsed
                     .iter()
-                    .flatten()
+                    .flat_map(|p| &p.entities)
                     .find(|e| e.to_lowercase() == *lower)
                     .cloned()
                     .unwrap_or_else(|| lower.clone());
@@ -166,20 +219,46 @@ impl KnowledgeGraph {
             }
         }
 
-        // Then draw co-occurrence edges within each sentence.
-        for ents in &parsed {
-            let ids: Vec<NodeId> = {
+        // Draw edges per sentence. Adjacent entities get a *typed* relation
+        // inferred from the connective text between them; remaining co-occurring
+        // pairs fall back to RelatedTo. Typed edges are added first so the
+        // (from, to) dedup keeps the more specific kind.
+        for parse in &parsed {
+            // Resolve every mention to its node id, in order (with duplicates,
+            // so gap alignment holds), then a deduped set for co-occurrence.
+            let ordered: Vec<NodeId> = parse
+                .entities
+                .iter()
+                .filter_map(|e| label_for.get(&e.to_lowercase()).cloned())
+                .collect();
+
+            // 1) Typed adjacent relations.
+            for i in 0..ordered.len().saturating_sub(1) {
+                let (from, to) = (&ordered[i], &ordered[i + 1]);
+                if from == to {
+                    continue;
+                }
+                let gap = parse.gaps.get(i).map(String::as_str).unwrap_or("");
+                if edge_seen.insert((from.clone(), to.clone())) {
+                    self.connect(from, to, relation_for(gap));
+                    report.edges_added += 1;
+                }
+            }
+
+            // 2) Co-occurrence fallback for any pair not already linked.
+            let unique: Vec<NodeId> = {
                 let mut seen = std::collections::HashSet::new();
-                ents.iter()
-                    .filter_map(|e| label_for.get(&e.to_lowercase()).cloned())
-                    .filter(|id| seen.insert(id.clone()))
+                ordered
+                    .iter()
+                    .filter(|id| seen.insert((*id).clone()))
+                    .cloned()
                     .collect()
             };
-            for i in 0..ids.len() {
-                for j in (i + 1)..ids.len() {
-                    let pair = (ids[i].clone(), ids[j].clone());
-                    if edge_seen.insert(pair.clone()) {
-                        self.connect(&ids[i], &ids[j], EdgeKind::RelatedTo);
+            for i in 0..unique.len() {
+                for j in (i + 1)..unique.len() {
+                    let pair = (unique[i].clone(), unique[j].clone());
+                    if edge_seen.insert(pair) {
+                        self.connect(&unique[i], &unique[j], EdgeKind::RelatedTo);
                         report.edges_added += 1;
                     }
                 }
@@ -210,11 +289,31 @@ mod tests {
     #[test]
     fn co_occurring_entities_are_linked() {
         let mut g = KnowledgeGraph::new();
-        g.extract_concepts("CKOS depends on the Scheduler.");
-        // Two entities in one sentence -> one RelatedTo edge.
+        g.extract_concepts("The Scheduler dispatches tasks to the Runtime.");
+        // Two entities, no relation verb -> a single RelatedTo co-occurrence edge.
+        assert_eq!(g.edges().count(), 1);
         assert_eq!(
             g.edges().filter(|e| e.kind == EdgeKind::RelatedTo).count(),
             1
+        );
+    }
+
+    #[test]
+    fn relation_verbs_produce_typed_edges() {
+        let mut g = KnowledgeGraph::new();
+        g.extract_concepts(
+            "CKOS depends on the Scheduler. The Engine implements the Runtime. \
+             The Transformer was created by Vaswani. The Planner uses the Graph.",
+        );
+        let kinds: Vec<EdgeKind> = g.edges().map(|e| e.kind.clone()).collect();
+        assert!(kinds.contains(&EdgeKind::DependsOn));
+        assert!(kinds.contains(&EdgeKind::Implements));
+        assert!(kinds.contains(&EdgeKind::CreatedBy));
+        assert!(kinds.contains(&EdgeKind::References));
+        // Every pair had a recognized verb, so none fell back to RelatedTo.
+        assert_eq!(
+            kinds.iter().filter(|k| **k == EdgeKind::RelatedTo).count(),
+            0
         );
     }
 
