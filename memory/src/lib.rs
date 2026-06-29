@@ -9,6 +9,9 @@ use ckos_kernel::error::Result;
 use ckos_kernel::DocumentId;
 use std::collections::HashMap;
 
+mod file_store;
+pub use file_store::FileStore;
+
 /// The six-level memory hierarchy from §896.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MemoryTier {

@@ -17,7 +17,10 @@ trait Storage { read; write; delete; search; watch; transaction; }
 ```
 Backends are interchangeable: PostgreSQL, SQLite, RocksDB, Neo4j, SurrealDB,
 Qdrant, Milvus, Weaviate, S3-compatible, Azure Blob, MinIO.
-→ [`memory::Storage`](../memory/src/lib.rs).
+→ [`memory::Storage`](../memory/src/lib.rs). Implemented backends today:
+`InMemoryStore` (volatile) and `FileStore` (durable, one `<id>.doc` file per
+document, newline-safe header/body format) — the latter gives offline-first
+persistence (§956) and the basis for session resume (§927).
 
 ## §937 Unified document model
 

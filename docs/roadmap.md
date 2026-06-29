@@ -22,8 +22,9 @@ so the whole system runs offline.
 
 ## Near-term backend work
 
-- **Persistent storage** behind `memory::Storage` (SQLite first, then Qdrant for
-  vectors) — §936.
+- ✅ **Persistent storage** — `memory::FileStore` gives durable, dependency-free
+  document persistence behind `memory::Storage` (§936, §956). Next: a SQLite
+  backend, then Qdrant for vectors.
 - **Real runtimes** behind `runtime::Runtime` (llama.cpp via FFI, ONNX for
   embeddings) — §900.
 - **Networked event bus** behind `kernel::EventBus` for the service mesh — §916.
