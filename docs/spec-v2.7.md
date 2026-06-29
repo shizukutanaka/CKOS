@@ -47,7 +47,8 @@ graph, attachments`. → `memory::Document`.
 ## §944–§946 Embeddings & temporal knowledge
 
 - **§944 Embedding manager**: small/medium/large/multilingual/code/image/audio/
-  math, switched automatically by use.
+  math, switched automatically by use. → `memory::Embedder` trait;
+  `HashingEmbedder` is the dependency-free default, `cosine` scores similarity.
 - **§945 Cross-modal embedding**: image/audio/code unified into one space.
 - **§946 Temporal knowledge**: versions carry time (API → Version → Deprecated →
   Removed); search can be time-scoped.

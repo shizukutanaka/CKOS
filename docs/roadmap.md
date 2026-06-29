@@ -38,9 +38,11 @@ so the whole system runs offline.
   and reflections to a `Storage` backend for fast resume (§927); durable with
   `FileStore` via `ckos run --session` / `ckos history`.
 - ✅ **Retrieval layer** (`sdk::retrieval`) — retrieval planner (§949) + hybrid
-  search (§950) over documents (keyword) and the graph (label match + multi-hop
-  expansion, §951–§952), confidence-weighted; via `ckos search`. Vector search
-  is the next addition.
+  search (§950) over documents (keyword **and vector**) and the graph (label
+  match + multi-hop expansion, §951–§952), confidence-weighted; via `ckos search`.
+- ✅ **Embeddings** (`memory::Embedder`/`HashingEmbedder`/`cosine`, §944) —
+  dependency-free vector embeddings; sessions embed persisted outputs so
+  semantic search works across restarts. Next: a real embedding-model backend.
 - **API gateway** (REST/gRPC/WebSocket/MCP) over the common Task API — §902.
 
 ## v2.8 — Developer platform & ecosystem

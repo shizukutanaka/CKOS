@@ -9,7 +9,9 @@ use ckos_kernel::error::Result;
 use ckos_kernel::DocumentId;
 use std::collections::HashMap;
 
+mod embedding;
 mod file_store;
+pub use embedding::{cosine, Embedder, HashingEmbedder};
 pub use file_store::FileStore;
 
 /// The six-level memory hierarchy from §896.

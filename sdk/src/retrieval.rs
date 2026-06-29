@@ -10,13 +10,15 @@
 //! ranks below high-confidence knowledge for the same textual match.
 
 use ckos_graph::KnowledgeGraph;
-use ckos_memory::{Query, Storage};
+use ckos_memory::{cosine, Embedder, Query, Storage};
 
 /// Which source a hit came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HitSource {
     /// Keyword match in the document store.
     Keyword,
+    /// Vector (embedding) similarity match in the document store (§944, §950).
+    Vector,
     /// Direct label match in the knowledge graph.
     Graph,
     /// Reached by graph traversal from a direct match (§952).
@@ -41,6 +43,8 @@ pub struct Hit {
 pub struct RetrievalStrategy {
     /// Run keyword search over documents.
     pub keyword: bool,
+    /// Run vector-similarity search over documents (needs an embedder).
+    pub vector: bool,
     /// Run label search over the graph.
     pub graph: bool,
     /// How many hops to expand graph matches (§952).
@@ -67,6 +71,7 @@ pub fn plan_retrieval(question: &str) -> RetrievalStrategy {
     .any(|k| q.contains(k));
     RetrievalStrategy {
         keyword: true,
+        vector: true,
         graph: true,
         max_hops: if relational { 2 } else { 1 },
     }
@@ -86,16 +91,40 @@ fn count_matches(haystack: &str, term: &str) -> usize {
     haystack.matches(term).count()
 }
 
+/// Weight applied to cosine similarity so vector hits are comparable in scale
+/// to keyword/graph hits.
+const VECTOR_WEIGHT: f32 = 5.0;
+/// Minimum cosine similarity for a vector hit to be considered relevant.
+const VECTOR_THRESHOLD: f32 = 0.2;
+
 /// Runs hybrid search across a store and a graph (§950).
 pub struct Retriever<'a> {
     store: &'a dyn Storage,
     graph: &'a KnowledgeGraph,
+    embedder: Option<&'a dyn Embedder>,
 }
 
 impl<'a> Retriever<'a> {
-    /// Build a retriever over the given knowledge sources.
+    /// Build a retriever over the given knowledge sources (no vector search).
     pub fn new(store: &'a dyn Storage, graph: &'a KnowledgeGraph) -> Self {
-        Retriever { store, graph }
+        Retriever {
+            store,
+            graph,
+            embedder: None,
+        }
+    }
+
+    /// Build a retriever that also runs vector-similarity search (§944, §950).
+    pub fn with_embedder(
+        store: &'a dyn Storage,
+        graph: &'a KnowledgeGraph,
+        embedder: &'a dyn Embedder,
+    ) -> Self {
+        Retriever {
+            store,
+            graph,
+            embedder: Some(embedder),
+        }
     }
 
     /// Plan and execute retrieval, returning up to `limit` ranked hits.
@@ -106,6 +135,11 @@ impl<'a> Retriever<'a> {
 
         if strategy.keyword {
             hits.extend(self.keyword_hits(&terms));
+        }
+        if strategy.vector {
+            if let Some(embedder) = self.embedder {
+                hits.extend(self.vector_hits(&embedder.embed(question)));
+            }
         }
         if strategy.graph {
             hits.extend(self.graph_hits(&terms, strategy.max_hops));
@@ -139,6 +173,27 @@ impl<'a> Retriever<'a> {
                     snippet: doc.body.chars().take(80).collect(),
                     score,
                     source: HitSource::Keyword,
+                });
+            }
+        }
+        hits
+    }
+
+    /// Vector-similarity search over documents that carry embeddings (§950).
+    fn vector_hits(&self, query_embedding: &[f32]) -> Vec<Hit> {
+        let docs = self.store.search(&Query::default()).unwrap_or_default();
+        let mut hits = Vec::new();
+        for doc in docs {
+            let Some(embedding) = &doc.embedding else {
+                continue;
+            };
+            let sim = cosine(query_embedding, embedding);
+            if sim >= VECTOR_THRESHOLD {
+                hits.push(Hit {
+                    title: doc.title.clone(),
+                    snippet: doc.body.chars().take(80).collect(),
+                    score: sim * VECTOR_WEIGHT * (doc.confidence as f32 / 100.0),
+                    source: HitSource::Vector,
                 });
             }
         }
@@ -204,6 +259,29 @@ mod tests {
         assert_eq!(hits.len(), 2);
         // Title match ("kernel design") outranks the body-only mention.
         assert_eq!(hits[0].title, "kernel design");
+    }
+
+    #[test]
+    fn vector_source_finds_docs_keyword_misses() {
+        use ckos_memory::{Embedder, HashingEmbedder};
+        let embedder = HashingEmbedder::new(128);
+        let mut store = InMemoryStore::new();
+        // Title and body carry none of the query terms, but the embedding was
+        // computed from richer content — so only vector search can surface it
+        // (the realistic case: embeddings derived from full text, snippet differs).
+        let mut doc = Document::new("note", "doc-a", "placeholder snippet");
+        doc.embedding = Some(embedder.embed("kernel priority scheduler queue dispatch"));
+        store.write(doc).unwrap();
+
+        let graph = KnowledgeGraph::new();
+        let retriever = Retriever::with_embedder(&store, &graph, &embedder);
+        let hits = retriever.search("kernel priority", 10);
+        // No keyword/graph match exists, so the surviving hit is vector-sourced.
+        assert!(hits.iter().any(|h| h.source == HitSource::Vector));
+
+        // Without an embedder the same query finds nothing.
+        let plain = Retriever::new(&store, &graph);
+        assert!(plain.search("kernel priority", 10).is_empty());
     }
 
     #[test]

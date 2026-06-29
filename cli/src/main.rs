@@ -156,7 +156,8 @@ fn cmd_run(rest: &[String]) -> ExitCode {
             if let Some(dir) = session_dir {
                 match FileStore::open(dir) {
                     Ok(store) => {
-                        let mut session = Session::new("cli", Box::new(store));
+                        let mut session = Session::new("cli", Box::new(store))
+                            .with_embedder(Box::new(HashingEmbedder::default()));
                         if let Err(e) = session
                             .record_run(&results)
                             .and_then(|_| session.record_reflections(&reflections))
@@ -228,7 +229,8 @@ fn cmd_search(rest: &[String]) -> ExitCode {
     };
     // Documents persist; the graph is rebuilt per process, so it is empty here.
     let graph = KnowledgeGraph::new();
-    let retriever = Retriever::new(&store, &graph);
+    let embedder = HashingEmbedder::default();
+    let retriever = Retriever::with_embedder(&store, &graph, &embedder);
     let hits = retriever.search(&query, 10);
     if hits.is_empty() {
         println!("no results for {query:?} in {dir}");

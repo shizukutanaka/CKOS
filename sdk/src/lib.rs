@@ -53,7 +53,10 @@ pub mod prelude {
 
     pub use ckos_graph::{EdgeKind, KnowledgeGraph, Node, NodeKind};
 
-    pub use ckos_memory::{Document, FileStore, InMemoryStore, MemoryTier, Query, Storage};
+    pub use ckos_memory::{
+        cosine, Document, Embedder, FileStore, HashingEmbedder, InMemoryStore, MemoryTier, Query,
+        Storage,
+    };
 
     pub use ckos_planner::{HeuristicPlanner, Planner, SubTask};
 

@@ -13,7 +13,7 @@
 use crate::engine::ExecutionResult;
 use crate::reflection::Reflection;
 use ckos_kernel::error::Result;
-use ckos_memory::{Document, Query, Storage};
+use ckos_memory::{Document, Embedder, Query, Storage};
 
 /// Document type tag for persisted execution records.
 const EXECUTION: &str = "execution";
@@ -26,6 +26,7 @@ const SESSION_KEY: &str = "session";
 pub struct Session {
     id: String,
     store: Box<dyn Storage>,
+    embedder: Option<Box<dyn Embedder>>,
 }
 
 impl Session {
@@ -35,7 +36,15 @@ impl Session {
         Session {
             id: id.into(),
             store,
+            embedder: None,
         }
+    }
+
+    /// Attach an embedder so persisted execution outputs carry embeddings,
+    /// enabling later vector search (§944, §950).
+    pub fn with_embedder(mut self, embedder: Box<dyn Embedder>) -> Self {
+        self.embedder = Some(embedder);
+        self
     }
 
     /// Session identifier.
@@ -65,6 +74,9 @@ impl Session {
             doc.metadata.insert("verified".into(), r.verified.to_string());
             if let Some(agent) = &r.agent {
                 doc.metadata.insert("agent".into(), agent.clone());
+            }
+            if let Some(embedder) = &self.embedder {
+                doc.embedding = Some(embedder.embed(&doc.body));
             }
             self.store.write(doc)?;
         }
