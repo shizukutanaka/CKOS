@@ -57,18 +57,10 @@ fn main() -> ExitCode {
     }
 }
 
-/// Capabilities the demo CLI provides agents/runtimes for — enough to run any
-/// intent the heuristic planner produces.
-fn demo_capabilities() -> [Capability; 7] {
-    [
-        Capability::Planning,
-        Capability::Retrieval,
-        Capability::Embedding,
-        Capability::Reasoning,
-        Capability::Verification,
-        Capability::Coding,
-        Capability::Translation,
-    ]
+/// Capabilities the demo CLI provides agents/runtimes for — the full built-in
+/// vocabulary, so it can run any intent the heuristic planner produces.
+fn demo_capabilities() -> Vec<Capability> {
+    Capability::builtin()
 }
 
 fn cmd_plan(rest: &[String]) -> ExitCode {
@@ -473,24 +465,8 @@ fn cmd_verify(rest: &[String]) -> ExitCode {
 }
 
 fn cmd_capabilities() -> ExitCode {
-    let caps = [
-        "planning",
-        "reasoning",
-        "coding",
-        "translation",
-        "embedding",
-        "retrieval",
-        "verification",
-        "simulation",
-        "vision",
-        "speech",
-        "robotics",
-        "finance",
-        "medical",
-        "legal",
-    ];
     println!("built-in capabilities (§911):");
-    for c in caps {
+    for c in Capability::builtin() {
         println!("  - {c}");
     }
     ExitCode::SUCCESS

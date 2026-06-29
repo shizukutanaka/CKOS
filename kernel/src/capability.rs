@@ -51,6 +51,28 @@ impl Capability {
             Capability::Custom(s) => s,
         }
     }
+
+    /// The built-in capability vocabulary (§911) — every variant except the
+    /// open-ended [`Capability::Custom`]. The single source of truth so CLIs and
+    /// registries don't hardcode drifting lists.
+    pub fn builtin() -> Vec<Capability> {
+        vec![
+            Capability::Planning,
+            Capability::Reasoning,
+            Capability::Coding,
+            Capability::Translation,
+            Capability::Embedding,
+            Capability::Retrieval,
+            Capability::Verification,
+            Capability::Simulation,
+            Capability::Vision,
+            Capability::Speech,
+            Capability::Robotics,
+            Capability::Finance,
+            Capability::Medical,
+            Capability::Legal,
+        ]
+    }
 }
 
 impl fmt::Display for Capability {
@@ -104,5 +126,16 @@ mod tests {
     fn token_round_trips() {
         let c = Capability::Verification;
         assert_eq!(c.as_token().parse::<Capability>().unwrap(), c);
+    }
+
+    #[test]
+    fn builtin_covers_every_non_custom_variant() {
+        let all = Capability::builtin();
+        assert_eq!(all.len(), 14);
+        // Every built-in token round-trips and none is Custom.
+        for c in &all {
+            assert!(!matches!(c, Capability::Custom(_)));
+            assert_eq!(&c.as_token().parse::<Capability>().unwrap(), c);
+        }
     }
 }
