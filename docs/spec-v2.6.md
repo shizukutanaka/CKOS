@@ -41,7 +41,9 @@ robotics, finance, medical, legal. Discovery (§912): task → required capabili
 ## §913 Agent scheduler
 
 Priority is decided by deadline, importance, cost, runtime, energy and
-confidence — not FIFO. → `scheduler::ScoreFactors`.
+confidence — not FIFO. → `scheduler::ScoreFactors`. The `runtime_fit` factor is
+fed by observed telemetry (`scheduler::runtime_fit` + `Engine::recommended_factors`),
+closing the §904→§913 optimization loop.
 
 ## §914–§916 Messaging & service mesh
 

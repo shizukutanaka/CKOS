@@ -49,7 +49,28 @@ impl Default for ScoreFactors {
     }
 }
 
+/// Map an observed runtime latency to a `runtime_fit` factor in `0.0..=1.0`
+/// (closing the telemetry → scheduler loop, §904 → §913).
+///
+/// At or below `target_latency_ms` the runtime is a perfect fit (1.0); fit
+/// degrades proportionally as observed latency exceeds the target. An unknown
+/// (zero) latency optimistically returns 1.0.
+pub fn runtime_fit(observed_latency_ms: u64, target_latency_ms: u64) -> f32 {
+    if observed_latency_ms == 0 {
+        return 1.0;
+    }
+    let target = target_latency_ms.max(1) as f32;
+    (target / observed_latency_ms as f32).min(1.0)
+}
+
 impl ScoreFactors {
+    /// Builder: set `runtime_fit` (clamped to `0.0..=1.0`), e.g. from
+    /// [`runtime_fit`] applied to observed telemetry.
+    pub fn with_runtime_fit(mut self, fit: f32) -> Self {
+        self.runtime_fit = fit.clamp(0.0, 1.0);
+        self
+    }
+
     /// Weighted blend of the factors. Weights favour deadline and importance,
     /// matching the spec's ordering in §913.
     pub fn score(&self, base: Priority) -> f32 {
@@ -146,6 +167,29 @@ mod tests {
         s.submit(Task::new("crit", Capability::Reasoning).with_priority(Priority::Critical));
         let first = s.dispatch_next().unwrap();
         assert_eq!(first.description, "crit");
+    }
+
+    #[test]
+    fn latency_maps_to_runtime_fit() {
+        assert_eq!(runtime_fit(0, 100), 1.0); // unknown → optimistic
+        assert_eq!(runtime_fit(50, 100), 1.0); // faster than target → perfect
+        assert_eq!(runtime_fit(200, 100), 0.5); // 2x slower → half fit
+    }
+
+    #[test]
+    fn faster_runtime_dispatches_first_via_telemetry_fit() {
+        // Two equal-priority tasks; the one on the faster runtime (higher
+        // runtime_fit from observed latency) should dispatch first (§904→§913).
+        let mut s = Scheduler::new();
+        s.submit_scored(
+            Task::new("slow-runtime", Capability::Reasoning),
+            ScoreFactors::default().with_runtime_fit(runtime_fit(400, 100)),
+        );
+        s.submit_scored(
+            Task::new("fast-runtime", Capability::Reasoning),
+            ScoreFactors::default().with_runtime_fit(runtime_fit(80, 100)),
+        );
+        assert_eq!(s.dispatch_next().unwrap().description, "fast-runtime");
     }
 
     #[test]

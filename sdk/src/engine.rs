@@ -23,7 +23,7 @@ use ckos_kernel::task::Task;
 use ckos_kernel::telemetry::{InMemoryTelemetry, TaskMetrics, TelemetrySink};
 use ckos_kernel::TaskId;
 use ckos_runtime::{InferenceRequest, RuntimeRegistry};
-use ckos_scheduler::Scheduler;
+use ckos_scheduler::{runtime_fit, Scheduler, ScoreFactors};
 use ckos_verifier::Verifier;
 use ckos_workflow::Dag;
 use std::time::Instant;
@@ -194,6 +194,18 @@ impl Engine {
         Ok(results)
     }
 
+    /// Recommend scheduling factors for a runtime from observed telemetry,
+    /// closing the §904 → §913 loop: a runtime whose mean latency beats
+    /// `target_latency_ms` gets a higher `runtime_fit`, so future tasks on it
+    /// score higher. With no telemetry yet, returns optimistic defaults.
+    pub fn recommended_factors(&self, runtime: &str, target_latency_ms: u64) -> ScoreFactors {
+        let fit = match self.telemetry.mean_latency_for(runtime) {
+            Some(latency) => runtime_fit(latency.round() as u64, target_latency_ms),
+            None => 1.0,
+        };
+        ScoreFactors::default().with_runtime_fit(fit)
+    }
+
     /// Self-evaluate a batch of results with the given reflector (§921).
     pub fn reflect(
         &self,
@@ -261,6 +273,12 @@ mod tests {
         assert_eq!(engine.telemetry().len(), 5);
         assert!(engine.telemetry().total_tokens() > 0);
         assert!(engine.telemetry().mean_latency_for("echo").is_some());
+
+        // Closed loop (§904→§913): the fast echo runtime earns a high
+        // runtime_fit; an unseen runtime falls back to the optimistic default.
+        let factors = engine.recommended_factors("echo", 100);
+        assert!(factors.runtime_fit >= 0.99);
+        assert_eq!(engine.recommended_factors("unseen", 100).runtime_fit, 1.0);
     }
 
     #[test]

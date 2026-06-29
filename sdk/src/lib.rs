@@ -58,7 +58,7 @@ pub mod prelude {
     };
     pub use ckos_kernel::{AgentId, DocumentId, NodeId, RuntimeId, TaskId, WorkflowId};
 
-    pub use ckos_scheduler::{Scheduler, ScoreFactors};
+    pub use ckos_scheduler::{runtime_fit, Scheduler, ScoreFactors};
 
     pub use ckos_runtime::{
         EchoRuntime, InferenceRequest, InferenceResponse, Runtime, RuntimeKind, RuntimeRegistry,
