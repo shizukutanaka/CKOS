@@ -20,8 +20,9 @@ USAGE:
 COMMANDS:
     plan [--dot] <intent...>         Decompose an intent into a workflow DAG
                                      (--dot emits Graphviz)
-    run [--session <dir>] <intent…>  Plan and execute a workflow end-to-end,
-                                     persisting the run when --session is given
+    run [--session <dir>] <intent…>  Plan and execute a workflow end-to-end;
+                                     with --session, persist the run and grow
+                                     the session's knowledge graph
     history <dir>                    Show the execution history of a session
     search <dir> <query…>            Hybrid-search a session's stored documents
     workflow <file>                  Load and execute a workflow definition file
@@ -208,6 +209,32 @@ fn cmd_run(rest: &[String]) -> ExitCode {
                         }
                     }
                     Err(e) => eprintln!("warning: could not open session {dir}: {e}"),
+                }
+
+                // Grow the session's knowledge graph from this run's outputs
+                // (§941 extraction → §936 persistence), accumulating into any
+                // graph already saved so `ckos search` gains graph context.
+                let graph_path = Path::new(dir).join(GRAPH_FILE);
+                let mut graph = GraphStore::load(&graph_path).unwrap_or_default();
+                // Extract from the intent (which carries the proper nouns the
+                // user named) as well as the step outputs.
+                let mut text = intent.clone();
+                for r in &results {
+                    text.push('\n');
+                    text.push_str(&r.output);
+                }
+                let report = graph.extract_concepts(&text);
+                match GraphStore::save(&graph_path, &graph) {
+                    Ok(()) => println!(
+                        "graph updated: +{} concept(s), +{} relation(s) ({} total node(s))",
+                        report.nodes_added,
+                        report.edges_added,
+                        graph.len()
+                    ),
+                    Err(e) => eprintln!(
+                        "warning: could not save graph to {}: {e}",
+                        graph_path.display()
+                    ),
                 }
             }
             ExitCode::SUCCESS

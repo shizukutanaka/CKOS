@@ -89,6 +89,37 @@ fn graph_extracts_concepts_from_text() {
 }
 
 #[test]
+fn run_session_builds_graph_used_by_search() {
+    struct TempDir(PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("ckos-run-sess-{}-{n}", std::process::id()));
+    let _guard = TempDir(dir.clone());
+
+    // Running with --session extracts proper nouns from the intent into the
+    // session's knowledge graph and persists it.
+    let run = ckos(&[
+        "run",
+        "--session",
+        dir.to_str().unwrap(),
+        "study the Transformer paper",
+    ]);
+    assert!(run.status.success());
+    assert!(stdout(&run).contains("graph updated"));
+    assert!(dir.join("graph.kg").exists());
+
+    // A later search process loads that graph and returns a graph-sourced hit.
+    let s = ckos(&["search", dir.to_str().unwrap(), "Transformer"]);
+    assert!(s.status.success());
+    assert!(stdout(&s).contains("Graph"));
+}
+
+#[test]
 fn graph_persists_to_session_and_search_uses_it() {
     // A temp session directory removed on drop.
     struct TempDir(PathBuf);

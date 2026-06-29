@@ -63,7 +63,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 938 | Index pipeline | 🟡 | `knowledge_bus::ingest_text` (extract → queue) + `Reindexer` (embed + insert); deep parse/chunk ⏳ |
 | 939 | Chunk evolution | 🟡 | `memory::chunk` (Paragraph/Fixed/Adaptive; semantic & hierarchical ⏳) |
 | 940 | Semantic compression | 🟡 | `memory::compress_document`/`summarize`/`keywords` (summary + concept tiers; knowledge tier ⏳) |
-| 941 | Knowledge graph builder | 🟡 | `graph::extract` (`extract_concepts`: heuristic entities + typed-relation edges, `ckos graph`; statistical NER ⏳) |
+| 941 | Knowledge graph builder | 🟡 | `graph::extract` (heuristic entities + typed-relation edges; `ckos graph` and auto-built by `ckos run --session`; statistical NER ⏳) |
 | 942–943 | Graph versioning / merge | ✅ | `graph::versioning` |
 | 944 | Embedding manager | ✅ | `memory::Embedder` / `HashingEmbedder` (real model ⏳) |
 | 945 | Cross-modal embedding | ⏳ | single-space design; modality encoders pending |
