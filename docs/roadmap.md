@@ -46,6 +46,10 @@ so the whole system runs offline.
 - ✅ **KQL** (`sdk::kql`, §962) — Knowledge Query Language: tokeniser +
   recursive-descent parser → typed AST, executor over the graph
   (FIND/RELATED/FILTER); via `ckos kql`. Temporal enforcement (§946) is next.
+- ✅ **Memory hygiene** (`memory::collect`/`compress_document`, §954/§940/§953)
+  — garbage collection (expired, low-confidence, duplicate, broken-embedding) and
+  semantic compression (summary step); via `ckos gc`. Orphaned-graph-node GC and
+  the concept/knowledge compression tiers are next.
 - ✅ **CI** (`docs/ci-workflow.yml`, §905) — fmt + clippy + build + test + CLI
   smoke tests on every push/PR, with `-D warnings`. Copy it to
   `.github/workflows/ci.yml` to activate (the branch automation can't push

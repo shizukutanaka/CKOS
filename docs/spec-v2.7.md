@@ -35,7 +35,8 @@ graph, attachments`. → `memory::Document`.
 - **§939 Chunk evolution**: no fixed chunking — Paragraph / Semantic /
   Hierarchical / Adaptive.
 - **§940 Semantic compression**: old documents collapse full-text → summary →
-  concept → knowledge to save memory.
+  concept → knowledge to save memory. → `memory::compress_document`/`summarize`
+  implement the first (summary) step, idempotently and auditably.
 
 ## §941–§943 Knowledge graph builder & versioning
 
@@ -74,8 +75,10 @@ graph, attachments`. → `memory::Document`.
 ## §953–§960 Memory ops, security, distribution, API
 
 - **§953 Consolidation**: working memory → "sleep phase" → long memory.
+  → `memory::compress_document`/`summarize` (first compression step).
 - **§954 Garbage collection**: expired, low-confidence, duplicate, broken
-  embeddings, orphaned graph nodes.
+  embeddings, orphaned graph nodes. → `memory::collect` with a `GcPolicy`
+  (expired/low-confidence/duplicate/broken-embedding); via `ckos gc`.
 - **§955 Encryption**: AES-256 at rest, TLS 1.3 in transit, keys in OS secret store.
 - **§956 Offline-first**: sync + diff + conflict resolution; usable without cloud.
 - **§957 Distributed knowledge**: knowledge sharded across nodes, partial sync.

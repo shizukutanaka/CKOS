@@ -20,6 +20,7 @@ COMMANDS:
     history <dir>                    Show the execution history of a session
     search <dir> <query…>            Hybrid-search a session's stored documents
     kql <query>                      Run a KQL query against a demo knowledge graph
+    gc <dir> [--min-confidence N]    Garbage-collect a session's stored documents
     capabilities                     List the built-in capability vocabulary
     version                          Print the CKOS version
     help                             Show this help
@@ -33,6 +34,7 @@ fn main() -> ExitCode {
         Some("history") => cmd_history(&args[1..]),
         Some("search") => cmd_search(&args[1..]),
         Some("kql") => cmd_kql(&args[1..]),
+        Some("gc") => cmd_gc(&args[1..]),
         Some("capabilities") => cmd_capabilities(),
         Some("version") => {
             println!("ckos {}", env!("CARGO_PKG_VERSION"));
@@ -284,6 +286,52 @@ fn cmd_kql(rest: &[String]) -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+fn cmd_gc(rest: &[String]) -> ExitCode {
+    let Some(dir) = rest.first() else {
+        eprintln!("error: `gc` needs a session directory, e.g. `ckos gc ./my-session`");
+        return ExitCode::FAILURE;
+    };
+    // Optional `--min-confidence N`.
+    let min_confidence: u8 = match rest.iter().position(|a| a == "--min-confidence") {
+        Some(i) => match rest.get(i + 1).and_then(|v| v.parse().ok()) {
+            Some(n) => n,
+            None => {
+                eprintln!("error: --min-confidence needs a number 0..=255");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => 0,
+    };
+
+    let mut store = match FileStore::open(dir) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: could not open session {dir}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let policy = GcPolicy {
+        min_confidence,
+        ..GcPolicy::default()
+    };
+    match gc_collect(&mut store, &policy, None) {
+        Ok(report) => {
+            println!(
+                "garbage-collected {} document(s) from {dir}",
+                report.count()
+            );
+            for (id, reason) in &report.removed {
+                println!("  - {id} ({reason:?})");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn cmd_capabilities() -> ExitCode {
