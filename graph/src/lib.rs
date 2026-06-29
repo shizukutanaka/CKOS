@@ -42,6 +42,11 @@ pub struct Node {
     pub label: String,
     /// Confidence 0..=100 (§948).
     pub confidence: u8,
+    /// Optional ISO date for temporal knowledge (§946); lexicographically
+    /// comparable, so range queries work without a date library.
+    pub date: Option<String>,
+    /// Optional origin of this knowledge — GitHub, paper, wiki, … (§947).
+    pub provenance: Option<String>,
 }
 
 /// A directed, typed edge.
@@ -76,10 +81,26 @@ impl KnowledgeGraph {
                 kind,
                 label: label.into(),
                 confidence: confidence.min(100),
+                date: None,
+                provenance: None,
             },
         );
         self.adjacency.entry(id.clone()).or_default();
         id
+    }
+
+    /// Attach a temporal date (ISO string) to a node (§946).
+    pub fn set_date(&mut self, id: &NodeId, date: impl Into<String>) {
+        if let Some(n) = self.nodes.get_mut(id) {
+            n.date = Some(date.into());
+        }
+    }
+
+    /// Attach a provenance/source to a node (§947).
+    pub fn set_provenance(&mut self, id: &NodeId, source: impl Into<String>) {
+        if let Some(n) = self.nodes.get_mut(id) {
+            n.provenance = Some(source.into());
+        }
     }
 
     /// Connect two nodes with a typed edge.
@@ -171,5 +192,17 @@ mod tests {
         let two_hop = g.traverse(&a, 2);
         assert_eq!(two_hop.len(), 2);
         assert!(two_hop.iter().any(|n| n.label == "ACME"));
+    }
+
+    #[test]
+    fn nodes_carry_temporal_and_provenance_metadata() {
+        let mut g = KnowledgeGraph::new();
+        let n = g.add_node(NodeKind::Concept, "Transformer", 96);
+        assert!(g.node(&n).unwrap().date.is_none());
+        g.set_date(&n, "2017-06-12");
+        g.set_provenance(&n, "paper:Vaswani");
+        let node = g.node(&n).unwrap();
+        assert_eq!(node.date.as_deref(), Some("2017-06-12"));
+        assert_eq!(node.provenance.as_deref(), Some("paper:Vaswani"));
     }
 }

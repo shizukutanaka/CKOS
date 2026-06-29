@@ -264,26 +264,42 @@ fn cmd_kql(rest: &[String]) -> ExitCode {
         }
     };
 
-    // A small demo knowledge graph to run the query against (§897).
+    // A small demo knowledge graph to run the query against (§897), with
+    // temporal dates (§946) and provenance (§947).
     let mut graph = KnowledgeGraph::new();
     let transformer = graph.add_node(NodeKind::Concept, "Transformer", 96);
+    graph.set_date(&transformer, "2017-06-12");
+    graph.set_provenance(&transformer, "paper:Vaswani-2017");
     let attention = graph.add_node(NodeKind::Other("algorithm".into()), "Attention", 93);
+    graph.set_date(&attention, "2015-09-01");
+    graph.set_provenance(&attention, "paper:Bahdanau-2015");
     let rnn = graph.add_node(NodeKind::Other("algorithm".into()), "RNN", 55);
     let vaswani = graph.add_node(NodeKind::Person, "Vaswani", 90);
     graph.connect(&transformer, &attention, EdgeKind::References);
     graph.connect(&transformer, &rnn, EdgeKind::References);
     graph.connect(&transformer, &vaswani, EdgeKind::CreatedBy);
 
+    let show_sources = query.returns.contains(&ReturnTarget::Sources);
+    let print_match = |m: &NodeMatch| {
+        let mut line = format!("  - {} [{}] conf={}", m.label, m.kind, m.confidence);
+        if let Some(date) = &m.date {
+            line.push_str(&format!(" @{date}"));
+        }
+        if show_sources {
+            line.push_str(&format!(
+                " src={}",
+                m.provenance.as_deref().unwrap_or("<unknown>")
+            ));
+        }
+        println!("{line}");
+    };
+
     let result = kql_execute(&query, &graph);
     println!("primary ({}):", result.primary.len());
-    for m in &result.primary {
-        println!("  - {} [{}] conf={}", m.label, m.kind, m.confidence);
-    }
+    result.primary.iter().for_each(&print_match);
     if query.related.is_some() {
         println!("related ({}):", result.related.len());
-        for m in &result.related {
-            println!("  - {} [{}] conf={}", m.label, m.kind, m.confidence);
-        }
+        result.related.iter().for_each(&print_match);
     }
     ExitCode::SUCCESS
 }

@@ -235,20 +235,30 @@ pub fn parse(input: &str) -> Result<KqlQuery, KqlError> {
         return err("query must start with FIND");
     }
 
-    // FIND selector: optional kind word (or "*") then optional quoted text.
+    // FIND selector: optional kind word (or "*" for any) then optional quoted
+    // text. A clause keyword here is not a kind — it begins the next clause.
     let mut find = NodeSelector::default();
+    let mut explicit_any = false;
     if let Some(Tok::Word(w)) = p.peek() {
-        if w != "*" {
-            find.kind = Some(w.clone());
+        let is_clause = matches!(
+            w.to_ascii_uppercase().as_str(),
+            "RELATED" | "FILTER" | "BEFORE" | "AFTER" | "RETURN"
+        );
+        if !is_clause {
+            if w == "*" {
+                explicit_any = true;
+            } else {
+                find.kind = Some(w.clone());
+            }
+            p.pos += 1;
         }
-        p.pos += 1;
     }
     if let Some(Tok::Str(s)) = p.peek() {
         find.text = Some(s.clone());
         p.pos += 1;
     }
-    if find.kind.is_none() && find.text.is_none() {
-        return err("FIND needs a node kind and/or a quoted text");
+    if find.kind.is_none() && find.text.is_none() && !explicit_any {
+        return err("FIND needs a node kind, quoted text, or *");
     }
 
     let mut q = KqlQuery {
@@ -329,6 +339,10 @@ pub struct NodeMatch {
     pub label: String,
     pub kind: String,
     pub confidence: u8,
+    /// Temporal date, if the node carries one (§946).
+    pub date: Option<String>,
+    /// Provenance/source, surfaced for `RETURN Sources` (§947).
+    pub provenance: Option<String>,
 }
 
 /// The result of executing a KQL query against a graph.
@@ -360,6 +374,31 @@ fn passes_filters(node: &Node, filters: &[Filter]) -> bool {
     })
 }
 
+/// Enforce `BEFORE`/`AFTER` temporal bounds against a node's date (§946).
+///
+/// When a bound is present but the node has no date, the node is excluded — a
+/// temporal query should not return knowledge whose time is unknown. ISO dates
+/// compare correctly as strings.
+fn passes_temporal(node: &Node, query: &KqlQuery) -> bool {
+    if query.before.is_none() && query.after.is_none() {
+        return true;
+    }
+    let Some(date) = &node.date else {
+        return false;
+    };
+    if let Some(before) = &query.before {
+        if date.as_str() >= before.as_str() {
+            return false;
+        }
+    }
+    if let Some(after) = &query.after {
+        if date.as_str() <= after.as_str() {
+            return false;
+        }
+    }
+    true
+}
+
 fn selector_matches(node: &Node, sel: &NodeSelector) -> bool {
     if let Some(kind) = &sel.kind {
         if !kind_token(&node.kind).eq_ignore_ascii_case(kind) {
@@ -379,19 +418,25 @@ fn to_match(node: &Node) -> NodeMatch {
         label: node.label.clone(),
         kind: kind_token(&node.kind),
         confidence: node.confidence,
+        date: node.date.clone(),
+        provenance: node.provenance.clone(),
     }
 }
 
 /// Execute a parsed query against a knowledge graph.
 ///
-/// `FILTER` predicates apply to both primary and related nodes. `BEFORE`/`AFTER`
-/// are parsed but not yet enforced here (graph nodes carry no timestamps;
-/// temporal knowledge is §946, pending). `RETURN` shapes presentation, not the
-/// result set returned by this function.
+/// `FILTER` predicates and `BEFORE`/`AFTER` temporal bounds (§946) apply to both
+/// primary and related nodes. `RETURN` shapes presentation, not the result set
+/// returned by this function (provenance for `RETURN Sources` rides on each
+/// [`NodeMatch`]).
 pub fn execute(query: &KqlQuery, graph: &KnowledgeGraph) -> KqlResult {
     let primary_nodes: Vec<&Node> = graph
         .nodes()
-        .filter(|n| selector_matches(n, &query.find) && passes_filters(n, &query.filters))
+        .filter(|n| {
+            selector_matches(n, &query.find)
+                && passes_filters(n, &query.filters)
+                && passes_temporal(n, query)
+        })
         .collect();
 
     let mut related = Vec::new();
@@ -400,6 +445,7 @@ pub fn execute(query: &KqlQuery, graph: &KnowledgeGraph) -> KqlResult {
             for neighbor in graph.traverse(&n.id, 1) {
                 if kind_token(&neighbor.kind).eq_ignore_ascii_case(related_kind)
                     && passes_filters(neighbor, &query.filters)
+                    && passes_temporal(neighbor, query)
                 {
                     let m = to_match(neighbor);
                     if !related.contains(&m) {
@@ -475,5 +521,32 @@ mod tests {
         // Only the high-confidence algorithm passes the filter.
         assert_eq!(res.related.len(), 1);
         assert_eq!(res.related[0].label, "Attention");
+    }
+
+    #[test]
+    fn enforces_temporal_bounds_and_carries_provenance() {
+        let mut g = KnowledgeGraph::new();
+        let old = g.add_node(NodeKind::Concept, "Perceptron", 90);
+        g.set_date(&old, "1958-01-01");
+        g.set_provenance(&old, "paper:Rosenblatt");
+        let new = g.add_node(NodeKind::Concept, "Transformer", 96);
+        g.set_date(&new, "2017-06-12");
+        g.set_provenance(&new, "paper:Vaswani");
+        let undated = g.add_node(NodeKind::Concept, "Mystery", 99);
+
+        // BEFORE 2000 keeps only the Perceptron; the undated node is excluded.
+        let res = execute(&parse("FIND Concept BEFORE 2000-01-01").unwrap(), &g);
+        assert_eq!(res.primary.len(), 1);
+        assert_eq!(res.primary[0].label, "Perceptron");
+        assert_eq!(
+            res.primary[0].provenance.as_deref(),
+            Some("paper:Rosenblatt")
+        );
+        let _ = undated;
+
+        // AFTER 2000 keeps only the Transformer.
+        let res = execute(&parse("FIND Concept AFTER 2000-01-01").unwrap(), &g);
+        assert_eq!(res.primary.len(), 1);
+        assert_eq!(res.primary[0].label, "Transformer");
     }
 }

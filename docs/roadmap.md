@@ -45,7 +45,10 @@ so the whole system runs offline.
   semantic search works across restarts. Next: a real embedding-model backend.
 - ✅ **KQL** (`sdk::kql`, §962) — Knowledge Query Language: tokeniser +
   recursive-descent parser → typed AST, executor over the graph
-  (FIND/RELATED/FILTER); via `ckos kql`. Temporal enforcement (§946) is next.
+  (FIND/RELATED/FILTER/BEFORE/AFTER, RETURN Sources); via `ckos kql`.
+- ✅ **Temporal knowledge & provenance** (§946/§947) — graph nodes carry an ISO
+  `date` and a `provenance` source; KQL enforces `BEFORE`/`AFTER` and surfaces
+  sources via `RETURN Sources`.
 - ✅ **Memory hygiene** (`memory::collect`/`compress_document`, §954/§940/§953)
   — garbage collection (expired, low-confidence, duplicate, broken-embedding) and
   semantic compression (summary step); via `ckos gc`. Orphaned-graph-node GC and

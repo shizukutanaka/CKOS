@@ -52,12 +52,15 @@ graph, attachments`. → `memory::Document`.
   `HashingEmbedder` is the dependency-free default, `cosine` scores similarity.
 - **§945 Cross-modal embedding**: image/audio/code unified into one space.
 - **§946 Temporal knowledge**: versions carry time (API → Version → Deprecated →
-  Removed); search can be time-scoped.
+  Removed); search can be time-scoped. → `graph::Node::date` + KQL
+  `BEFORE`/`AFTER` enforcement (ISO dates; nodes without a date are excluded
+  from temporal queries).
 
 ## §947–§948 Provenance & confidence
 
 - **§947 Provenance engine**: every fact keeps its origin (GitHub, paper, wiki,
-  conversation, PDF, URL, history).
+  conversation, PDF, URL, history). → `graph::Node::provenance`, surfaced by KQL
+  `RETURN Sources`.
 - **§948 Confidence score**: 0–100 on all information, used during reasoning.
   → `graph::Node::confidence`, `memory::Document::confidence`.
 
