@@ -78,7 +78,9 @@ confidence — not FIFO. → `scheduler::ScoreFactors`.
 - **§925 Edge execution**: inference, cache search and speech work offline; cloud is auxiliary.
 - **§926 Distributed workflow**: split per workflow across nodes, then merge.
 - **§927 Session manager**: persists memory, runtime, workflow, graph and tool
-  state for fast resume.
+  state for fast resume. → `sdk::session::Session` records execution history and
+  reflections to a `Storage` backend; with `FileStore` they survive restarts
+  (`ckos run --session <dir>` / `ckos history <dir>`).
 
 ## §928–§933 Enterprise, security, ops
 

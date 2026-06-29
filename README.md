@@ -39,7 +39,7 @@ crates mirror the module layout in §890 of the spec.
 | `policy`        | §929 | RBAC + ABAC authorization, least-privilege by default |
 | `workflow`      | §895 | DAG engine with cycle detection and topological scheduling |
 | `plugins`       | §901, §917–§919 | Tool abstraction, tool registry, permission gate |
-| `sdk`           | §907–§910 | Agent manifests, lifecycle, capability registry, execution engine, prelude |
+| `sdk`           | §907–§910, §921–§922, §927 | Agent manifests, lifecycle, capability registry, execution engine, reflection, sessions, prelude |
 | `cli`           | §902 | `ckos` command-line interface |
 
 ## Build & test
@@ -49,6 +49,8 @@ cargo build            # build everything
 cargo test             # run the unit + doc tests
 cargo run -p ckos-cli -- plan "research the Transformer paper"   # plan only
 cargo run -p ckos-cli -- run  "research the Transformer paper"   # plan + execute
+cargo run -p ckos-cli -- run --session ./sess "research X"       # execute + persist
+cargo run -p ckos-cli -- history ./sess                          # resume: show past runs
 ```
 
 Example output:

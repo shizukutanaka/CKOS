@@ -34,6 +34,9 @@ so the whole system runs offline.
 - ✅ **Reflection loop** (`sdk::reflection`) — per-task self-evaluation (§921)
   and cross-agent consensus (§922), persistable to memory for the §959 learning
   loop; surfaced in `ckos run`.
+- ✅ **Session manager** (`sdk::session::Session`) — persists execution history
+  and reflections to a `Storage` backend for fast resume (§927); durable with
+  `FileStore` via `ckos run --session` / `ckos history`.
 - **API gateway** (REST/gRPC/WebSocket/MCP) over the common Task API — §902.
 
 ## v2.8 — Developer platform & ecosystem

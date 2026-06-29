@@ -14,11 +14,13 @@ USAGE:
     ckos <COMMAND> [ARGS]
 
 COMMANDS:
-    plan <intent...>    Decompose an intent into a workflow DAG
-    run <intent...>     Plan and execute a workflow end-to-end
-    capabilities        List the built-in capability vocabulary
-    version             Print the CKOS version
-    help                Show this help
+    plan <intent...>                 Decompose an intent into a workflow DAG
+    run [--session <dir>] <intent…>  Plan and execute a workflow end-to-end,
+                                     persisting the run when --session is given
+    history <dir>                    Show the execution history of a session
+    capabilities                     List the built-in capability vocabulary
+    version                          Print the CKOS version
+    help                             Show this help
 ";
 
 fn main() -> ExitCode {
@@ -26,6 +28,7 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("plan") => cmd_plan(&args[1..]),
         Some("run") => cmd_run(&args[1..]),
+        Some("history") => cmd_history(&args[1..]),
         Some("capabilities") => cmd_capabilities(),
         Some("version") => {
             println!("ckos {}", env!("CARGO_PKG_VERSION"));
@@ -90,11 +93,16 @@ fn cmd_plan(rest: &[String]) -> ExitCode {
 }
 
 fn cmd_run(rest: &[String]) -> ExitCode {
-    if rest.is_empty() {
+    // Optional `--session <dir>` prefix; the remainder is the intent.
+    let (session_dir, intent_args): (Option<&str>, &[String]) = match rest {
+        [flag, dir, tail @ ..] if flag == "--session" => (Some(dir.as_str()), tail),
+        _ => (None, rest),
+    };
+    if intent_args.is_empty() {
         eprintln!("error: `run` needs an intent, e.g. `ckos run research transformers`");
         return ExitCode::FAILURE;
     }
-    let intent = rest.join(" ");
+    let intent = intent_args.join(" ");
     let dag = HeuristicPlanner::new().plan(&intent);
 
     // Assemble a fully offline engine: an echo runtime and a demo agent per
@@ -141,6 +149,24 @@ fn cmd_run(rest: &[String]) -> ExitCode {
             for hint in &verdict.hints {
                 println!("  - {hint}");
             }
+
+            // Persist the run to a durable session if requested (§927).
+            if let Some(dir) = session_dir {
+                match FileStore::open(dir) {
+                    Ok(store) => {
+                        let mut session = Session::new("cli", Box::new(store));
+                        if let Err(e) = session
+                            .record_run(&results)
+                            .and_then(|_| session.record_reflections(&reflections))
+                        {
+                            eprintln!("warning: failed to persist session: {e}");
+                        } else {
+                            println!("\nsession saved to {dir}");
+                        }
+                    }
+                    Err(e) => eprintln!("warning: could not open session {dir}: {e}"),
+                }
+            }
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -148,6 +174,39 @@ fn cmd_run(rest: &[String]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn cmd_history(rest: &[String]) -> ExitCode {
+    let Some(dir) = rest.first() else {
+        eprintln!("error: `history` needs a session directory, e.g. `ckos history ./my-session`");
+        return ExitCode::FAILURE;
+    };
+    let store = match FileStore::open(dir) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: could not open session {dir}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let session = Session::new("cli", Box::new(store));
+    let history = match session.history() {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if history.is_empty() {
+        println!("session {dir}: no execution history");
+        return ExitCode::SUCCESS;
+    }
+    println!("session {dir}: {} recorded step(s)", history.len());
+    for doc in &history {
+        let verified = doc.metadata.get("verified").map(String::as_str) == Some("true");
+        let mark = if verified { "ok" } else { "FAIL" };
+        println!("  [{mark}] {} -> {}", doc.title, doc.body);
+    }
+    ExitCode::SUCCESS
 }
 
 fn cmd_capabilities() -> ExitCode {
