@@ -31,7 +31,10 @@ graph, attachments`. → `memory::Document`.
 ## §938–§940 Indexing & compression
 
 - **§938 Index pipeline**: add → parse → chunk → embed → NER → relation
-  extraction → graph build → vector insert → search-index update. Fully automatic.
+  extraction → graph build → vector insert → search-index update. Fully
+  automatic. → `sdk::knowledge_bus::Reindexer` drains the `ReindexQueue` fed by
+  graph-change events (§923) and embeds each changed node into the document store
+  for vector search (the embed → vector-insert steps of the pipeline).
 - **§939 Chunk evolution**: no fixed chunking — Paragraph / Semantic /
   Hierarchical / Adaptive.
 - **§940 Semantic compression**: old documents collapse full-text → summary →

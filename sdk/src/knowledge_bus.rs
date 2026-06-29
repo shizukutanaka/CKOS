@@ -10,6 +10,7 @@
 use ckos_graph::{EdgeKind, KnowledgeGraph, NodeKind};
 use ckos_kernel::event::{Event, EventBus, InMemoryEventBus};
 use ckos_kernel::NodeId;
+use ckos_memory::{Document, Embedder, Storage};
 use std::sync::{Arc, Mutex};
 
 /// A graph paired with an event bus: mutations emit `GraphChanged` (§923).
@@ -91,9 +92,45 @@ impl ReindexQueue {
     }
 }
 
+/// Drains a [`ReindexQueue`] and (re-)embeds the changed graph nodes into a
+/// document store, making them vector-searchable (§923 → §938). Document type
+/// `graph_node`; the node id is kept in metadata so re-indexing the same node
+/// replaces its document rather than duplicating it.
+pub struct Reindexer<'a> {
+    graph: &'a KnowledgeGraph,
+    embedder: &'a dyn Embedder,
+}
+
+impl<'a> Reindexer<'a> {
+    /// Create a reindexer over a graph and an embedder.
+    pub fn new(graph: &'a KnowledgeGraph, embedder: &'a dyn Embedder) -> Self {
+        Reindexer { graph, embedder }
+    }
+
+    /// Process all queued node ids, writing an embedded document per node that
+    /// still exists in the graph. Returns the number of documents written.
+    pub fn process(&self, queue: &ReindexQueue, store: &mut dyn Storage) -> usize {
+        let mut written = 0;
+        for id in queue.drain() {
+            let Some(node) = self.graph.node(&id) else {
+                continue; // node was deleted before re-indexing
+            };
+            let mut doc = Document::new("graph_node", node.label.clone(), node.label.clone());
+            doc.confidence = node.confidence;
+            doc.embedding = Some(self.embedder.embed(&node.label));
+            doc.metadata.insert("node_id".to_string(), id.to_string());
+            if store.write(doc).is_ok() {
+                written += 1;
+            }
+        }
+        written
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ckos_memory::{HashingEmbedder, InMemoryStore, Query};
 
     #[test]
     fn mutations_queue_reindex_work() {
@@ -123,5 +160,30 @@ mod tests {
         kb.add_node(NodeKind::Person, "Vaswani", 90);
         assert_eq!(q1.len(), 1);
         assert_eq!(q2.len(), 1);
+    }
+
+    #[test]
+    fn reindexer_embeds_changed_nodes_into_store() {
+        let mut kb = KnowledgeBus::new();
+        let queue = kb.subscribe_reindex();
+        kb.add_node(NodeKind::Concept, "Transformer", 96);
+        kb.add_node(NodeKind::Tool, "Attention", 90);
+
+        let embedder = HashingEmbedder::new(64);
+        let mut store = InMemoryStore::new();
+        // Borrow the graph after mutations are done.
+        let written = Reindexer::new(kb.graph(), &embedder).process(&queue, &mut store);
+
+        assert_eq!(written, 2);
+        assert!(queue.is_empty()); // drained
+        let docs = store
+            .search(&Query {
+                doc_type: Some("graph_node".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(docs.len(), 2);
+        // Every reindexed document carries an embedding for vector search.
+        assert!(docs.iter().all(|d| d.embedding.is_some()));
     }
 }

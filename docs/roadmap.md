@@ -53,10 +53,10 @@ so the whole system runs offline.
   a token into an Identity (subject/roles/attributes) that feeds the RBAC/ABAC
   policy engine (§929). StaticTokenProvider for dev; OAuth2/OIDC/SAML/LDAP plug
   in behind the trait (real verification is the next step).
-- ✅ **Knowledge bus** (`sdk::knowledge_bus`, §923) — graph mutations publish
-  `GraphChanged` events; `ReindexQueue` collects changed node ids for an async
-  re-index/embedding worker (§938). Wiring the worker to actually re-embed is
-  the next step.
+- ✅ **Knowledge bus + auto-reindex** (`sdk::knowledge_bus`, §923 → §938) —
+  graph mutations publish `GraphChanged`; `ReindexQueue` collects changed node
+  ids and `Reindexer` drains it, embedding each changed node into a document
+  store so it becomes vector-searchable. End-to-end pipeline complete.
 - ✅ **Distributed security** (`sdk::security`, §930) — message signing +
   replay protection (signature, freshness window, nonce uniqueness) via
   Signer/SignedEnvelope/ReplayGuard. Swap the demo keyed-hash for HMAC-SHA256
