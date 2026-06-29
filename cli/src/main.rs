@@ -18,6 +18,7 @@ COMMANDS:
     run [--session <dir>] <intent…>  Plan and execute a workflow end-to-end,
                                      persisting the run when --session is given
     history <dir>                    Show the execution history of a session
+    search <dir> <query…>            Hybrid-search a session's stored documents
     capabilities                     List the built-in capability vocabulary
     version                          Print the CKOS version
     help                             Show this help
@@ -29,6 +30,7 @@ fn main() -> ExitCode {
         Some("plan") => cmd_plan(&args[1..]),
         Some("run") => cmd_run(&args[1..]),
         Some("history") => cmd_history(&args[1..]),
+        Some("search") => cmd_search(&args[1..]),
         Some("capabilities") => cmd_capabilities(),
         Some("version") => {
             println!("ckos {}", env!("CARGO_PKG_VERSION"));
@@ -205,6 +207,36 @@ fn cmd_history(rest: &[String]) -> ExitCode {
         let verified = doc.metadata.get("verified").map(String::as_str) == Some("true");
         let mark = if verified { "ok" } else { "FAIL" };
         println!("  [{mark}] {} -> {}", doc.title, doc.body);
+    }
+    ExitCode::SUCCESS
+}
+
+fn cmd_search(rest: &[String]) -> ExitCode {
+    let (dir, query) = match rest {
+        [dir, q @ ..] if !q.is_empty() => (dir.as_str(), q.join(" ")),
+        _ => {
+            eprintln!("error: usage `ckos search <dir> <query…>`");
+            return ExitCode::FAILURE;
+        }
+    };
+    let store = match FileStore::open(dir) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: could not open session {dir}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // Documents persist; the graph is rebuilt per process, so it is empty here.
+    let graph = KnowledgeGraph::new();
+    let retriever = Retriever::new(&store, &graph);
+    let hits = retriever.search(&query, 10);
+    if hits.is_empty() {
+        println!("no results for {query:?} in {dir}");
+        return ExitCode::SUCCESS;
+    }
+    println!("{} hit(s) for {query:?}:", hits.len());
+    for h in &hits {
+        println!("  [{:?} {:.2}] {} — {}", h.source, h.score, h.title, h.snippet);
     }
     ExitCode::SUCCESS
 }

@@ -62,12 +62,13 @@ graph, attachments`. → `memory::Document`.
 ## §949–§952 Retrieval & reasoning
 
 - **§949 Retrieval planner**: question → goal analysis → strategy → graph +
-  vector + full-text search → merge.
-- **§950 Hybrid search**: vector + keyword + graph + metadata + time, run together.
+  vector + full-text search → merge. → `sdk::retrieval::plan_retrieval`.
+- **§950 Hybrid search**: vector + keyword + graph + metadata + time, run
+  together. → `sdk::retrieval::Retriever` (keyword + graph today; vector next).
 - **§951 Graph reasoning**: traverse relations (A → depends → B → maintained_by →
-  Company).
+  Company). → graph label search in the retriever.
 - **§952 Multi-hop planner**: estimate hops → traverse → reason → answer.
-  → `graph::KnowledgeGraph::traverse`.
+  → `graph::KnowledgeGraph::traverse`, driven by the retriever's hop expansion.
 
 ## §953–§960 Memory ops, security, distribution, API
 

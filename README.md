@@ -51,6 +51,7 @@ cargo run -p ckos-cli -- plan "research the Transformer paper"   # plan only
 cargo run -p ckos-cli -- run  "research the Transformer paper"   # plan + execute
 cargo run -p ckos-cli -- run --session ./sess "research X"       # execute + persist
 cargo run -p ckos-cli -- history ./sess                          # resume: show past runs
+cargo run -p ckos-cli -- search ./sess "summary report"          # hybrid search
 ```
 
 Example output:

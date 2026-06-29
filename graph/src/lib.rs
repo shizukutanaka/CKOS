@@ -96,6 +96,12 @@ impl KnowledgeGraph {
         self.nodes.get(id)
     }
 
+    /// Iterate over all nodes (order unspecified). Used by retrieval to scan
+    /// the graph for label matches (§951).
+    pub fn nodes(&self) -> impl Iterator<Item = &Node> {
+        self.nodes.values()
+    }
+
     /// Number of nodes.
     pub fn len(&self) -> usize {
         self.nodes.len()

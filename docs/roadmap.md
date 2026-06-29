@@ -37,6 +37,10 @@ so the whole system runs offline.
 - ✅ **Session manager** (`sdk::session::Session`) — persists execution history
   and reflections to a `Storage` backend for fast resume (§927); durable with
   `FileStore` via `ckos run --session` / `ckos history`.
+- ✅ **Retrieval layer** (`sdk::retrieval`) — retrieval planner (§949) + hybrid
+  search (§950) over documents (keyword) and the graph (label match + multi-hop
+  expansion, §951–§952), confidence-weighted; via `ckos search`. Vector search
+  is the next addition.
 - **API gateway** (REST/gRPC/WebSocket/MCP) over the common Task API — §902.
 
 ## v2.8 — Developer platform & ecosystem
