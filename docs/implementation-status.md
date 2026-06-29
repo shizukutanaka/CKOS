@@ -74,7 +74,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 950 | Hybrid search | ✅ | `retrieval::Retriever` (keyword + vector + graph) |
 | 951 | Graph reasoning | ✅ | retrieval graph hits + `graph::traverse` |
 | 952 | Multi-hop planner | ✅ | `graph::traverse` + retriever hop expansion |
-| 953 | Memory consolidation | 🟡 | `memory::compress_document` (sleep-phase worker ⏳) |
+| 953 | Memory consolidation | ✅ | `memory::consolidate` (sleep-phase pass compressing oversized docs) |
 | 954 | Garbage collection | ✅ | `memory::collect` (documents) + `graph::KnowledgeGraph::remove_orphans` (orphaned nodes) |
 | 955 | Data encryption | ⏳ | at-rest/in-transit pending (transport layer) |
 | 956 | Offline-first | ✅ | `FileStore` + std-only build |

@@ -185,6 +185,24 @@ pub fn compress_document(doc: &mut Document, max_chars: usize) {
     }
 }
 
+/// Consolidation pass (§953, the "sleep phase"): compress every stored document
+/// whose body exceeds `max_chars` and write it back, moving bulky working memory
+/// toward compact long-term memory. Already-compressed documents are skipped.
+/// Returns the number compressed.
+pub fn consolidate(store: &mut dyn Storage, max_chars: usize) -> Result<usize> {
+    let docs = store.search(&Query::default())?;
+    let mut count = 0;
+    for mut doc in docs {
+        if doc.metadata.contains_key("compressed") || doc.body.chars().count() <= max_chars {
+            continue;
+        }
+        compress_document(&mut doc, max_chars);
+        store.write(doc)?;
+        count += 1;
+    }
+    Ok(count)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,6 +264,29 @@ mod tests {
         assert!(s.starts_with("First sentence here."));
         // Short text is returned unchanged.
         assert_eq!(summarize("short", 30), "short");
+    }
+
+    #[test]
+    fn consolidate_compresses_oversized_documents() {
+        let mut store = InMemoryStore::new();
+        store
+            .write(Document::new("note", "big", "word ".repeat(50)))
+            .unwrap();
+        store.write(Document::new("note", "small", "tiny")).unwrap();
+
+        assert_eq!(consolidate(&mut store, 40).unwrap(), 1);
+        // Re-running is a no-op: the big doc is now tagged compressed.
+        assert_eq!(consolidate(&mut store, 40).unwrap(), 0);
+        let big = store
+            .search(&Query {
+                text: Some("big".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            big[0].metadata.get("compressed").map(String::as_str),
+            Some("true")
+        );
     }
 
     #[test]
