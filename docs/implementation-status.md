@@ -49,7 +49,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 928 | Enterprise identity | 🟡 | `policy::IdentityProvider` (OIDC/LDAP verification ⏳) |
 | 929 | Authorization (RBAC + ABAC) | ✅ | `policy` |
 | 930 | Distributed security | 🟡 | `sdk::security` (signing + replay; mTLS/cert rotation ⏳) |
-| 931–932 | Kubernetes / Docker Compose | ⏳ | deployment targets pending |
+| 931–932 | Kubernetes / Docker Compose | 🟡 | `Dockerfile` + `docker-compose.yml` (ckos + Neo4j/Qdrant/Redis dev stack); k8s manifests ⏳ |
 | 933 | Observability | 🟡 | `audit` + `telemetry`; OpenTelemetry/Prometheus export ⏳ |
 | 934 | Positioning | — | narrative |
 
