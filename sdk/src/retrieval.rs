@@ -130,6 +130,58 @@ fn ranked(mut hits: Vec<Hit>) -> Vec<Hit> {
     hits
 }
 
+/// Lexical similarity (Jaccard over title+snippet tokens) between two hits —
+/// the redundancy signal for MMR, needing no stored embeddings.
+fn hit_similarity(a: &Hit, b: &Hit) -> f32 {
+    let ta: std::collections::HashSet<String> = tokens(&format!("{} {}", a.title, a.snippet))
+        .into_iter()
+        .collect();
+    let tb: std::collections::HashSet<String> = tokens(&format!("{} {}", b.title, b.snippet))
+        .into_iter()
+        .collect();
+    if ta.is_empty() || tb.is_empty() {
+        return 0.0;
+    }
+    let inter = ta.intersection(&tb).count() as f32;
+    let union = ta.union(&tb).count() as f32;
+    inter / union
+}
+
+/// Re-rank hits with **Maximal Marginal Relevance** (Carbonell & Goldstein,
+/// SIGIR 1998) to reduce redundancy in the result set. At each step it picks the
+/// hit maximizing `λ·relevance − (1−λ)·max similarity-to-already-selected`.
+/// `lambda` in `[0,1]`: 1 = pure relevance (original order), 0 = pure diversity.
+/// Relevance is each hit's score normalized by the max; redundancy is lexical
+/// [`hit_similarity`]. Returns up to `k` hits.
+pub fn mmr_rerank(hits: &[Hit], lambda: f32, k: usize) -> Vec<Hit> {
+    let lambda = lambda.clamp(0.0, 1.0);
+    let max_score = hits
+        .iter()
+        .map(|h| h.score)
+        .fold(0.0_f32, f32::max)
+        .max(1e-9);
+    let mut remaining: Vec<&Hit> = hits.iter().collect();
+    let mut selected: Vec<Hit> = Vec::new();
+    while !remaining.is_empty() && selected.len() < k {
+        let mut best_idx = 0;
+        let mut best_val = f32::NEG_INFINITY;
+        for (i, cand) in remaining.iter().enumerate() {
+            let relevance = cand.score / max_score;
+            let redundancy = selected
+                .iter()
+                .map(|s| hit_similarity(cand, s))
+                .fold(0.0_f32, f32::max);
+            let mmr = lambda * relevance - (1.0 - lambda) * redundancy;
+            if mmr > best_val {
+                best_val = mmr;
+                best_idx = i;
+            }
+        }
+        selected.push(remaining.remove(best_idx).clone());
+    }
+    selected
+}
+
 /// Combine per-source ranked lists with **Reciprocal Rank Fusion**: each item's
 /// fused score is `sum over sources of 1/(RRF_K + rank)`. Because it uses ranks,
 /// not raw scores, the wildly different score scales of BM25, cosine and graph
@@ -216,6 +268,15 @@ impl<'a> Retriever<'a> {
         }
 
         fuse_rrf(lists, limit)
+    }
+
+    /// Search, then diversify with MMR (§949–§950). Over-fetches a candidate pool
+    /// and re-ranks it down to `limit` so near-duplicate results don't crowd out
+    /// distinct, still-relevant ones. `lambda` trades relevance (1.0) against
+    /// diversity (0.0); ~0.7 is a sensible default.
+    pub fn search_diverse(&self, question: &str, limit: usize, lambda: f32) -> Vec<Hit> {
+        let pool = self.search(question, (limit * 4).max(limit));
+        mmr_rerank(&pool, lambda, limit)
     }
 
     /// Keyword search over the document store using **BM25** ranking — terms that
@@ -471,6 +532,31 @@ mod tests {
             score("B"),
             score("A")
         );
+    }
+
+    #[test]
+    fn mmr_trades_relevance_for_diversity() {
+        let hit = |title: &str, snippet: &str, score: f32| Hit {
+            title: title.into(),
+            snippet: snippet.into(),
+            score,
+            source: HitSource::Keyword,
+        };
+        // h2 is a near-duplicate of h1; h3 is distinct but slightly less relevant.
+        let hits = vec![
+            hit("Transformer", "attention mechanism", 1.0),
+            hit("Transformer model", "attention mechanism", 0.9),
+            hit("Scheduler", "task queue priority", 0.8),
+        ];
+
+        // Pure relevance (λ=1): the near-duplicate stays second.
+        let relevance_only = mmr_rerank(&hits, 1.0, 3);
+        assert_eq!(relevance_only[1].title, "Transformer model");
+
+        // Balanced (λ=0.5): the distinct result is promoted over the duplicate.
+        let diversified = mmr_rerank(&hits, 0.5, 3);
+        assert_eq!(diversified[0].title, "Transformer");
+        assert_eq!(diversified[1].title, "Scheduler");
     }
 
     #[test]
