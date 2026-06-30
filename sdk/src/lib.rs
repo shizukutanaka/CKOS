@@ -19,6 +19,7 @@
 
 pub mod agent;
 pub mod engine;
+pub mod eval;
 pub mod knowledge_bus;
 pub mod kql;
 pub mod messaging;
@@ -29,6 +30,7 @@ pub mod session;
 
 pub use agent::{AgentInstance, AgentManifest, AgentState, CapabilityRegistry};
 pub use engine::{Engine, ExecutionResult};
+pub use eval::{evaluate, evaluate_hits, mean_reciprocal_rank, EvalScores};
 pub use knowledge_bus::{KnowledgeBus, ReindexQueue, Reindexer};
 pub use kql::{execute as kql_execute, parse as kql_parse, KqlQuery, KqlResult};
 pub use messaging::{Message, MessageBus, Payload, ServiceMesh};
@@ -41,6 +43,7 @@ pub use session::Session;
 pub mod prelude {
     pub use crate::agent::{AgentInstance, AgentManifest, AgentState, CapabilityRegistry};
     pub use crate::engine::{Engine, ExecutionResult};
+    pub use crate::eval::{evaluate, evaluate_hits, mean_reciprocal_rank, EvalScores};
     pub use crate::knowledge_bus::{KnowledgeBus, ReindexQueue, Reindexer};
     pub use crate::kql::{
         execute as kql_execute, parse as kql_parse, KqlQuery, KqlResult, NodeMatch, ReturnTarget,
