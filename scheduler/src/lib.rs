@@ -90,25 +90,52 @@ impl ScoreFactors {
     }
 }
 
-/// A task plus its computed scheduling score.
+/// A task plus its computed scheduling score and the clock tick it was enqueued
+/// at (for aging).
 struct Pending {
     task: Task,
     factors: ScoreFactors,
+    enqueued_at: u64,
 }
 
+/// Default aging rate: how much a task's effective score grows per dispatch
+/// cycle it waits. Small but enough that a starved task eventually wins.
+const DEFAULT_AGING_RATE: f32 = 0.05;
+
 /// The four-layer scheduler (§892).
-#[derive(Default)]
 pub struct Scheduler {
     /// Layer 1+2: ingested tasks awaiting dependency resolution, scored.
     pending: Vec<Pending>,
     /// Tasks already dispatched/completed — used by the dependency resolver.
     completed: HashSet<TaskId>,
+    /// Monotonic dispatch-cycle counter, the basis for aging.
+    clock: u64,
+    /// Score added per cycle a task has waited (anti-starvation, §892).
+    aging_rate: f32,
+}
+
+impl Default for Scheduler {
+    fn default() -> Self {
+        Scheduler {
+            pending: Vec::new(),
+            completed: HashSet::new(),
+            clock: 0,
+            aging_rate: DEFAULT_AGING_RATE,
+        }
+    }
 }
 
 impl Scheduler {
     /// Create an empty scheduler.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set the aging rate — the score a waiting task gains per dispatch cycle.
+    /// Higher values reclaim starved tasks sooner; 0 disables aging.
+    pub fn with_aging_rate(mut self, rate: f32) -> Self {
+        self.aging_rate = rate.max(0.0);
+        self
     }
 
     /// Layer 1 — submit a task with default scoring.
@@ -118,7 +145,11 @@ impl Scheduler {
 
     /// Layer 1 — submit a task with explicit scoring factors (§913).
     pub fn submit_scored(&mut self, task: Task, factors: ScoreFactors) {
-        self.pending.push(Pending { task, factors });
+        self.pending.push(Pending {
+            task,
+            factors,
+            enqueued_at: self.clock,
+        });
     }
 
     /// Number of tasks awaiting dispatch.
@@ -138,14 +169,20 @@ impl Scheduler {
 
     /// Layer 3+4 — return the highest-scoring task whose dependencies are met,
     /// removing it from the queue. `None` if nothing is runnable yet.
+    ///
+    /// Effective score includes an **aging** term proportional to how long the
+    /// task has waited, so a low-priority task cannot be starved indefinitely by
+    /// a stream of higher-priority arrivals (§892).
     pub fn dispatch_next(&mut self) -> Option<Task> {
+        self.clock += 1;
         let mut best: Option<usize> = None;
         let mut best_score = f32::MIN;
         for (i, p) in self.pending.iter().enumerate() {
             if !self.dependencies_met(&p.task) {
                 continue;
             }
-            let s = p.factors.score(p.task.priority);
+            let age = self.clock.saturating_sub(p.enqueued_at) as f32;
+            let s = p.factors.score(p.task.priority) + self.aging_rate * age;
             if s > best_score {
                 best_score = s;
                 best = Some(i);
@@ -190,6 +227,37 @@ mod tests {
             ScoreFactors::default().with_runtime_fit(runtime_fit(80, 100)),
         );
         assert_eq!(s.dispatch_next().unwrap().description, "fast-runtime");
+    }
+
+    #[test]
+    fn aging_prevents_starvation() {
+        // A single low-priority task amid a stream of Critical arrivals must
+        // eventually dispatch rather than starve forever.
+        let mut s = Scheduler::new().with_aging_rate(0.1);
+        s.submit(Task::new("low", Capability::Reasoning).with_priority(Priority::Low));
+        let mut dispatched_low = false;
+        for _ in 0..30 {
+            s.submit(Task::new("crit", Capability::Reasoning).with_priority(Priority::Critical));
+            if s.dispatch_next().unwrap().description == "low" {
+                dispatched_low = true;
+                break;
+            }
+        }
+        assert!(
+            dispatched_low,
+            "low-priority task must not starve under aging"
+        );
+    }
+
+    #[test]
+    fn aging_disabled_lets_priority_dominate() {
+        // With aging off, the low task never beats fresh Critical arrivals.
+        let mut s = Scheduler::new().with_aging_rate(0.0);
+        s.submit(Task::new("low", Capability::Reasoning).with_priority(Priority::Low));
+        for _ in 0..5 {
+            s.submit(Task::new("crit", Capability::Reasoning).with_priority(Priority::Critical));
+            assert_eq!(s.dispatch_next().unwrap().description, "crit");
+        }
     }
 
     #[test]

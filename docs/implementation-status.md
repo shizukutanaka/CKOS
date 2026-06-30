@@ -15,7 +15,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 889 | System overview | ✅ | `README.md`, `docs/architecture.md` |
 | 890 | Rust workspace | ✅ | `Cargo.toml` (12 crates) |
 | 891 | Kernel responsibilities (no inference) | ✅ | `kernel` |
-| 892 | Four-layer scheduler | ✅ | `scheduler::Scheduler` |
+| 892 | Four-layer scheduler | ✅ | `scheduler::Scheduler` (multi-factor score + priority aging / anti-starvation) |
 | 893 | Task state machine | ✅ | `kernel::task::TaskState` |
 | 894 | Event bus | ✅ | `kernel::event` |
 | 895 | Workflow DAG | ✅ | `workflow::Dag` |
