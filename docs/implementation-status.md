@@ -19,7 +19,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 893 | Task state machine | ✅ | `kernel::task::TaskState` |
 | 894 | Event bus | ✅ | `kernel::event` |
 | 895 | Workflow DAG | ✅ | `workflow::Dag` |
-| 896 | Memory hierarchy L0–L5 | ✅ | `memory::MemoryTier` |
+| 896 | Memory hierarchy L0–L5 | ✅ | `memory::MemoryTier` + `rank_memories` (Generative-Agents recency×importance×relevance) |
 | 897 | Knowledge graph | ✅ | `graph` (+ `GraphStore` file persistence) |
 | 898 | Planner | ✅ | `planner` |
 | 899 | Verifier (independent) | ✅ | `verifier` (non-empty, repetition/degeneration, arithmetic, JSON, citation, security-policy) |

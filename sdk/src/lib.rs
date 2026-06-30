@@ -84,8 +84,9 @@ pub mod prelude {
 
     pub use ckos_memory::{
         chunk, chunk_with_overlap, collect as gc_collect, compress_document, cosine, keywords,
-        summarize, ChunkStrategy, Document, Embedder, FileStore, GcPolicy, GcReason, GcReport,
-        HashingEmbedder, InMemoryStore, MemoryTier, Query, Storage,
+        rank_memories, recency_decay, summarize, ChunkStrategy, Document, Embedder, FileStore,
+        GcPolicy, GcReason, GcReport, HashingEmbedder, InMemoryStore, MemorySignals, MemoryTier,
+        MemoryWeights, Query, Storage,
     };
 
     pub use ckos_planner::{HeuristicPlanner, Planner, SubTask};

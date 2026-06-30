@@ -14,11 +14,13 @@ mod embedding;
 mod file_store;
 pub use chunk::{chunk, chunk_with_overlap, ChunkStrategy};
 mod maintenance;
+mod memory_score;
 pub use embedding::{cosine, Embedder, HashingEmbedder};
 pub use file_store::FileStore;
 pub use maintenance::{
     collect, compress_document, consolidate, keywords, summarize, GcPolicy, GcReason, GcReport,
 };
+pub use memory_score::{rank_memories, recency_decay, MemorySignals, MemoryWeights};
 
 /// The six-level memory hierarchy from §896.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
