@@ -45,7 +45,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 923 | Knowledge bus | ✅ | `sdk::knowledge_bus` |
 | 924–925 | Runtime pool / edge | 🟡 | `runtime::select` (local-preferred); real edge runtimes ⏳ |
 | 926 | Distributed workflow | ⏳ | sync engine done; distributed driver pending |
-| 927 | Session manager | ✅ | `sdk::session` |
+| 927 | Session manager | ✅ | `sdk::session` (history/reflections + `recall` via Generative-Agents scoring) |
 | 928 | Enterprise identity | 🟡 | `policy::IdentityProvider` (OIDC/LDAP verification ⏳) |
 | 929 | Authorization (RBAC + ABAC) | ✅ | `policy` |
 | 930 | Distributed security | 🟡 | `sdk::security` (signing + replay; mTLS/cert rotation ⏳) |

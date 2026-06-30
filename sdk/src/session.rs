@@ -13,7 +13,10 @@
 use crate::engine::ExecutionResult;
 use crate::reflection::Reflection;
 use ckos_kernel::error::Result;
-use ckos_memory::{Document, Embedder, Query, Storage};
+use ckos_memory::{
+    cosine, rank_memories, recency_decay, Document, Embedder, MemorySignals, MemoryWeights, Query,
+    Storage,
+};
 
 /// Document type tag for persisted execution records.
 const EXECUTION: &str = "execution";
@@ -21,12 +24,17 @@ const EXECUTION: &str = "execution";
 const REFLECTION: &str = "reflection";
 /// Metadata key identifying the owning session.
 const SESSION_KEY: &str = "session";
+/// Metadata key holding a monotonic write sequence, the recency signal (§896).
+const SEQ_KEY: &str = "seq";
 
 /// A durable working session backed by a storage layer (§927).
 pub struct Session {
     id: String,
     store: Box<dyn Storage>,
     embedder: Option<Box<dyn Embedder>>,
+    /// Monotonic write counter for recency; seeded lazily from the store.
+    seq: u64,
+    seq_seeded: bool,
 }
 
 impl Session {
@@ -37,7 +45,27 @@ impl Session {
             id: id.into(),
             store,
             embedder: None,
+            seq: 0,
+            seq_seeded: false,
         }
+    }
+
+    /// Next write sequence, seeded once from the highest existing `seq` in the
+    /// store so it keeps increasing across process restarts.
+    fn next_seq(&mut self) -> u64 {
+        if !self.seq_seeded {
+            self.seq = self
+                .store
+                .search(&Query::default())
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|d| d.metadata.get(SEQ_KEY).and_then(|s| s.parse::<u64>().ok()))
+                .max()
+                .unwrap_or(0);
+            self.seq_seeded = true;
+        }
+        self.seq += 1;
+        self.seq
     }
 
     /// Attach an embedder so persisted execution outputs carry embeddings,
@@ -79,6 +107,8 @@ impl Session {
             if let Some(embedder) = &self.embedder {
                 doc.embedding = Some(embedder.embed(&doc.body));
             }
+            let seq = self.next_seq();
+            doc.metadata.insert(SEQ_KEY.into(), seq.to_string());
             self.store.write(doc)?;
         }
         Ok(())
@@ -95,6 +125,8 @@ impl Session {
             doc.confidence = r.score;
             doc.metadata.insert(SESSION_KEY.into(), self.id.clone());
             doc.metadata.insert("task".into(), r.task.to_string());
+            let seq = self.next_seq();
+            doc.metadata.insert(SEQ_KEY.into(), seq.to_string());
             self.store.write(doc)?;
         }
         Ok(())
@@ -118,6 +150,60 @@ impl Session {
     /// Reflections recorded in this session.
     pub fn reflections(&self) -> Result<Vec<Document>> {
         self.owned(REFLECTION)
+    }
+
+    /// All documents belonging to this session, regardless of type.
+    fn all_owned(&self) -> Result<Vec<Document>> {
+        let mut docs = self.store.search(&Query::default())?;
+        docs.retain(|d| d.metadata.get(SESSION_KEY).map(String::as_str) == Some(self.id.as_str()));
+        // Stable order so equal-scored recalls are deterministic.
+        docs.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
+        Ok(docs)
+    }
+
+    /// Recall this session's records most relevant to `query`, ranked by the
+    /// Generative-Agents memory score — recency (write order) × importance
+    /// (confidence) × relevance (embedding similarity, if an embedder is
+    /// attached) (§896). Returns up to `k` documents, best first.
+    pub fn recall(&self, query: &str, k: usize) -> Result<Vec<Document>> {
+        let docs = self.all_owned()?;
+        if docs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let max_seq = docs
+            .iter()
+            .filter_map(|d| d.metadata.get(SEQ_KEY).and_then(|s| s.parse::<u64>().ok()))
+            .max()
+            .unwrap_or(0);
+        let query_emb = self.embedder.as_ref().map(|e| e.embed(query));
+
+        let signals: Vec<MemorySignals> = docs
+            .iter()
+            .map(|d| {
+                let seq = d
+                    .metadata
+                    .get(SEQ_KEY)
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0);
+                let age = max_seq.saturating_sub(seq) as f32;
+                let relevance = match (&query_emb, &d.embedding) {
+                    (Some(q), Some(e)) => cosine(q, e).clamp(0.0, 1.0),
+                    _ => 0.0,
+                };
+                MemorySignals {
+                    recency: recency_decay(age, 0.9),
+                    importance: d.confidence as f32 / 100.0,
+                    relevance,
+                }
+            })
+            .collect();
+
+        let ranked = rank_memories(&signals, &MemoryWeights::default());
+        Ok(ranked
+            .into_iter()
+            .take(k)
+            .map(|(i, _)| docs[i].clone())
+            .collect())
     }
 }
 
@@ -162,6 +248,39 @@ mod tests {
             .collect();
         session.record_reflections(&reflections).unwrap();
         assert_eq!(session.reflections().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn recall_ranks_by_recency_importance_relevance() {
+        use ckos_memory::HashingEmbedder;
+        let mut session = Session::new("s1", Box::new(InMemoryStore::new()))
+            .with_embedder(Box::new(HashingEmbedder::new(64)));
+        // Three runs written in order; the last is most recent.
+        let mk = |verified, output: &str| ExecutionResult {
+            task: TaskId::new(),
+            capability: Capability::Reasoning,
+            agent: Some("a".into()),
+            runtime: "echo".into(),
+            output: output.into(),
+            verified,
+        };
+        session
+            .record_run(&[
+                mk(true, "kernel scheduling internals"),
+                mk(false, "unrelated chatter"),
+                mk(true, "kernel priority queue dispatch"),
+            ])
+            .unwrap();
+
+        // A recall returns at most k, best first; nothing crashes and the
+        // verified, relevant, recent records outrank the unrelated failed one.
+        let top = session.recall("kernel scheduling", 2).unwrap();
+        assert_eq!(top.len(), 2);
+        assert!(top.iter().all(|d| d.body.contains("kernel")));
+
+        // Empty query set still works on an empty session.
+        let empty = Session::new("none", Box::new(InMemoryStore::new()));
+        assert!(empty.recall("x", 5).unwrap().is_empty());
     }
 
     #[test]
