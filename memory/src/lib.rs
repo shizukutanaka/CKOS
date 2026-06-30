@@ -12,7 +12,7 @@ use std::collections::HashMap;
 mod chunk;
 mod embedding;
 mod file_store;
-pub use chunk::{chunk, ChunkStrategy};
+pub use chunk::{chunk, chunk_with_overlap, ChunkStrategy};
 mod maintenance;
 pub use embedding::{cosine, Embedder, HashingEmbedder};
 pub use file_store::FileStore;

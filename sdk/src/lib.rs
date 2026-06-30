@@ -76,8 +76,8 @@ pub mod prelude {
     };
 
     pub use ckos_memory::{
-        chunk, collect as gc_collect, compress_document, cosine, keywords, summarize,
-        ChunkStrategy, Document, Embedder, FileStore, GcPolicy, GcReason, GcReport,
+        chunk, chunk_with_overlap, collect as gc_collect, compress_document, cosine, keywords,
+        summarize, ChunkStrategy, Document, Embedder, FileStore, GcPolicy, GcReason, GcReport,
         HashingEmbedder, InMemoryStore, MemoryTier, Query, Storage,
     };
 
