@@ -73,7 +73,8 @@ COMMANDS:
                                      with --session, persist the run and grow
                                      the session's knowledge graph
     history <dir>                    Show the execution history of a session
-    search <dir> <query…>            Hybrid-search a session's stored documents
+    search [--expand] [--diverse]    Hybrid-search a session (--expand: query
+      <dir> <query…>                 expansion, --diverse: MMR re-ranking)
     workflow <file>                  Load and execute a workflow definition file
     kql [--session <dir>] <query>    Run a KQL query (demo graph, or a session's
                                      persisted graph with --session)
@@ -358,14 +359,21 @@ fn cmd_history(rest: &[String]) -> ExitCode {
 }
 
 fn cmd_search(rest: &[String]) -> ExitCode {
-    let (dir, query) = match rest {
-        [dir, q @ ..] if !q.is_empty() => (dir.as_str(), q.join(" ")),
+    if wants_help(rest) {
+        println!("usage: ckos search [--expand] [--diverse] <dir> <query…>\n  Hybrid search (BM25 + vector + graph, RRF-fused). --expand adds pseudo-relevance\n  query expansion; --diverse re-ranks for variety (MMR).");
+        return ExitCode::SUCCESS;
+    }
+    // Optional flags in any position.
+    let (expand, rest) = take_flag(rest, "--expand");
+    let (diverse, rest) = take_flag(&rest, "--diverse");
+    let (dir, query) = match rest.as_slice() {
+        [dir, q @ ..] if !q.is_empty() => (dir.clone(), q.join(" ")),
         _ => {
-            eprintln!("error: usage `ckos search <dir> <query…>`");
+            eprintln!("error: usage `ckos search [--expand] [--diverse] <dir> <query…>`");
             return ExitCode::FAILURE;
         }
     };
-    let store = match FileStore::open(dir) {
+    let store = match FileStore::open(&dir) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("error: could not open session {dir}: {e}");
@@ -376,7 +384,7 @@ fn cmd_search(rest: &[String]) -> ExitCode {
     // so graph-based hits work across processes (§936). Build it with
     // `ckos graph --session <dir>`. A genuine read/parse error is surfaced
     // rather than silently treated as an empty graph.
-    let graph = match GraphStore::load(Path::new(dir).join(GRAPH_FILE)) {
+    let graph = match GraphStore::load(Path::new(&dir).join(GRAPH_FILE)) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("warning: could not load graph ({e}); searching documents only");
@@ -385,7 +393,17 @@ fn cmd_search(rest: &[String]) -> ExitCode {
     };
     let embedder = HashingEmbedder::default();
     let retriever = Retriever::with_embedder(&store, &graph, &embedder);
-    let hits = retriever.search(&query, 10);
+    // Compose the requested retrieval refinements (§949): pseudo-relevance
+    // expansion to widen recall, MMR to diversify.
+    let hits = match (expand, diverse) {
+        (true, true) => {
+            let pool = retriever.search_expanded(&query, 40, 5, 5);
+            mmr_rerank(&pool, 0.7, 10)
+        }
+        (true, false) => retriever.search_expanded(&query, 10, 5, 5),
+        (false, true) => retriever.search_diverse(&query, 10, 0.7),
+        (false, false) => retriever.search(&query, 10),
+    };
     if hits.is_empty() {
         println!("no results for {query:?} in {dir}");
         return ExitCode::SUCCESS;

@@ -118,6 +118,12 @@ fn run_session_builds_graph_used_by_search() {
     assert!(s.status.success());
     assert!(stdout(&s).contains("Graph"));
 
+    // The --expand and --diverse search refinements are reachable and succeed.
+    for flag in ["--expand", "--diverse"] {
+        let out = ckos(&["search", flag, dir.to_str().unwrap(), "Transformer"]);
+        assert!(out.status.success(), "search {flag} should succeed");
+    }
+
     // KQL can query the same persisted graph.
     let k = ckos(&[
         "kql",

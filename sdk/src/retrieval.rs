@@ -427,8 +427,16 @@ impl<'a> Retriever<'a> {
         hits
     }
 
-    /// Label search over the graph plus multi-hop expansion (§951–§952).
+    /// Label search over the graph plus multi-hop expansion (§951–§952). Direct
+    /// matches are boosted by PageRank centrality so influential nodes outrank
+    /// peripheral ones (the Graph-RAG node-importance signal, §951).
     fn graph_hits(&self, terms: &[String], max_hops: usize) -> Vec<Hit> {
+        let pr = self.graph.pagerank(0.85, 20);
+        let max_pr = pr
+            .values()
+            .cloned()
+            .fold(0.0_f32, f32::max)
+            .max(f32::EPSILON);
         let mut hits = Vec::new();
         for node in self.graph.nodes() {
             let label = node.label.to_lowercase();
@@ -436,7 +444,9 @@ impl<'a> Retriever<'a> {
             if matches == 0 {
                 continue;
             }
-            let base = matches as f32 * (node.confidence as f32 / 100.0) * 3.0;
+            // Centrality in 0..1; boost direct matches up to 2x for the hub.
+            let centrality = pr.get(&node.id).copied().unwrap_or(0.0) / max_pr;
+            let base = matches as f32 * (node.confidence as f32 / 100.0) * 3.0 * (1.0 + centrality);
             hits.push(Hit {
                 title: node.label.clone(),
                 snippet: format!("{:?}", node.kind),
@@ -644,6 +654,26 @@ mod tests {
         // Expanding from the top doc's body ("scheduler") recalls it.
         let expanded = r.search_expanded("kernel", 10, 3, 3);
         assert!(expanded.iter().any(|h| h.title == "scheduler internals"));
+    }
+
+    #[test]
+    fn graph_hits_favor_central_nodes() {
+        // Two nodes match "node"; the central one (a hub others point to) should
+        // outrank the peripheral one thanks to the PageRank boost.
+        let store = InMemoryStore::new();
+        let mut graph = KnowledgeGraph::new();
+        let core = graph.add_node(NodeKind::Concept, "Core node", 100);
+        let leaf = graph.add_node(NodeKind::Concept, "Leaf node", 100);
+        let x = graph.add_node(NodeKind::Concept, "x", 100);
+        let y = graph.add_node(NodeKind::Concept, "y", 100);
+        graph.connect(&leaf, &core, EdgeKind::References);
+        graph.connect(&x, &core, EdgeKind::References);
+        graph.connect(&y, &core, EdgeKind::References);
+
+        let hits = Retriever::new(&store, &graph).search("node", 10);
+        let core_pos = hits.iter().position(|h| h.title == "Core node").unwrap();
+        let leaf_pos = hits.iter().position(|h| h.title == "Leaf node").unwrap();
+        assert!(core_pos < leaf_pos, "central node should rank first");
     }
 
     #[test]
