@@ -4,8 +4,9 @@
 //! [`Retriever::search`] runs hybrid search (§950): **BM25** keyword ranking over
 //! the document store, vector-similarity search, and label search over the
 //! knowledge graph with multi-hop expansion (§951–§952). The three ranked lists
-//! are then fused: collapsed by title and boosted when more than one source
-//! agrees — the documented strength of hybrid retrieval.
+//! are then combined with Reciprocal Rank Fusion (`1/(k+rank)` summed across
+//! sources) — rank-based, so the different score scales of BM25, cosine and
+//! graph matching don't distort the result and corroborated items rise.
 //!
 //! Scores fold in each item's confidence (§948), so low-confidence knowledge
 //! ranks below high-confidence knowledge for the same textual match.
@@ -113,6 +114,57 @@ fn tf(tokens: &[String], term: &str) -> usize {
 const VECTOR_WEIGHT: f32 = 5.0;
 /// Minimum cosine similarity for a vector hit to be considered relevant.
 const VECTOR_THRESHOLD: f32 = 0.2;
+/// Reciprocal Rank Fusion constant; the standard default damps the weight of
+/// top ranks so lower ranks still contribute (Cormack et al.; used by
+/// Elasticsearch/LangChain).
+const RRF_K: f32 = 60.0;
+
+/// Sort a source's hits by descending score (its rank order for fusion).
+fn ranked(mut hits: Vec<Hit>) -> Vec<Hit> {
+    hits.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.title.cmp(&b.title))
+    });
+    hits
+}
+
+/// Combine per-source ranked lists with **Reciprocal Rank Fusion**: each item's
+/// fused score is `sum over sources of 1/(RRF_K + rank)`. Because it uses ranks,
+/// not raw scores, the wildly different score scales of BM25, cosine and graph
+/// matching don't distort the result, and items corroborated by several sources
+/// naturally rise. Items are collapsed by title; the highest-scoring occurrence
+/// supplies the displayed snippet/source. Returns up to `limit` hits.
+fn fuse_rrf(lists: Vec<Vec<Hit>>, limit: usize) -> Vec<Hit> {
+    use std::collections::HashMap;
+    let mut acc: HashMap<String, (f32, Hit)> = HashMap::new();
+    for list in lists {
+        for (rank, hit) in list.into_iter().enumerate() {
+            let contrib = 1.0 / (RRF_K + (rank + 1) as f32);
+            let entry = acc.entry(hit.title.clone()).or_insert((0.0, hit.clone()));
+            entry.0 += contrib;
+            if hit.score > entry.1.score {
+                entry.1 = hit; // best representative for display
+            }
+        }
+    }
+    let mut fused: Vec<Hit> = acc
+        .into_values()
+        .map(|(rrf, mut hit)| {
+            hit.score = rrf; // fused relevance score
+            hit
+        })
+        .collect();
+    fused.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.title.cmp(&b.title))
+    });
+    fused.truncate(limit);
+    fused
+}
 
 /// Runs hybrid search across a store and a graph (§950).
 pub struct Retriever<'a> {
@@ -144,64 +196,26 @@ impl<'a> Retriever<'a> {
         }
     }
 
-    /// Plan and execute retrieval, returning up to `limit` ranked hits.
+    /// Plan and execute retrieval, returning up to `limit` ranked hits. The
+    /// per-source result lists are combined with Reciprocal Rank Fusion (§950).
     pub fn search(&self, question: &str, limit: usize) -> Vec<Hit> {
         let strategy = plan_retrieval(question);
         let terms = terms(question);
-        let mut hits: Vec<Hit> = Vec::new();
+        let mut lists: Vec<Vec<Hit>> = Vec::new();
 
         if strategy.keyword {
-            hits.extend(self.keyword_hits(&terms));
+            lists.push(ranked(self.keyword_hits(&terms)));
         }
         if strategy.vector {
             if let Some(embedder) = self.embedder {
-                hits.extend(self.vector_hits(&embedder.embed(question)));
+                lists.push(ranked(self.vector_hits(&embedder.embed(question))));
             }
         }
         if strategy.graph {
-            hits.extend(self.graph_hits(&terms, strategy.max_hops));
+            lists.push(ranked(self.graph_hits(&terms, strategy.max_hops)));
         }
 
-        self.fuse(hits, limit)
-    }
-
-    /// Fuse hits across sources: collapse by title to the best-scoring hit, then
-    /// boost results corroborated by more than one source (keyword + vector +
-    /// graph agreement is the documented strength of hybrid search). +15% per
-    /// extra distinct source.
-    fn fuse(&self, hits: Vec<Hit>, limit: usize) -> Vec<Hit> {
-        use std::collections::HashMap;
-        let mut by_title: HashMap<String, (Hit, std::collections::HashSet<HitSource>)> =
-            HashMap::new();
-        for h in hits {
-            let entry = by_title
-                .entry(h.title.clone())
-                .or_insert_with(|| (h.clone(), std::collections::HashSet::new()));
-            entry.1.insert(h.source);
-            if h.score > entry.0.score {
-                // Keep the highest-scoring representative, but remember its source set.
-                entry.0 = h;
-            }
-        }
-
-        let mut fused: Vec<Hit> = by_title
-            .into_values()
-            .map(|(mut hit, sources)| {
-                let extra = sources.len().saturating_sub(1) as f32;
-                hit.score *= 1.0 + 0.15 * extra;
-                hit
-            })
-            .collect();
-
-        fused.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                // Stable tie-break so output is deterministic.
-                .then_with(|| a.title.cmp(&b.title))
-        });
-        fused.truncate(limit);
-        fused
+        fuse_rrf(lists, limit)
     }
 
     /// Keyword search over the document store using **BM25** ranking — terms that
@@ -457,6 +471,27 @@ mod tests {
             score("B"),
             score("A")
         );
+    }
+
+    #[test]
+    fn rrf_is_rank_based_not_score_scale() {
+        // A doc ranked #1 by the (small-magnitude) vector source and #1 by the
+        // keyword source must fuse to the top — RRF ignores raw score scale.
+        use ckos_memory::{Embedder, HashingEmbedder};
+        let embedder = HashingEmbedder::new(64);
+        let mut store = InMemoryStore::new();
+        let mut both = Document::new("note", "Kernel", "kernel scheduling");
+        both.embedding = Some(embedder.embed("kernel scheduling"));
+        store.write(both).unwrap();
+        let mut other = Document::new("note", "Other", "kernel"); // keyword-only, weaker
+        other.embedding = Some(embedder.embed("unrelated text"));
+        store.write(other).unwrap();
+
+        let graph = KnowledgeGraph::new();
+        let hits = Retriever::with_embedder(&store, &graph, &embedder).search("kernel", 10);
+        // The doubly-corroborated doc tops the list despite cosine being ~0.x
+        // while BM25 is a different magnitude.
+        assert_eq!(hits[0].title, "Kernel");
     }
 
     #[test]

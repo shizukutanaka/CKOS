@@ -71,7 +71,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 947 | Provenance engine | ✅ | `graph::Node::provenance`; extraction stamps source (`extract_concepts_with_provenance`); KQL `RETURN Sources` |
 | 948 | Confidence score | ✅ | `Node::confidence`, `Document::confidence` |
 | 949 | Retrieval planner | ✅ | `retrieval::plan_retrieval` |
-| 950 | Hybrid search | ✅ | `retrieval::Retriever` (BM25 keyword + vector + graph, cross-source rank fusion) |
+| 950 | Hybrid search | ✅ | `retrieval::Retriever` (BM25 keyword + vector + graph, Reciprocal Rank Fusion) |
 | 951 | Graph reasoning | ✅ | retrieval graph hits + `graph::traverse` |
 | 952 | Multi-hop planner | ✅ | `graph::traverse` + retriever hop expansion |
 | 953 | Memory consolidation | ✅ | `memory::consolidate` (sleep-phase pass compressing oversized docs) |
