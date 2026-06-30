@@ -614,6 +614,15 @@ fn cmd_graph(rest: &[String]) -> ExitCode {
     for n in nodes {
         println!("  - {} [{:?}] conf={}", n.label, n.kind, n.confidence);
     }
+
+    // Most central concepts by PageRank (§951 graph reasoning).
+    let central = graph.central_nodes(3);
+    if central.iter().any(|(_, s)| *s > 0.0) {
+        println!("\nmost central:");
+        for (node, score) in central {
+            println!("  - {} ({:.3})", node.label, score);
+        }
+    }
     ExitCode::SUCCESS
 }
 

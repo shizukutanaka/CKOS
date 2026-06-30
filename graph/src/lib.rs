@@ -313,6 +313,68 @@ impl KnowledgeGraph {
             .collect()
     }
 
+    /// PageRank node importance (Page & Brin, 1998) — the query-independent
+    /// centrality used by Graph-RAG systems (FastGraphRAG, HippoRAG) to rank
+    /// influential nodes (§948/§951). `damping` is the teleport factor (0.85 is
+    /// standard); `iterations` power-iteration steps (~20 converges for small
+    /// graphs). Returns a score per node summing to ~1.0; empty graph → empty.
+    pub fn pagerank(&self, damping: f32, iterations: usize) -> HashMap<NodeId, f32> {
+        let n = self.nodes.len();
+        if n == 0 {
+            return HashMap::new();
+        }
+        let d = damping.clamp(0.0, 1.0);
+        let base = (1.0 - d) / n as f32;
+        let init = 1.0 / n as f32;
+        let mut rank: HashMap<NodeId, f32> =
+            self.nodes.keys().map(|id| (id.clone(), init)).collect();
+
+        for _ in 0..iterations {
+            let mut next: HashMap<NodeId, f32> =
+                self.nodes.keys().map(|id| (id.clone(), base)).collect();
+            let mut dangling = 0.0f32;
+            for id in self.nodes.keys() {
+                let r = rank[id];
+                let out = self.adjacency.get(id).map(|e| e.len()).unwrap_or(0);
+                if out == 0 {
+                    dangling += r; // no out-links: mass redistributed below
+                    continue;
+                }
+                let share = d * r / out as f32;
+                for edge in &self.adjacency[id] {
+                    if let Some(slot) = next.get_mut(&edge.to) {
+                        *slot += share;
+                    }
+                }
+            }
+            // Spread dangling mass uniformly so total rank is conserved.
+            let spread = d * dangling / n as f32;
+            for v in next.values_mut() {
+                *v += spread;
+            }
+            rank = next;
+        }
+        rank
+    }
+
+    /// The `top_n` most central nodes by [`pagerank`](Self::pagerank) (damping
+    /// 0.85, 20 iterations), highest first; ties broken by label.
+    pub fn central_nodes(&self, top_n: usize) -> Vec<(&Node, f32)> {
+        let pr = self.pagerank(0.85, 20);
+        let mut scored: Vec<(&Node, f32)> = self
+            .nodes
+            .values()
+            .map(|node| (node, pr.get(&node.id).copied().unwrap_or(0.0)))
+            .collect();
+        scored.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.label.cmp(&b.0.label))
+        });
+        scored.truncate(top_n);
+        scored
+    }
+
     /// Breadth-first multi-hop traversal up to `max_hops` (§952).
     ///
     /// Returns nodes reachable from `start`, nearest first, excluding `start`.
@@ -362,6 +424,31 @@ mod tests {
         let two_hop = g.traverse(&a, 2);
         assert_eq!(two_hop.len(), 2);
         assert!(two_hop.iter().any(|n| n.label == "ACME"));
+    }
+
+    #[test]
+    fn pagerank_ranks_the_hub_highest() {
+        // A star: three leaves all point at a central hub. The hub should have
+        // the highest PageRank.
+        let mut g = KnowledgeGraph::new();
+        let hub = g.add_node(NodeKind::Concept, "Hub", 50);
+        for leaf in ["L1", "L2", "L3"] {
+            let l = g.add_node(NodeKind::Concept, leaf, 50);
+            g.connect(&l, &hub, EdgeKind::References);
+        }
+        let pr = g.pagerank(0.85, 30);
+        let hub_score = pr[&hub];
+        assert!(
+            pr.values().all(|&s| s <= hub_score + 1e-6),
+            "hub must be most central"
+        );
+        // Scores form a distribution summing to ~1.
+        let total: f32 = pr.values().sum();
+        assert!((total - 1.0).abs() < 1e-3, "ranks sum to ~1, got {total}");
+
+        // central_nodes surfaces the hub first.
+        let top = g.central_nodes(1);
+        assert_eq!(top[0].0.label, "Hub");
     }
 
     #[test]
