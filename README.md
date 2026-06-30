@@ -60,9 +60,10 @@ appear in any position, and `ckos <command> --help` prints per-command usage.
 | `plan [--dot] <intent…>` | Decompose an intent into a workflow DAG | `ckos plan "research the Transformer paper"` |
 | `run [--session <dir>] <intent…>` | Plan + execute; with `--session`, persist the run and grow its knowledge graph | `ckos run --session ./sess "research X"` |
 | `history <dir>` | Show a session's past runs | `ckos history ./sess` |
-| `search <dir> <query…>` | Hybrid keyword + vector + graph search over a session | `ckos search ./sess "summary"` |
+| `search [--expand] [--diverse] <dir> <query…>` | Hybrid BM25 + vector + graph search (RRF-fused); `--expand` widens recall (PRF), `--diverse` re-ranks for variety (MMR) | `ckos search --diverse ./sess "summary"` |
 | `graph [--dot] <text…>` / `graph [--dot] --session <dir>` | Extract a typed knowledge graph from text or a session's docs | `ckos graph --session ./sess` |
 | `kql [--session <dir>] <query>` | Run a Knowledge Query Language query | `ckos kql 'FIND Concept "Transformer" RELATED Algorithm'` |
+| `eval --relevant <csv> [--k N] <dir> <query…>` | Score search quality (Precision/Recall/MRR/nDCG) against known-relevant titles | `ckos eval --relevant "Transformer" ./sess Transformer` |
 | `gc <dir> [--min-confidence N]` | Garbage-collect low-value documents | `ckos gc ./sess --min-confidence 30` |
 | `verify <text…>` | Run the independent §899 checks (non-empty, repetition, arithmetic, JSON, citations, security) | `ckos verify 'see [1]'` |
 | `capabilities` | List the built-in capability vocabulary | `ckos capabilities` |

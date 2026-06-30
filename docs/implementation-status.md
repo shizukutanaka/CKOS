@@ -81,7 +81,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 957 | Distributed knowledge | ⏳ | sharding/partial-sync pending |
 | 958 | Search cache | ✅ | `sdk::retrieval::SearchCache` (LRU query→hits cache) |
 | 959 | Learning pipeline | 🟡 | reflection persistence + auto-reindex + `sdk::eval` (Precision/Recall/MRR/nDCG); full closed loop ⏳ |
-| 960 | Unified knowledge API | 🟡 | `cli` (`search`/`kql`/`history`); network API ⏳ |
+| 960 | Unified knowledge API | 🟡 | `cli` (`search`/`kql`/`history`/`eval`); network API ⏳ |
 | 961 | AI-native filesystem | ⏳ | proposal |
 | 962 | Knowledge Query Language | ✅ | `sdk::kql` — FIND/RELATED/FILTER (AND/OR/NOT)/BEFORE/AFTER/ORDER/LIMIT/RETURN; `ckos kql` incl. `--session` |
 

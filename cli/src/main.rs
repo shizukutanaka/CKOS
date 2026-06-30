@@ -78,6 +78,8 @@ COMMANDS:
     workflow <file>                  Load and execute a workflow definition file
     kql [--session <dir>] <query>    Run a KQL query (demo graph, or a session's
                                      persisted graph with --session)
+    eval --relevant <csv> [--k N]    Score search quality (Precision/Recall/
+      <dir> <query…>                 MRR/nDCG) against known-relevant titles
     graph [--dot] <text…>            Extract a knowledge graph from text (§941)
     graph [--dot] --session <dir>    Extract a graph from a session's documents
     gc <dir> [--min-confidence N]    Garbage-collect a session's stored documents
@@ -96,6 +98,7 @@ fn main() -> ExitCode {
         Some("search") => cmd_search(&args[1..]),
         Some("workflow") => cmd_workflow(&args[1..]),
         Some("kql") => cmd_kql(&args[1..]),
+        Some("eval") => cmd_eval(&args[1..]),
         Some("graph") => cmd_graph(&args[1..]),
         Some("gc") => cmd_gc(&args[1..]),
         Some("verify") => cmd_verify(&args[1..]),
@@ -415,6 +418,76 @@ fn cmd_search(rest: &[String]) -> ExitCode {
             h.source, h.score, h.title, h.snippet
         );
     }
+    ExitCode::SUCCESS
+}
+
+fn cmd_eval(rest: &[String]) -> ExitCode {
+    if wants_help(rest) {
+        println!("usage: ckos eval --relevant <title1,title2,…> [--k N] <dir> <query…>\n  Run search and score it (Precision@k, Recall@k, MRR, nDCG@k) against the\n  comma-separated titles you consider relevant.");
+        return ExitCode::SUCCESS;
+    }
+    let (relevant_csv, rest) = match take_value_flag(rest, "--relevant") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let (k_str, rest) = match take_value_flag(&rest, "--k") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(relevant_csv) = relevant_csv else {
+        eprintln!("error: `eval` needs --relevant <title1,title2,…>");
+        return ExitCode::FAILURE;
+    };
+    let k: usize = match k_str.as_deref().map(str::parse) {
+        Some(Ok(n)) => n,
+        Some(Err(_)) => {
+            eprintln!("error: --k needs a non-negative integer");
+            return ExitCode::FAILURE;
+        }
+        None => 10,
+    };
+    let (dir, query) = match rest.as_slice() {
+        [dir, q @ ..] if !q.is_empty() => (dir.clone(), q.join(" ")),
+        _ => {
+            eprintln!("error: usage `ckos eval --relevant <csv> [--k N] <dir> <query…>`");
+            return ExitCode::FAILURE;
+        }
+    };
+    let relevant: std::collections::HashSet<String> = relevant_csv
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect();
+    if relevant.is_empty() {
+        eprintln!("error: --relevant listed no titles");
+        return ExitCode::FAILURE;
+    }
+
+    let store = match FileStore::open(&dir) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: could not open session {dir}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let graph = GraphStore::load(Path::new(&dir).join(GRAPH_FILE)).unwrap_or_default();
+    let embedder = HashingEmbedder::default();
+    let retriever = Retriever::with_embedder(&store, &graph, &embedder);
+    let hits = retriever.search(&query, k.max(1));
+    let scores = evaluate_hits(&hits, &relevant, k);
+
+    println!("eval for {query:?} (k={}):", scores.k);
+    println!("  precision@{:<2} {:.3}", scores.k, scores.precision);
+    println!("  recall@{:<5} {:.3}", scores.k, scores.recall);
+    println!("  MRR         {:.3}", scores.reciprocal_rank);
+    println!("  nDCG@{:<6} {:.3}", scores.k, scores.ndcg);
     ExitCode::SUCCESS
 }
 

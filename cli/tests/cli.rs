@@ -133,6 +133,19 @@ fn run_session_builds_graph_used_by_search() {
     ]);
     assert!(k.status.success());
     assert!(stdout(&k).contains("Transformer"));
+
+    // eval scores the search against a known-relevant title.
+    let e = ckos(&[
+        "eval",
+        "--relevant",
+        "Transformer",
+        dir.to_str().unwrap(),
+        "Transformer",
+    ]);
+    assert!(e.status.success());
+    let es = stdout(&e);
+    assert!(es.contains("precision@") && es.contains("MRR"));
+    assert!(es.contains("1.000")); // the relevant hit ranks first → MRR 1.0
 }
 
 #[test]
