@@ -1,10 +1,11 @@
 //! Retrieval — the unified query layer (§949–§952).
 //!
 //! [`plan_retrieval`] turns a question into a [`RetrievalStrategy`] (§949), then
-//! [`Retriever::search`] runs hybrid search (§950): keyword search over the
-//! document store and label search over the knowledge graph, with multi-hop
-//! expansion of graph matches (§951–§952). Results from both sources are scored,
-//! deduplicated and ranked into one list.
+//! [`Retriever::search`] runs hybrid search (§950): **BM25** keyword ranking over
+//! the document store, vector-similarity search, and label search over the
+//! knowledge graph with multi-hop expansion (§951–§952). The three ranked lists
+//! are then fused: collapsed by title and boosted when more than one source
+//! agrees — the documented strength of hybrid retrieval.
 //!
 //! Scores fold in each item's confidence (§948), so low-confidence knowledge
 //! ranks below high-confidence knowledge for the same textual match.
@@ -14,7 +15,7 @@ use ckos_memory::{cosine, Embedder, Query, Storage};
 use std::collections::VecDeque;
 
 /// Which source a hit came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HitSource {
     /// Keyword match in the document store.
     Keyword,
@@ -78,18 +79,33 @@ pub fn plan_retrieval(question: &str) -> RetrievalStrategy {
     }
 }
 
-/// Split a query into lowercase terms longer than one character.
-fn terms(query: &str) -> Vec<String> {
-    query
-        .to_lowercase()
+/// Split text into lowercase tokens longer than one character.
+fn tokens(text: &str) -> Vec<String> {
+    text.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
         .filter(|t| t.len() > 1)
         .map(String::from)
         .collect()
 }
 
+/// Alias used at call sites that read as "query terms".
+fn terms(query: &str) -> Vec<String> {
+    tokens(query)
+}
+
 fn count_matches(haystack: &str, term: &str) -> usize {
     haystack.matches(term).count()
+}
+
+/// BM25 saturation parameters (standard defaults).
+const BM25_K1: f32 = 1.5;
+const BM25_B: f32 = 0.75;
+/// Title terms count for more than body terms (field boost).
+const TITLE_BOOST: f32 = 2.0;
+
+/// Count occurrences of `term` among already-tokenized text.
+fn tf(tokens: &[String], term: &str) -> usize {
+    tokens.iter().filter(|t| t.as_str() == term).count()
 }
 
 /// Weight applied to cosine similarity so vector hits are comparable in scale
@@ -146,30 +162,93 @@ impl<'a> Retriever<'a> {
             hits.extend(self.graph_hits(&terms, strategy.max_hops));
         }
 
-        // Deduplicate by title, keeping the highest score.
-        hits.sort_by(|a, b| {
+        self.fuse(hits, limit)
+    }
+
+    /// Fuse hits across sources: collapse by title to the best-scoring hit, then
+    /// boost results corroborated by more than one source (keyword + vector +
+    /// graph agreement is the documented strength of hybrid search). +15% per
+    /// extra distinct source.
+    fn fuse(&self, hits: Vec<Hit>, limit: usize) -> Vec<Hit> {
+        use std::collections::HashMap;
+        let mut by_title: HashMap<String, (Hit, std::collections::HashSet<HitSource>)> =
+            HashMap::new();
+        for h in hits {
+            let entry = by_title
+                .entry(h.title.clone())
+                .or_insert_with(|| (h.clone(), std::collections::HashSet::new()));
+            entry.1.insert(h.source);
+            if h.score > entry.0.score {
+                // Keep the highest-scoring representative, but remember its source set.
+                entry.0 = h;
+            }
+        }
+
+        let mut fused: Vec<Hit> = by_title
+            .into_values()
+            .map(|(mut hit, sources)| {
+                let extra = sources.len().saturating_sub(1) as f32;
+                hit.score *= 1.0 + 0.15 * extra;
+                hit
+            })
+            .collect();
+
+        fused.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                // Stable tie-break so output is deterministic.
+                .then_with(|| a.title.cmp(&b.title))
         });
-        let mut seen = std::collections::HashSet::new();
-        hits.retain(|h| seen.insert(h.title.clone()));
-        hits.truncate(limit);
-        hits
+        fused.truncate(limit);
+        fused
     }
 
-    /// Keyword search over the document store, weighting title over body and
-    /// scaling by document confidence (§948).
+    /// Keyword search over the document store using **BM25** ranking — terms that
+    /// are rare across the corpus weigh more (IDF), term frequency saturates, and
+    /// long documents are length-normalized. Title hits get a field boost and the
+    /// score scales by document confidence (§948). BM25 is the standard lexical
+    /// half of hybrid search (§950).
     fn keyword_hits(&self, terms: &[String]) -> Vec<Hit> {
         let docs = self.store.search(&Query::default()).unwrap_or_default();
+        if docs.is_empty() || terms.is_empty() {
+            return Vec::new();
+        }
+
+        // Tokenize once; track per-doc title/body tokens and effective length.
+        let tokenized: Vec<(Vec<String>, Vec<String>)> = docs
+            .iter()
+            .map(|d| (tokens(&d.title), tokens(&d.body)))
+            .collect();
+        let n = docs.len() as f32;
+        let avgdl = {
+            let total: usize = tokenized.iter().map(|(t, b)| t.len() + b.len()).sum();
+            (total as f32 / n).max(1.0)
+        };
+
+        // Document frequency per query term (docs containing it in title or body).
+        let idf = |term: &str| -> f32 {
+            let df = tokenized
+                .iter()
+                .filter(|(t, b)| tf(t, term) + tf(b, term) > 0)
+                .count() as f32;
+            // BM25+ idf form: always >= 0.
+            ((n - df + 0.5) / (df + 0.5) + 1.0).ln()
+        };
+        let idfs: Vec<f32> = terms.iter().map(|t| idf(t)).collect();
+
         let mut hits = Vec::new();
-        for doc in docs {
-            let title = doc.title.to_lowercase();
-            let body = doc.body.to_lowercase();
+        for (doc, (title_tokens, body_tokens)) in docs.iter().zip(&tokenized) {
+            let dl = (title_tokens.len() + body_tokens.len()) as f32;
             let mut score = 0.0f32;
-            for t in terms {
-                score += 2.0 * count_matches(&title, t) as f32;
-                score += count_matches(&body, t) as f32;
+            for (term, &idf) in terms.iter().zip(&idfs) {
+                let tf_eff =
+                    TITLE_BOOST * tf(title_tokens, term) as f32 + tf(body_tokens, term) as f32;
+                if tf_eff == 0.0 {
+                    continue;
+                }
+                let denom = tf_eff + BM25_K1 * (1.0 - BM25_B + BM25_B * dl / avgdl);
+                score += idf * (tf_eff * (BM25_K1 + 1.0)) / denom;
             }
             if score > 0.0 {
                 score *= doc.confidence as f32 / 100.0;
@@ -354,6 +433,56 @@ mod tests {
         assert_eq!(hits.len(), 2);
         // Title match ("kernel design") outranks the body-only mention.
         assert_eq!(hits[0].title, "kernel design");
+    }
+
+    #[test]
+    fn bm25_weights_rare_terms_higher() {
+        let mut store = InMemoryStore::new();
+        // Five docs make "common" a frequent (low-IDF) term.
+        for i in 0..5 {
+            store
+                .write(Document::new("note", format!("c{i}"), "common"))
+                .unwrap();
+        }
+        store.write(Document::new("note", "A", "common")).unwrap(); // common only
+        store.write(Document::new("note", "B", "rare")).unwrap(); // rare term
+        let graph = KnowledgeGraph::new();
+        let r = Retriever::new(&store, &graph);
+        let hits = r.search("common rare", 10);
+        let score = |t: &str| hits.iter().find(|h| h.title == t).map(|h| h.score).unwrap();
+        // The rare-term match outranks the common-term match (higher IDF).
+        assert!(
+            score("B") > score("A"),
+            "rare {} should beat common {}",
+            score("B"),
+            score("A")
+        );
+    }
+
+    #[test]
+    fn corroboration_across_sources_boosts_score() {
+        let mut store = InMemoryStore::new();
+        store
+            .write(Document::new("note", "Graphlib", "Graphlib is a tool"))
+            .unwrap();
+        let mut graph = KnowledgeGraph::new();
+        graph.add_node(NodeKind::Tool, "Graphlib", 100);
+        let empty = KnowledgeGraph::new();
+
+        let with_graph = Retriever::new(&store, &graph).search("Graphlib", 10);
+        let keyword_only = Retriever::new(&store, &empty).search("Graphlib", 10);
+        let c = with_graph
+            .iter()
+            .find(|h| h.title == "Graphlib")
+            .unwrap()
+            .score;
+        let s = keyword_only
+            .iter()
+            .find(|h| h.title == "Graphlib")
+            .unwrap()
+            .score;
+        // Two corroborating sources (keyword + graph) outrank one.
+        assert!(c > s, "corroborated {c} should exceed single-source {s}");
     }
 
     #[test]
