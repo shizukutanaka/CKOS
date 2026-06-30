@@ -41,7 +41,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 914–916 | Message bus / format / service mesh | ✅ | `sdk::messaging` |
 | 917–919 | Tool registry / adapter / permissions | ✅ | `plugins` |
 | 920 | Workflow compiler | ✅ | `planner` (intent → DAG) |
-| 921–922 | Agent / collective reflection | ✅ | `sdk::reflection` |
+| 921–922 | Agent / collective reflection | ✅ | `sdk::reflection` (confidence-weighted majority-vote consensus, self-consistency) |
 | 923 | Knowledge bus | ✅ | `sdk::knowledge_bus` |
 | 924–925 | Runtime pool / edge | 🟡 | `runtime::select` (local-preferred); real edge runtimes ⏳ |
 | 926 | Distributed workflow | ⏳ | sync engine done; distributed driver pending |

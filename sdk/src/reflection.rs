@@ -77,28 +77,64 @@ pub struct Consensus {
     pub score: u8,
     /// Distinct hints, in first-seen order.
     pub hints: Vec<String>,
+    /// The hint with the strongest support under confidence-weighted majority
+    /// voting (self-consistency, Wang et al. 2022; weighted by Li et al. 2023).
+    /// `None` only when there are no reflections.
+    pub majority_hint: Option<String>,
+    /// Fraction of the total vote weight behind `majority_hint` (0..=1) — how
+    /// much the reflectors agree. Near 1.0 = strong agreement.
+    pub agreement: f32,
 }
 
 /// Combine several reflections into a consensus (§922). Empty input yields a
 /// zero-score, hint-less consensus.
+///
+/// Beyond the mean score, the dominant improvement is chosen by
+/// **confidence-weighted majority vote**: each reflection votes for its hint
+/// with weight equal to its score, so an improvement that several confident
+/// reflectors agree on wins over one a single low-confidence reflector raised.
 pub fn consensus(reflections: &[Reflection]) -> Consensus {
     if reflections.is_empty() {
         return Consensus {
             score: 0,
             hints: Vec::new(),
+            majority_hint: None,
+            agreement: 0.0,
         };
     }
     let sum: u32 = reflections.iter().map(|r| r.score as u32).sum();
     // Mean of per-reflection scores (each 0..=100), so it always fits a u8;
     // clamp makes that invariant explicit rather than relying on a bare cast.
     let score = (sum / reflections.len() as u32).min(100) as u8;
-    let mut hints = Vec::new();
+
+    // Distinct hints (first-seen order) and confidence-weighted vote per hint.
+    let mut hints: Vec<String> = Vec::new();
+    let mut weight: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     for r in reflections {
         if !hints.contains(&r.hint) {
             hints.push(r.hint.clone());
         }
+        // +1 so a zero-score reflection still casts a (weak) vote.
+        *weight.entry(r.hint.clone()).or_default() += r.score as u32 + 1;
     }
-    Consensus { score, hints }
+    let total: u32 = weight.values().sum();
+    // Winner = highest weight; first-seen order breaks ties deterministically
+    // (strict `>` keeps the earliest hint on a tie).
+    let mut best = &hints[0];
+    for h in &hints {
+        if weight[h] > weight[best] {
+            best = h;
+        }
+    }
+    let best = best.clone();
+    let agreement = weight[&best] as f32 / total as f32;
+
+    Consensus {
+        score,
+        hints,
+        majority_hint: Some(best),
+        agreement,
+    }
 }
 
 /// Persist a reflection to memory as a `reflection` document (§921), tagging it
@@ -158,7 +194,27 @@ mod tests {
 
     #[test]
     fn empty_consensus_is_zero() {
-        assert_eq!(consensus(&[]).score, 0);
+        let c = consensus(&[]);
+        assert_eq!(c.score, 0);
+        assert!(c.majority_hint.is_none());
+        assert_eq!(c.agreement, 0.0);
+    }
+
+    #[test]
+    fn consensus_picks_confidence_weighted_majority() {
+        let r = |score: u8, hint: &str| Reflection {
+            task: TaskId::new(),
+            score,
+            hint: hint.into(),
+        };
+        // "B" is raised once at low confidence; "A" twice at high confidence —
+        // weighted majority must choose A, with agreement reflecting its share.
+        let reflections = vec![r(90, "A"), r(10, "B"), r(90, "A")];
+        let c = consensus(&reflections);
+        assert_eq!(c.majority_hint.as_deref(), Some("A"));
+        // A weight = 91+91=182, B weight = 11, total 193 → ~0.943.
+        assert!(c.agreement > 0.9);
+        assert_eq!(c.hints.len(), 2);
     }
 
     #[test]

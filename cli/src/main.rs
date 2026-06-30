@@ -248,6 +248,12 @@ fn cmd_run(rest: &[String]) -> ExitCode {
             let reflections = engine.reflect(&HeuristicReflector::new(), &results);
             let verdict = consensus(&reflections);
             println!("\nreflection: consensus score {}/100", verdict.score);
+            if let Some(top) = &verdict.majority_hint {
+                println!(
+                    "  top improvement ({:.0}% agreement): {top}",
+                    verdict.agreement * 100.0
+                );
+            }
             for hint in &verdict.hints {
                 println!("  - {hint}");
             }
