@@ -94,6 +94,46 @@ fn terms(query: &str) -> Vec<String> {
     tokens(query)
 }
 
+/// Very common words excluded from query-expansion candidates.
+const EXPANSION_STOPWORDS: &[&str] = &[
+    "the", "and", "for", "are", "was", "were", "with", "that", "this", "from", "have", "has",
+    "had", "but", "not", "you", "all", "any", "its", "their", "they", "she", "him", "her", "his",
+    "our", "your", "via", "per", "into", "onto", "over", "under", "than", "then", "them", "out",
+];
+
+/// Expand `query` with terms drawn from pseudo-relevant `feedback` texts
+/// (pseudo-relevance feedback à la Rocchio/RM3). The most frequent informative
+/// terms in the feedback set that aren't already in the query are appended, so a
+/// second retrieval pass recalls documents the original wording missed. Returns
+/// the original query unchanged when no useful term is found.
+pub fn expand_query(query: &str, feedback: &[String], max_terms: usize) -> String {
+    use std::collections::HashMap;
+    if max_terms == 0 {
+        return query.to_string();
+    }
+    let existing: std::collections::HashSet<String> = tokens(query).into_iter().collect();
+    let mut freq: HashMap<String, usize> = HashMap::new();
+    for text in feedback {
+        for tok in tokens(text) {
+            if tok.chars().count() > 2
+                && !existing.contains(&tok)
+                && !EXPANSION_STOPWORDS.contains(&tok.as_str())
+            {
+                *freq.entry(tok).or_default() += 1;
+            }
+        }
+    }
+    let mut ranked: Vec<(String, usize)> = freq.into_iter().collect();
+    // Most frequent first; alphabetical tie-break for deterministic output.
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let expansion: Vec<String> = ranked.into_iter().take(max_terms).map(|(t, _)| t).collect();
+    if expansion.is_empty() {
+        query.to_string()
+    } else {
+        format!("{query} {}", expansion.join(" "))
+    }
+}
+
 fn count_matches(haystack: &str, term: &str) -> usize {
     haystack.matches(term).count()
 }
@@ -268,6 +308,34 @@ impl<'a> Retriever<'a> {
         }
 
         fuse_rrf(lists, limit)
+    }
+
+    /// Two-pass search with pseudo-relevance feedback (§949). The first pass'
+    /// top documents seed [`expand_query`], and the expanded query drives the
+    /// returned search — recalling documents the original phrasing missed.
+    /// `feedback_docs` controls how many top docs feed expansion; `max_terms`
+    /// how many terms are added.
+    pub fn search_expanded(
+        &self,
+        question: &str,
+        limit: usize,
+        feedback_docs: usize,
+        max_terms: usize,
+    ) -> Vec<Hit> {
+        let docs = self
+            .store
+            .search(&Query {
+                text: Some(question.to_string()),
+                limit: feedback_docs,
+                ..Default::default()
+            })
+            .unwrap_or_default();
+        let feedback: Vec<String> = docs
+            .iter()
+            .map(|d| format!("{} {}", d.title, d.body))
+            .collect();
+        let expanded = expand_query(question, &feedback, max_terms);
+        self.search(&expanded, limit)
     }
 
     /// Search, then diversify with MMR (§949–§950). Over-fetches a candidate pool
@@ -532,6 +600,50 @@ mod tests {
             score("B"),
             score("A")
         );
+    }
+
+    #[test]
+    fn expand_query_adds_feedback_terms() {
+        let feedback = vec![
+            "the scheduler dispatches tasks".to_string(),
+            "scheduler priority queue".to_string(),
+        ];
+        let expanded = expand_query("kernel", &feedback, 2);
+        // Original term kept; "scheduler" (frequency 2) is added; "the" filtered.
+        assert!(expanded.starts_with("kernel "));
+        assert!(expanded.contains("scheduler"));
+        assert!(!expanded.contains("the "));
+        // No feedback → unchanged.
+        assert_eq!(expand_query("kernel", &[], 3), "kernel");
+    }
+
+    #[test]
+    fn search_expanded_recalls_what_the_original_missed() {
+        let mut store = InMemoryStore::new();
+        store
+            .write(Document::new(
+                "note",
+                "kernel",
+                "the scheduler dispatches tasks",
+            ))
+            .unwrap();
+        store
+            .write(Document::new(
+                "note",
+                "scheduler internals",
+                "priority queue",
+            ))
+            .unwrap();
+        let graph = KnowledgeGraph::new();
+        let r = Retriever::new(&store, &graph);
+
+        // Plain search for "kernel" misses the scheduler doc (no "kernel" in it).
+        let plain = r.search("kernel", 10);
+        assert!(!plain.iter().any(|h| h.title == "scheduler internals"));
+
+        // Expanding from the top doc's body ("scheduler") recalls it.
+        let expanded = r.search_expanded("kernel", 10, 3, 3);
+        assert!(expanded.iter().any(|h| h.title == "scheduler internals"));
     }
 
     #[test]
