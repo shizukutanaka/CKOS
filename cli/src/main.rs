@@ -85,6 +85,10 @@ COMMANDS:
     graph [--dot] --session <dir>    Extract a graph from a session's documents
     gc <dir> [--min-confidence N]    Garbage-collect a session's stored documents
     verify <text…>                   Run the built-in verifier checks on text
+    tool --list                      List built-in tools and required permissions
+    tool [--grant <csv>] <name>      Invoke a tool through the permission gate
+      <input…>                       (§917/§919); denied if a permission is
+                                     required but not in --grant
     capabilities                     List the built-in capability vocabulary
     version                          Print the CKOS version
     help                             Show this help
@@ -103,6 +107,7 @@ fn main() -> ExitCode {
         Some("graph") => cmd_graph(&args[1..]),
         Some("gc") => cmd_gc(&args[1..]),
         Some("verify") => cmd_verify(&args[1..]),
+        Some("tool") => cmd_tool(&args[1..]),
         Some("capabilities") => cmd_capabilities(),
         Some("version") => {
             println!("ckos {}", env!("CARGO_PKG_VERSION"));
@@ -803,6 +808,86 @@ fn cmd_verify(rest: &[String]) -> ExitCode {
     } else {
         println!("\nverification FAILED");
         ExitCode::FAILURE
+    }
+}
+
+/// A demo tool that requires a permission, so `ckos tool` exercises the
+/// least-privilege gate (§919) rather than only ever calling a permissionless
+/// tool. Kept local to the CLI — a real deployment registers its own tools.
+struct ReverseTool;
+
+impl Tool for ReverseTool {
+    fn metadata(&self) -> ToolMetadata {
+        ToolMetadata {
+            name: "reverse".into(),
+            description: "reverses its input (requires text.transform)".into(),
+            permissions: vec!["text.transform".into()],
+        }
+    }
+    fn execute(&self, input: &str) -> Result<String> {
+        Ok(input.chars().rev().collect())
+    }
+}
+
+/// The demo tool registry `ckos tool` operates on.
+fn demo_tools() -> ToolRegistry {
+    let mut reg = ToolRegistry::new();
+    reg.register(Box::new(UppercaseTool));
+    reg.register(Box::new(ReverseTool));
+    reg
+}
+
+fn cmd_tool(rest: &[String]) -> ExitCode {
+    if wants_help(rest) || rest.is_empty() {
+        println!("usage: ckos tool --list | ckos tool [--grant <perm1,perm2,…>] <name> <input…>\n  Invoke a registered tool through the permission gate (§917/§919).");
+        return ExitCode::SUCCESS;
+    }
+    if rest[0] == "--list" {
+        println!("built-in tools (§917):");
+        let reg = demo_tools();
+        for name in reg.names() {
+            println!("  - {name}");
+        }
+        println!("(grant permissions with --grant <perm1,perm2,…>)");
+        return ExitCode::SUCCESS;
+    }
+    let (grant_csv, rest) = match take_value_flag(rest, "--grant") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let (name, input) = match rest.as_slice() {
+        [name, i @ ..] if !i.is_empty() => (name.clone(), i.join(" ")),
+        _ => {
+            eprintln!(
+                "error: usage `ckos tool [--grant <csv>] <name> <input…>` (see `ckos tool --list`)"
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let mut reg = demo_tools();
+    for perm in grant_csv
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        reg.grant(perm);
+    }
+
+    match reg.invoke(&name, &input) {
+        Ok(output) => {
+            println!("{output}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
     }
 }
 

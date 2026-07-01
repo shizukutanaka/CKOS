@@ -66,6 +66,7 @@ appear in any position, and `ckos <command> --help` prints per-command usage.
 | `eval --relevant <csv> [--k N] <dir> <query…>` | Score search quality (Precision/Recall/MRR/nDCG) against known-relevant titles | `ckos eval --relevant "Transformer" ./sess Transformer` |
 | `gc <dir> [--min-confidence N]` | Garbage-collect low-value documents | `ckos gc ./sess --min-confidence 30` |
 | `verify <text…>` | Run the independent §899 checks (non-empty, repetition, arithmetic, JSON, citations, security) | `ckos verify 'see [1]'` |
+| `tool --list` / `tool [--grant <csv>] <name> <input…>` | Invoke a tool through the least-privilege permission gate (§917/§919) | `ckos tool --grant text.transform reverse hello` |
 | `capabilities` | List the built-in capability vocabulary | `ckos capabilities` |
 | `workflow <file>` | Load and execute a workflow definition file | `ckos workflow pipeline.wf` |
 | `version` | Print the CKOS version | `ckos version` |

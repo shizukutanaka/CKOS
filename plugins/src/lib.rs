@@ -7,6 +7,7 @@
 //! per §901, modelled here by the registry's permission gate).
 
 use ckos_kernel::error::{KernelError, Result};
+use ckos_kernel::permission_matches;
 use std::collections::{HashMap, HashSet};
 
 /// Plugin categories (§901).
@@ -77,7 +78,10 @@ impl ToolRegistry {
     }
 
     /// Invoke a tool by name. Fails if the tool is missing or any required
-    /// permission has not been granted (§919).
+    /// permission has not been granted (§919). A granted token may cover a
+    /// required one via a trailing `*` wildcard (e.g. `filesystem.*` covers
+    /// `filesystem.write`) — the same rule `policy::PolicyEngine` uses, so a
+    /// grant means the same thing everywhere it's checked.
     pub fn invoke(&self, name: &str, input: &str) -> Result<String> {
         let tool = self
             .tools
@@ -85,7 +89,7 @@ impl ToolRegistry {
             .ok_or_else(|| KernelError::NotFound(format!("tool {name}")))?;
         let meta = tool.metadata();
         for perm in &meta.permissions {
-            if !self.granted.contains(perm) {
+            if !self.granted.iter().any(|g| permission_matches(g, perm)) {
                 return Err(KernelError::PolicyDenied(format!(
                     "tool {name} requires permission {perm}"
                 )));
@@ -154,5 +158,69 @@ mod tests {
             reg.invoke("nope", "x"),
             Err(KernelError::NotFound(_))
         ));
+    }
+
+    #[test]
+    fn wildcard_grant_covers_the_tool_permission() {
+        // A `filesystem.*` grant must satisfy a tool requiring
+        // `filesystem.write` — matching policy::PolicyEngine's wildcard rule,
+        // so the two permission systems agree on what a grant covers.
+        let mut reg = ToolRegistry::new();
+        reg.register(Box::new(FileWriteTool));
+        reg.grant("filesystem.*");
+        assert_eq!(reg.invoke("fs_write", "a.txt").unwrap(), "wrote a.txt");
+    }
+
+    struct DualPermTool;
+    impl Tool for DualPermTool {
+        fn metadata(&self) -> ToolMetadata {
+            ToolMetadata {
+                name: "dual".into(),
+                description: "needs two permissions".into(),
+                permissions: vec!["read".into(), "write".into()],
+            }
+        }
+        fn execute(&self, _input: &str) -> Result<String> {
+            Ok("ok".into())
+        }
+    }
+
+    #[test]
+    fn all_required_permissions_must_be_granted() {
+        let mut reg = ToolRegistry::new();
+        reg.register(Box::new(DualPermTool));
+        reg.grant("read"); // only one of two required permissions
+        assert!(reg.invoke("dual", "x").is_err());
+        reg.grant("write");
+        assert_eq!(reg.invoke("dual", "x").unwrap(), "ok");
+    }
+
+    struct RejectingTool;
+    impl Tool for RejectingTool {
+        fn metadata(&self) -> ToolMetadata {
+            ToolMetadata {
+                name: "picky".into(),
+                description: "rejects bad input".into(),
+                permissions: vec![],
+            }
+        }
+        fn validate(&self, input: &str) -> Result<()> {
+            if input.is_empty() {
+                Err(KernelError::Other("empty input".into()))
+            } else {
+                Ok(())
+            }
+        }
+        fn execute(&self, input: &str) -> Result<String> {
+            Ok(input.to_string())
+        }
+    }
+
+    #[test]
+    fn validate_errors_propagate_and_block_execution() {
+        let mut reg = ToolRegistry::new();
+        reg.register(Box::new(RejectingTool));
+        assert!(reg.invoke("picky", "").is_err());
+        assert_eq!(reg.invoke("picky", "ok").unwrap(), "ok");
     }
 }

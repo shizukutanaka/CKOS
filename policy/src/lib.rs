@@ -6,6 +6,7 @@
 //! least-privilege the norm (§919).
 
 use ckos_kernel::error::{KernelError, Result};
+use ckos_kernel::permission_matches;
 use std::collections::{HashMap, HashSet};
 
 pub mod identity;
@@ -66,13 +67,9 @@ impl PolicyEngine {
     /// segment (e.g. a role granted `graph.*` covers `graph.read`).
     fn rbac_allows(&self, roles: &[String], action: &str) -> bool {
         roles.iter().any(|role| {
-            self.role_permissions.get(role).is_some_and(|perms| {
-                perms.contains(action)
-                    || perms.iter().any(|p| {
-                        p.strip_suffix('*')
-                            .is_some_and(|prefix| action.starts_with(prefix))
-                    })
-            })
+            self.role_permissions
+                .get(role)
+                .is_some_and(|perms| perms.iter().any(|p| permission_matches(p, action)))
         })
     }
 
@@ -140,6 +137,29 @@ mod tests {
         assert!(p.evaluate(&req(&["editor"], "graph.read", &[])).is_ok());
         assert!(p.evaluate(&req(&["editor"], "graph.write", &[])).is_ok());
         assert!(p.evaluate(&req(&["editor"], "docker.run", &[])).is_err());
+    }
+
+    #[test]
+    fn abac_allow_grants_access_with_no_rbac_role() {
+        // A subject with a role that holds no RBAC permission at all must still
+        // be granted access when an ABAC allow rule matches — proving the
+        // `abac_allow || rbac_allows(..)` branch actually grants, not just the
+        // deny-override branch already covered elsewhere.
+        let mut p = PolicyEngine::new();
+        p.add_rule(AbacRule {
+            action: "config.read".into(),
+            attribute_key: "env".into(),
+            attribute_value: "staging".into(),
+            deny: false,
+        });
+        // "guest" has no granted permissions whatsoever.
+        assert!(p
+            .evaluate(&req(&["guest"], "config.read", &[("env", "staging")]))
+            .is_ok());
+        // A different attribute value doesn't match the rule -> still denied.
+        assert!(p
+            .evaluate(&req(&["guest"], "config.read", &[("env", "prod")]))
+            .is_err());
     }
 
     #[test]

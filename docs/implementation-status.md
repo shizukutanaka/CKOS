@@ -24,7 +24,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 898 | Planner | ✅ | `planner` |
 | 899 | Verifier (independent) | ✅ | `verifier` (non-empty, repetition/degeneration, arithmetic, JSON, citation, security-policy) |
 | 900 | Runtime registry | ✅ | `runtime` (trait + registry; real engines ⏳) |
-| 901 | Plugin SDK | 🟡 | `plugins` (tool/registry/permissions; WASM sandbox ⏳) |
+| 901 | Plugin SDK | 🟡 | `plugins` (tool/registry/permissions, `ckos tool`; WASM sandbox ⏳) |
 | 902 | API gateway | 🟡 | `cli` done; REST/gRPC/WebSocket/MCP ⏳ |
 | 903 | Audit logging | ✅ | `kernel::audit` |
 | 904 | Telemetry | ✅ | `kernel::telemetry` (hardware probe seam; real probe ⏳) |
@@ -39,7 +39,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 910–912 | Capability registry / discovery | ✅ | `sdk::CapabilityRegistry`, `kernel::Capability` |
 | 913 | Multi-factor agent scheduler | ✅ | `scheduler::ScoreFactors` (+ telemetry `runtime_fit`) |
 | 914–916 | Message bus / format / service mesh | ✅ | `sdk::messaging` |
-| 917–919 | Tool registry / adapter / permissions | ✅ | `plugins` |
+| 917–919 | Tool registry / adapter / permissions | ✅ | `plugins` (permission gate incl. `.*` wildcards, shared with `policy` via `kernel::permission_matches`); `ckos tool` |
 | 920 | Workflow compiler | ✅ | `planner` (intent → DAG) |
 | 921–922 | Agent / collective reflection | ✅ | `sdk::reflection` (confidence-weighted majority-vote consensus, self-consistency) |
 | 923 | Knowledge bus | ✅ | `sdk::knowledge_bus` |

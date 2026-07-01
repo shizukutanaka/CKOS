@@ -278,6 +278,26 @@ fn search_lambda_flag_controls_diversity() {
 }
 
 #[test]
+fn tool_permission_gate_denies_then_grants() {
+    // No permission granted: the gate denies.
+    let denied = ckos(&["tool", "reverse", "hello"]);
+    assert!(!denied.status.success());
+
+    // Exact grant permits.
+    let exact = ckos(&["tool", "--grant", "text.transform", "reverse", "hello"]);
+    assert!(exact.status.success());
+    assert_eq!(stdout(&exact).trim(), "olleh");
+
+    // A wildcard grant covers the required permission too (policy::PolicyEngine
+    // parity), and a permissionless tool needs no grant at all.
+    let wildcard = ckos(&["tool", "--grant", "text.*", "reverse", "hello"]);
+    assert!(wildcard.status.success());
+    let uppercase = ckos(&["tool", "uppercase", "hi"]);
+    assert!(uppercase.status.success());
+    assert_eq!(stdout(&uppercase).trim(), "HI");
+}
+
+#[test]
 fn verify_fails_on_bad_content() {
     let ok = ckos(&["verify", "clean text"]);
     assert!(ok.status.success());
@@ -306,7 +326,7 @@ fn flags_work_in_any_position() {
 
 #[test]
 fn per_command_help_is_shown() {
-    for cmd in ["plan", "run", "graph", "kql", "search", "eval"] {
+    for cmd in ["plan", "run", "graph", "kql", "search", "eval", "tool"] {
         let out = ckos(&[cmd, "--help"]);
         assert!(out.status.success(), "{cmd} --help should succeed");
         assert!(
