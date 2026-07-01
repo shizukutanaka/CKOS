@@ -34,6 +34,17 @@ use std::time::Instant;
 /// warrant a default-deny authorization check (§929) even though the rest of
 /// the capability vocabulary runs unrestricted. Not configurable — deliberately
 /// small and fixed, so it can't be quietly narrowed by a careless caller.
+///
+/// **This gate only fires when a task already carries one of these
+/// capabilities.** `ckos_planner::HeuristicPlanner` (the planner behind
+/// `ckos run`) deliberately never infers them from free text — see its
+/// module doc for why a keyword classifier here was tested and rejected as
+/// actively unsafe (it misses most real phrasings, creating false
+/// confidence). Concretely: `ckos run --role guest "diagnose my symptoms"`
+/// runs completely unauthorized today, because the planner emits `Reasoning`,
+/// not `Medical`. The gate only protects a task that explicitly carries the
+/// sensitive capability — via a hand-authored `ckos workflow` file
+/// (`step x: medical`) or a custom `Planner`/agent that assigns it knowingly.
 const SENSITIVE_CAPABILITIES: [Capability; 4] = [
     Capability::Finance,
     Capability::Medical,

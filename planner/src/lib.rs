@@ -55,6 +55,23 @@ pub trait Planner {
 /// coding, translation, question, or generic) and emits the matching capability
 /// pipeline — the research case being the canonical §895 flow. A model-backed
 /// planner can replace it behind the [`Planner`] trait.
+///
+/// **Deliberately does not classify regulated domains** (finance/medical/
+/// legal/robotics — see `ckos_sdk::engine::SENSITIVE_CAPABILITIES`). A
+/// keyword list for those domains was prototyped and rejected: tested against
+/// realistic paraphrases of a medical question, it missed 3 of 4 (only an
+/// exact "diagnose"/"symptom"/... hit was ever caught). A safety gate with
+/// that miss rate is worse than no gate — it invites operators to trust
+/// `ckos run --role` to catch sensitive content when it demonstrably can't,
+/// which is also the same lexical-only limitation already documented for
+/// `HashingEmbedder`. Detecting regulated-domain intent from free text is
+/// itself a form of judgment §891 keeps out of this kernel; the honest
+/// contract is that only an explicit capability declaration (e.g. a
+/// hand-authored `step x: medical` in a `ckos workflow` file, or a
+/// custom `Planner`/agent) reaches those capabilities — never this planner's
+/// heuristics. See `heuristic_planner_never_infers_regulated_capabilities`
+/// below, which pins this down as regression-tested behaviour, not
+/// unexamined absence.
 #[derive(Default)]
 pub struct HeuristicPlanner;
 
@@ -178,6 +195,44 @@ mod tests {
             dag.task(order[0]).unwrap().capability,
             Capability::Retrieval
         );
+    }
+
+    #[test]
+    fn heuristic_planner_never_infers_regulated_capabilities() {
+        // Locks in the module doc's claim: no input, however clearly about a
+        // regulated domain to a human reader, ever produces
+        // Finance/Medical/Legal/Robotics from this planner — including
+        // prompts an exact-keyword classifier would miss (the reason that
+        // approach was rejected; see the module doc). If this planner is ever
+        // intentionally extended to classify these domains, this test must
+        // fail and be updated deliberately, not silently.
+        let prompts = [
+            "diagnose patient symptoms",
+            "what pill helps a headache",
+            "should I take ibuprofen with my blood thinner",
+            "is this mole cancerous",
+            "should I sue my landlord",
+            "is this contract legally binding",
+            "how much tax do I owe on this investment",
+            "move the robot arm to pick up the part",
+        ];
+        let regulated = [
+            Capability::Finance,
+            Capability::Medical,
+            Capability::Legal,
+            Capability::Robotics,
+        ];
+        for p in prompts {
+            let dag = HeuristicPlanner::new().plan(p);
+            for step in dag.topological_order().unwrap() {
+                let cap = &dag.task(step).unwrap().capability;
+                assert!(
+                    !regulated.contains(cap),
+                    "planner must never infer a regulated capability; \
+                     {p:?} produced {cap} — see this planner's module doc"
+                );
+            }
+        }
     }
 
     #[test]

@@ -21,7 +21,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 895 | Workflow DAG | ✅ | `workflow::Dag` (Kahn's-algorithm topological order; rejects duplicate step names) |
 | 896 | Memory hierarchy L0–L5 | ✅ | `memory::MemoryTier` + `rank_memories` (Generative-Agents recency×importance×relevance) |
 | 897 | Knowledge graph | ✅ | `graph` (+ `GraphStore` file persistence) |
-| 898 | Planner | ✅ | `planner` |
+| 898 | Planner | ✅ | `planner` — deliberately never infers regulated capabilities (finance/medical/legal/robotics) from free text; a keyword classifier was tested and rejected as unsafe (see module doc) |
 | 899 | Verifier (independent) | ✅ | `verifier` (non-empty, repetition/degeneration, arithmetic, JSON, citation, security-policy) |
 | 900 | Runtime registry | ✅ | `runtime` (trait + registry; real engines ⏳) |
 | 901 | Plugin SDK | 🟡 | `plugins` (tool/registry/permissions, `ckos tool`; WASM sandbox ⏳) |

@@ -188,7 +188,7 @@ fn cmd_plan(rest: &[String]) -> ExitCode {
 
 fn cmd_run(rest: &[String]) -> ExitCode {
     if wants_help(rest) {
-        println!("usage: ckos run [--session <dir>] [--role <role>] <intent…>\n  Plan and execute end-to-end; --session persists the run and grows its graph.\n  --role attaches RBAC authorization (§929): finance/medical/legal/robotics\n  steps are denied unless the role is granted that capability (built-in roles:\n  admin, guest). Without --role, every capability runs unrestricted, as before.");
+        println!("usage: ckos run [--session <dir>] [--role <role>] <intent…>\n  Plan and execute end-to-end; --session persists the run and grows its graph.\n  --role attaches RBAC authorization (§929) for finance/medical/legal/robotics\n  steps (built-in roles: admin, guest). CAUTION: the built-in planner never\n  classifies free text into those capabilities (a keyword classifier was\n  tested and rejected as unsafe — see planner's docs), so --role has no effect\n  here in practice; use `ckos workflow` with an explicit `step x: medical`\n  (etc.) to actually reach a gated capability.");
         return ExitCode::SUCCESS;
     }
     // Optional flags in any position; the remainder is the intent.

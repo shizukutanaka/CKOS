@@ -58,7 +58,7 @@ appear in any position, and `ckos <command> --help` prints per-command usage.
 | Command | What it does | Example |
 |---------|--------------|---------|
 | `plan [--dot] <intent…>` | Decompose an intent into a workflow DAG | `ckos plan "research the Transformer paper"` |
-| `run [--session <dir>] [--role R] <intent…>` | Plan + execute; `--session` persists the run and grows its knowledge graph; `--role` authorizes finance/medical/legal/robotics steps (§929) — every other capability always runs unrestricted | `ckos run --session ./sess "research X"` |
+| `run [--session <dir>] [--role R] <intent…>` | Plan + execute; `--session` persists the run and grows its knowledge graph; `--role` authorizes finance/medical/legal/robotics steps (§929). **Caution**: the built-in planner never classifies free text into those capabilities, so `--role` has no observable effect via `run` — see `ckos workflow` | `ckos run --session ./sess "research X"` |
 | `history <dir>` | Show a session's past runs | `ckos history ./sess` |
 | `search [--synonyms] [--expand] [--diverse] [--lambda N] <dir> <query…>` | Hybrid BM25 + vector + graph search (RRF-fused); `--synonyms` bridges vocabulary gaps with a built-in domain table, `--expand` widens recall (PRF), `--diverse` re-ranks for variety (MMR, tune with `--lambda` 0..1) | `ckos search --synonyms ./sess "dispatcher urgency"` |
 | `graph [--dot] <text…>` / `graph [--dot] --session <dir>` | Extract a typed knowledge graph from text or a session's docs | `ckos graph --session ./sess` |
