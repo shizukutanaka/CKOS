@@ -222,6 +222,11 @@ mod tests {
             runtime: "echo".into(),
             output: "summary".into(),
             verified,
+            state: if verified {
+                ckos_kernel::task::TaskState::Completed
+            } else {
+                ckos_kernel::task::TaskState::Failed
+            },
         }
     }
 
@@ -263,6 +268,11 @@ mod tests {
             runtime: "echo".into(),
             output: output.into(),
             verified,
+            state: if verified {
+                ckos_kernel::task::TaskState::Completed
+            } else {
+                ckos_kernel::task::TaskState::Failed
+            },
         };
         session
             .record_run(&[

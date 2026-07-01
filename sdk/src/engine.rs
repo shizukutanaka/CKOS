@@ -19,7 +19,7 @@ use ckos_kernel::audit::{AuditRecord, AuditSink, InMemoryAuditLog};
 use ckos_kernel::capability::Capability;
 use ckos_kernel::error::{KernelError, Result};
 use ckos_kernel::event::{Event, EventBus, InMemoryEventBus};
-use ckos_kernel::task::Task;
+use ckos_kernel::task::{Task, TaskState};
 use ckos_kernel::telemetry::{InMemoryTelemetry, TaskMetrics, TelemetrySink};
 use ckos_kernel::TaskId;
 use ckos_runtime::{InferenceRequest, RuntimeRegistry};
@@ -46,6 +46,11 @@ pub struct ExecutionResult {
     pub output: String,
     /// Whether the verifier accepted the output (§899).
     pub verified: bool,
+    /// The task's final lifecycle state (§893): `Completed` if verified,
+    /// `Failed` if the runtime errored or verification failed. Distinguishes
+    /// "ran but failed verification" (`Failed` after `Verifying`) from
+    /// "never started" (stays `Queued` — see [`Engine::execute`]).
+    pub state: TaskState,
 }
 
 /// Orchestrates a workflow across runtimes, agents and the verifier.
@@ -87,9 +92,15 @@ impl Engine {
     }
 
     /// Execute one task: select runtime → run → verify, emitting events and
-    /// writing an audit record (§903) on every path, success or failure.
-    pub fn execute(&self, task: &Task) -> Result<ExecutionResult> {
+    /// writing an audit record (§903) on every path, success or failure. Drives
+    /// the task through its §893 lifecycle as it actually progresses — a
+    /// runtime-selection failure leaves it at `Queued` (it never started); a
+    /// runtime error transitions `Running -> Failed`; verification transitions
+    /// `Verifying -> Completed` or `Verifying -> Failed`. This is the only
+    /// place `TaskState` advances, so `task.state()` always reflects reality.
+    pub fn execute(&self, task: &mut Task) -> Result<ExecutionResult> {
         self.bus.publish(Event::TaskStarted(task.id.clone()));
+        task.transition_to(TaskState::Queued)?;
 
         let agent = self
             .agents
@@ -109,6 +120,7 @@ impl Engine {
             }
         };
         let runtime_name = runtime.name().to_string();
+        task.transition_to(TaskState::Running)?;
 
         let started = Instant::now();
         let response = match runtime.run(&InferenceRequest {
@@ -118,6 +130,7 @@ impl Engine {
         }) {
             Ok(r) => r,
             Err(e) => {
+                task.transition_to(TaskState::Failed)?;
                 self.audit.record(
                     AuditRecord::new("task.execute")
                         .runtime(&runtime_name)
@@ -134,6 +147,7 @@ impl Engine {
             tokens: response.tokens,
         });
 
+        task.transition_to(TaskState::Verifying)?;
         let report = self.verifier.verify(&response.output);
         let verified = report.passed();
         let mut record = AuditRecord::new("task.execute")
@@ -141,8 +155,10 @@ impl Engine {
             .input(&task.description)
             .output(&response.output);
         if verified {
+            task.transition_to(TaskState::Completed)?;
             self.bus.publish(Event::TaskCompleted(task.id.clone()));
         } else {
+            task.transition_to(TaskState::Failed)?;
             let reason = report
                 .failures()
                 .iter()
@@ -164,6 +180,7 @@ impl Engine {
             runtime: runtime_name,
             output: response.output,
             verified,
+            state: task.state(),
         })
     }
 
@@ -186,11 +203,11 @@ impl Engine {
         }
 
         let mut results = Vec::with_capacity(order.len());
-        while let Some(task) = scheduler.dispatch_next() {
+        while let Some(mut task) = scheduler.dispatch_next() {
             // Propagate a task failure immediately, without publishing
             // WorkflowCompleted — a subscriber must never observe that event
             // for a workflow that didn't actually finish.
-            let result = self.execute(&task)?;
+            let result = self.execute(&mut task)?;
             scheduler.mark_completed(task.id.clone());
             results.push(result);
         }
@@ -264,6 +281,9 @@ mod tests {
 
         assert_eq!(results.len(), 5);
         assert!(results.iter().all(|r| r.verified));
+        // The §893 lifecycle actually advanced to Completed for every task —
+        // not left dangling at Created/Queued.
+        assert!(results.iter().all(|r| r.state == TaskState::Completed));
         // First step is retrieval; it must run before the embedding step.
         assert_eq!(results[0].capability, Capability::Retrieval);
         assert_eq!(completed.load(Ordering::SeqCst), 5);
@@ -320,6 +340,34 @@ mod tests {
             task_completions_when_wf_completed_fires.load(Ordering::SeqCst),
             results.len()
         );
+    }
+
+    #[test]
+    fn execute_drives_the_task_lifecycle_to_completed() {
+        let engine = research_engine();
+        let mut task = Task::new("summarize", Capability::Reasoning);
+        assert_eq!(task.state(), TaskState::Created);
+        let result = engine.execute(&mut task).unwrap();
+        // Both the task itself and the returned result agree on the final
+        // state — this is no longer a parallel, disconnected bookkeeping.
+        assert_eq!(task.state(), TaskState::Completed);
+        assert_eq!(result.state, TaskState::Completed);
+    }
+
+    #[test]
+    fn execute_leaves_task_queued_when_no_runtime_is_available() {
+        // No runtime registered for the capability: selection fails before the
+        // task ever reaches Running. There is no legal Queued -> Failed
+        // transition (§893 only allows Failed from Running/Verifying), so the
+        // honest state is "never started", not a fabricated failure.
+        let engine = Engine::new(
+            RuntimeRegistry::new(),
+            CapabilityRegistry::new(),
+            Verifier::new(),
+        );
+        let mut task = Task::new("look", Capability::Vision);
+        assert!(engine.execute(&mut task).is_err());
+        assert_eq!(task.state(), TaskState::Queued);
     }
 
     #[test]

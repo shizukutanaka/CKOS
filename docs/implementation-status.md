@@ -16,7 +16,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 890 | Rust workspace | ✅ | `Cargo.toml` (12 crates) |
 | 891 | Kernel responsibilities (no inference) | ✅ | `kernel` |
 | 892 | Four-layer scheduler | ✅ | `scheduler::Scheduler` (multi-factor score + priority aging / anti-starvation) |
-| 893 | Task state machine | ✅ | `kernel::task::TaskState` |
+| 893 | Task state machine | ✅ | `kernel::task::TaskState`, driven live by `Engine::execute` (was previously unwired — see implementation notes) |
 | 894 | Event bus | ✅ | `kernel::event` |
 | 895 | Workflow DAG | ✅ | `workflow::Dag` (Kahn's-algorithm topological order; rejects duplicate step names) |
 | 896 | Memory hierarchy L0–L5 | ✅ | `memory::MemoryTier` + `rank_memories` (Generative-Agents recency×importance×relevance) |
