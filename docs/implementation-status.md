@@ -39,7 +39,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 910–912 | Capability registry / discovery | ✅ | `sdk::CapabilityRegistry`, `kernel::Capability` |
 | 913 | Multi-factor agent scheduler | ✅ | `scheduler::ScoreFactors` (+ telemetry `runtime_fit`) |
 | 914–916 | Message bus / format / service mesh | ✅ | `sdk::messaging` |
-| 917–919 | Tool registry / adapter / permissions | ✅ | `plugins` (permission gate incl. `.*` wildcards, shared with `policy` via `kernel::permission_matches`); `ckos tool` |
+| 917–919 | Tool registry / adapter / permissions | ✅ | `plugins` (permission gate incl. `.*` wildcards, shared with `policy` via `kernel::permission_matches`); `ckos tool` grants are authorized by `PolicyEngine`, not self-asserted |
 | 920 | Workflow compiler | ✅ | `planner` (intent → DAG) |
 | 921–922 | Agent / collective reflection | ✅ | `sdk::reflection` (confidence-weighted majority-vote consensus, self-consistency) |
 | 923 | Knowledge bus | ✅ | `sdk::knowledge_bus` |
@@ -47,7 +47,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 926 | Distributed workflow | ⏳ | sync engine done; distributed driver pending |
 | 927 | Session manager | ✅ | `sdk::session` (history/reflections + `recall` via Generative-Agents scoring) |
 | 928 | Enterprise identity | 🟡 | `policy::IdentityProvider` (OIDC/LDAP verification ⏳) |
-| 929 | Authorization (RBAC + ABAC) | ✅ | `policy` |
+| 929 | Authorization (RBAC + ABAC) | ✅ | `policy` — now the real authority behind `ckos tool` (was previously unwired outside its own tests) |
 | 930 | Distributed security | 🟡 | `sdk::security` (signing + replay; mTLS/cert rotation ⏳) |
 | 931–932 | Kubernetes / Docker Compose | ✅ | `Dockerfile` + `docker-compose.yml` (dev stack) + `deploy/k8s/ckos.yaml` (Deployment + HPA autoscale) |
 | 933 | Observability | 🟡 | `audit` + `telemetry`; OpenTelemetry/Prometheus export ⏳ |

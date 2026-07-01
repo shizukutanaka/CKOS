@@ -86,9 +86,9 @@ COMMANDS:
     gc <dir> [--min-confidence N]    Garbage-collect a session's stored documents
     verify <text…>                   Run the built-in verifier checks on text
     tool --list                      List built-in tools and required permissions
-    tool [--grant <csv>] <name>      Invoke a tool through the permission gate
-      <input…>                       (§917/§919); denied if a permission is
-                                     required but not in --grant
+    tool [--role <role>] <name>      Invoke a tool; required permissions are
+      <input…>                       authorized by RBAC policy (§929), not
+                                     self-granted (roles: admin, guest)
     capabilities                     List the built-in capability vocabulary
     version                          Print the CKOS version
     help                             Show this help
@@ -847,9 +847,19 @@ fn demo_tools() -> ToolRegistry {
     reg
 }
 
+/// The demo RBAC policy `ckos tool` authorizes against (§929). Two built-in
+/// roles: `admin` (granted the `text.*` wildcard) and `guest` (nothing —
+/// PolicyEngine defaults to deny). A real deployment would load roles from
+/// its own identity provider instead of hardcoding them.
+fn demo_policy() -> PolicyEngine {
+    let mut p = PolicyEngine::new();
+    p.grant("admin", "text.*");
+    p
+}
+
 fn cmd_tool(rest: &[String]) -> ExitCode {
     if wants_help(rest) || rest.is_empty() {
-        println!("usage: ckos tool --list | ckos tool [--grant <perm1,perm2,…>] <name> <input…>\n  Invoke a registered tool through the permission gate (§917/§919).");
+        println!("usage: ckos tool --list | ckos tool [--role <role>] <name> <input…>\n  Invoke a registered tool (§917/§918). Each permission the tool requires is\n  authorized against a role-based policy (§929, PolicyEngine) — not\n  self-granted — before the tool's own least-privilege gate runs (§919).\n  Built-in roles: admin (text.*), guest (nothing). Default: guest.");
         return ExitCode::SUCCESS;
     }
     if rest[0] == "--list" {
@@ -858,35 +868,51 @@ fn cmd_tool(rest: &[String]) -> ExitCode {
         for name in reg.names() {
             println!("  - {name}");
         }
-        println!("(grant permissions with --grant <perm1,perm2,…>)");
+        println!("(authorize with --role <admin|guest>, default guest)");
         return ExitCode::SUCCESS;
     }
-    let (grant_csv, rest) = match take_value_flag(rest, "--grant") {
+    let (role, rest) = match take_value_flag(rest, "--role") {
         Ok(v) => v,
         Err(e) => {
             eprintln!("error: {e}");
             return ExitCode::FAILURE;
         }
     };
+    let role = role.unwrap_or_else(|| "guest".to_string());
     let (name, input) = match rest.as_slice() {
         [name, i @ ..] if !i.is_empty() => (name.clone(), i.join(" ")),
         _ => {
             eprintln!(
-                "error: usage `ckos tool [--grant <csv>] <name> <input…>` (see `ckos tool --list`)"
+                "error: usage `ckos tool [--role <role>] <name> <input…>` (see `ckos tool --list`)"
             );
             return ExitCode::FAILURE;
         }
     };
 
-    let mut reg = demo_tools();
-    for perm in grant_csv
-        .as_deref()
-        .unwrap_or("")
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        reg.grant(perm);
+    let tools = demo_tools();
+    let Some(required) = tools.metadata(&name).map(|m| m.permissions) else {
+        eprintln!("error: unknown tool {name} (see `ckos tool --list`)");
+        return ExitCode::FAILURE;
+    };
+
+    // Authorize each required permission against the RBAC policy (§929) —
+    // the tool registry never trusts a self-asserted grant.
+    let policy = demo_policy();
+    let mut reg = tools;
+    for perm in &required {
+        let req = AccessRequest {
+            subject: "cli-user".into(),
+            roles: vec![role.clone()],
+            action: perm.clone(),
+            attributes: std::collections::HashMap::new(),
+        };
+        match policy.evaluate(&req) {
+            Ok(()) => reg.grant(perm.clone()),
+            Err(e) => {
+                eprintln!("error: role {role:?} may not use {name}: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
     }
 
     match reg.invoke(&name, &input) {

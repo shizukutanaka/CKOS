@@ -77,6 +77,12 @@ impl ToolRegistry {
         v
     }
 
+    /// A registered tool's metadata (including required permissions), without
+    /// invoking it — so a caller can decide what to authorize before running it.
+    pub fn metadata(&self, name: &str) -> Option<ToolMetadata> {
+        self.tools.get(name).map(|t| t.metadata())
+    }
+
     /// Invoke a tool by name. Fails if the tool is missing or any required
     /// permission has not been granted (§919). A granted token may cover a
     /// required one via a trailing `*` wildcard (e.g. `filesystem.*` covers
@@ -158,6 +164,15 @@ mod tests {
             reg.invoke("nope", "x"),
             Err(KernelError::NotFound(_))
         ));
+    }
+
+    #[test]
+    fn metadata_exposes_required_permissions_without_invoking() {
+        let mut reg = ToolRegistry::new();
+        reg.register(Box::new(FileWriteTool));
+        let meta = reg.metadata("fs_write").unwrap();
+        assert_eq!(meta.permissions, vec!["filesystem.write".to_string()]);
+        assert!(reg.metadata("nope").is_none());
     }
 
     #[test]

@@ -314,20 +314,25 @@ fn search_lambda_flag_controls_diversity() {
 }
 
 #[test]
-fn tool_permission_gate_denies_then_grants() {
-    // No permission granted: the gate denies.
+fn tool_permission_gate_is_authorized_by_policy_not_self_granted() {
+    // Default role (guest) has no RBAC grants: the policy denies.
     let denied = ckos(&["tool", "reverse", "hello"]);
     assert!(!denied.status.success());
+    let denied_explicit = ckos(&["tool", "--role", "guest", "reverse", "hello"]);
+    assert!(!denied_explicit.status.success());
 
-    // Exact grant permits.
-    let exact = ckos(&["tool", "--grant", "text.transform", "reverse", "hello"]);
-    assert!(exact.status.success());
-    assert_eq!(stdout(&exact).trim(), "olleh");
+    // The admin role's PolicyEngine grant (text.*) authorizes the tool's
+    // required permission (text.transform) via wildcard match — there is no
+    // client-supplied --grant flag; the role alone determines the outcome.
+    let admin = ckos(&["tool", "--role", "admin", "reverse", "hello"]);
+    assert!(admin.status.success());
+    assert_eq!(stdout(&admin).trim(), "olleh");
 
-    // A wildcard grant covers the required permission too (policy::PolicyEngine
-    // parity), and a permissionless tool needs no grant at all.
-    let wildcard = ckos(&["tool", "--grant", "text.*", "reverse", "hello"]);
-    assert!(wildcard.status.success());
+    // An unrecognized role has no policy grants either, same as guest.
+    let unknown_role = ckos(&["tool", "--role", "nosuchrole", "reverse", "hello"]);
+    assert!(!unknown_role.status.success());
+
+    // A permissionless tool needs no authorization at all, regardless of role.
     let uppercase = ckos(&["tool", "uppercase", "hi"]);
     assert!(uppercase.status.success());
     assert_eq!(stdout(&uppercase).trim(), "HI");
