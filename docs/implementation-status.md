@@ -73,7 +73,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 949 | Retrieval planner | ✅ | `retrieval::plan_retrieval` + `search_diverse`/`mmr_rerank` (MMR) + `expand_query`/`search_expanded` (pseudo-relevance feedback) |
 | 950 | Hybrid search | ✅ | `retrieval::Retriever` (BM25 keyword + vector + graph, Reciprocal Rank Fusion) |
 | 951 | Graph reasoning | ✅ | retrieval graph hits + `graph::traverse` + `pagerank`/`central_nodes` (node importance) |
-| 952 | Multi-hop planner | ✅ | `graph::traverse` + retriever hop expansion |
+| 952 | Multi-hop planner | ✅ | `graph::traverse`/`traverse_with_hops` + retriever hop expansion (score decays geometrically per hop) |
 | 953 | Memory consolidation | ✅ | `memory::consolidate` (sleep-phase pass compressing oversized docs) |
 | 954 | Garbage collection | ✅ | `memory::collect` (documents) + `graph::KnowledgeGraph::remove_orphans` (orphaned nodes) |
 | 955 | Data encryption | ⏳ | at-rest/in-transit pending (transport layer) |

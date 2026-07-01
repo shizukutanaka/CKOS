@@ -158,6 +158,10 @@ const VECTOR_THRESHOLD: f32 = 0.2;
 /// top ranks so lower ranks still contribute (Cormack et al.; used by
 /// Elasticsearch/LangChain).
 const RRF_K: f32 = 60.0;
+/// Per-hop score decay for graph traversal hits: a hop-N neighbour scores
+/// `HOP_DECAY^N` of the direct match, so a 2-hop hit is weaker than a 1-hop hit
+/// rather than receiving the same flat penalty.
+const HOP_DECAY: f32 = 0.4;
 
 /// Sort a source's hits by descending score (its rank order for fusion).
 fn ranked(mut hits: Vec<Hit>) -> Vec<Hit> {
@@ -453,13 +457,15 @@ impl<'a> Retriever<'a> {
                 score: base,
                 source: HitSource::Graph,
             });
-            // Expand: neighbours reachable within max_hops, score decayed by hop.
+            // Expand: neighbours reachable within max_hops, score geometrically
+            // decayed by actual hop distance (a 2-hop neighbour scores lower than
+            // a 1-hop one, not the same).
             if max_hops > 1 {
-                for neighbor in self.graph.traverse(&node.id, max_hops) {
+                for (neighbor, hops) in self.graph.traverse_with_hops(&node.id, max_hops) {
                     hits.push(Hit {
                         title: neighbor.label.clone(),
                         snippet: format!("{:?} (via {})", neighbor.kind, node.label),
-                        score: base * 0.4,
+                        score: base * HOP_DECAY.powi(hops as i32),
                         source: HitSource::GraphHop,
                     });
                 }
@@ -654,6 +660,29 @@ mod tests {
         // Expanding from the top doc's body ("scheduler") recalls it.
         let expanded = r.search_expanded("kernel", 10, 3, 3);
         assert!(expanded.iter().any(|h| h.title == "scheduler internals"));
+    }
+
+    #[test]
+    fn graph_hop_hits_decay_with_distance() {
+        // a -> b -> c: b is 1 hop from a, c is 2 hops. c must score lower than b.
+        let store = InMemoryStore::new();
+        let mut graph = KnowledgeGraph::new();
+        let a = graph.add_node(NodeKind::Concept, "root query term", 100);
+        let b = graph.add_node(NodeKind::Concept, "near", 100);
+        let c = graph.add_node(NodeKind::Concept, "far", 100);
+        graph.connect(&a, &b, EdgeKind::RelatedTo);
+        graph.connect(&b, &c, EdgeKind::RelatedTo);
+
+        // "related to" phrasing selects max_hops=2 in plan_retrieval.
+        let hits = Retriever::new(&store, &graph).search("what is related to root query term", 10);
+        let near = hits.iter().find(|h| h.title == "near").unwrap();
+        let far = hits.iter().find(|h| h.title == "far").unwrap();
+        assert!(
+            near.score > far.score,
+            "1-hop ({}) must outscore 2-hop ({})",
+            near.score,
+            far.score
+        );
     }
 
     #[test]

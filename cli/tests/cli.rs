@@ -183,6 +183,101 @@ fn graph_persists_to_session_and_search_uses_it() {
 }
 
 #[test]
+fn eval_reports_correct_precision_and_recall() {
+    struct TempDir(PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("ckos-eval-{}-{n}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _guard = TempDir(dir.clone());
+
+    // Two documents match "widget"; only "Widget A" is considered relevant, so
+    // with k=2 precision must be exactly 0.5 and recall exactly 1.0 (the single
+    // relevant document is captured within the top 2).
+    std::fs::write(
+        dir.join("a.doc"),
+        "doc_type: note\ntitle: Widget A\nconfidence: 100\n\nAll about the widget.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("b.doc"),
+        "doc_type: note\ntitle: Widget B\nconfidence: 100\n\nAlso a widget mention.\n",
+    )
+    .unwrap();
+
+    let out = ckos(&[
+        "eval",
+        "--relevant",
+        "Widget A",
+        "--k",
+        "2",
+        dir.to_str().unwrap(),
+        "widget",
+    ]);
+    assert!(out.status.success());
+    let s = stdout(&out);
+    assert!(s.contains("precision@2  0.500"), "got: {s}");
+    assert!(s.contains("recall@2     1.000"), "got: {s}");
+
+    // --k 0 is rejected rather than silently producing meaningless 0.0 metrics.
+    let zero = ckos(&[
+        "eval",
+        "--relevant",
+        "Widget A",
+        "--k",
+        "0",
+        dir.to_str().unwrap(),
+        "widget",
+    ]);
+    assert!(!zero.status.success());
+}
+
+#[test]
+fn search_lambda_flag_controls_diversity() {
+    struct TempDir(PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("ckos-lambda-{}-{n}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _guard = TempDir(dir.clone());
+    std::fs::write(
+        dir.join("a.doc"),
+        "doc_type: note\ntitle: Alpha\nconfidence: 100\n\nkernel scheduling\n",
+    )
+    .unwrap();
+
+    let ok = ckos(&[
+        "search",
+        "--diverse",
+        "--lambda",
+        "0.3",
+        dir.to_str().unwrap(),
+        "kernel",
+    ]);
+    assert!(ok.status.success());
+
+    let bad = ckos(&[
+        "search",
+        "--diverse",
+        "--lambda",
+        "not-a-number",
+        dir.to_str().unwrap(),
+        "kernel",
+    ]);
+    assert!(!bad.status.success());
+}
+
+#[test]
 fn verify_fails_on_bad_content() {
     let ok = ckos(&["verify", "clean text"]);
     assert!(ok.status.success());
@@ -211,7 +306,7 @@ fn flags_work_in_any_position() {
 
 #[test]
 fn per_command_help_is_shown() {
-    for cmd in ["plan", "run", "graph", "kql"] {
+    for cmd in ["plan", "run", "graph", "kql", "search", "eval"] {
         let out = ckos(&[cmd, "--help"]);
         assert!(out.status.success(), "{cmd} --help should succeed");
         assert!(

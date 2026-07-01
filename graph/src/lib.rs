@@ -375,10 +375,11 @@ impl KnowledgeGraph {
         scored
     }
 
-    /// Breadth-first multi-hop traversal up to `max_hops` (§952).
-    ///
-    /// Returns nodes reachable from `start`, nearest first, excluding `start`.
-    pub fn traverse(&self, start: &NodeId, max_hops: usize) -> Vec<&Node> {
+    /// Breadth-first multi-hop traversal up to `max_hops` (§952), annotated with
+    /// each node's hop distance from `start` — so callers can decay relevance by
+    /// distance instead of treating every reached node as equally close.
+    /// Nearest first, excluding `start`.
+    pub fn traverse_with_hops(&self, start: &NodeId, max_hops: usize) -> Vec<(&Node, usize)> {
         use std::collections::{HashSet, VecDeque};
         let mut visited: HashSet<NodeId> = HashSet::new();
         let mut out = Vec::new();
@@ -393,7 +394,7 @@ impl KnowledgeGraph {
                 for e in edges {
                     if visited.insert(e.to.clone()) {
                         if let Some(n) = self.nodes.get(&e.to) {
-                            out.push(n);
+                            out.push((n, hops + 1));
                         }
                         queue.push_back((e.to.clone(), hops + 1));
                     }
@@ -401,6 +402,16 @@ impl KnowledgeGraph {
             }
         }
         out
+    }
+
+    /// Breadth-first multi-hop traversal up to `max_hops` (§952).
+    ///
+    /// Returns nodes reachable from `start`, nearest first, excluding `start`.
+    pub fn traverse(&self, start: &NodeId, max_hops: usize) -> Vec<&Node> {
+        self.traverse_with_hops(start, max_hops)
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect()
     }
 }
 
@@ -449,6 +460,22 @@ mod tests {
         // central_nodes surfaces the hub first.
         let top = g.central_nodes(1);
         assert_eq!(top[0].0.label, "Hub");
+    }
+
+    #[test]
+    fn traverse_with_hops_annotates_distance() {
+        let mut g = KnowledgeGraph::new();
+        let a = g.add_node(NodeKind::Project, "CKOS", 100);
+        let b = g.add_node(NodeKind::Tool, "scheduler", 90);
+        let c = g.add_node(NodeKind::Organization, "ACME", 80);
+        g.connect(&a, &b, EdgeKind::DependsOn);
+        g.connect(&b, &c, EdgeKind::CreatedBy);
+
+        let hops = g.traverse_with_hops(&a, 2);
+        let scheduler_hop = hops.iter().find(|(n, _)| n.label == "scheduler").unwrap().1;
+        let acme_hop = hops.iter().find(|(n, _)| n.label == "ACME").unwrap().1;
+        assert_eq!(scheduler_hop, 1);
+        assert_eq!(acme_hop, 2);
     }
 
     #[test]
