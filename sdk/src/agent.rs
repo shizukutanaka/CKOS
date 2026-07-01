@@ -252,13 +252,22 @@ impl CapabilityRegistry {
         id
     }
 
-    /// All agent instances providing a capability (§910).
+    /// All agent instances providing a capability (§910) that are still in
+    /// service. Excludes [`AgentState::Suspended`] and
+    /// [`AgentState::Terminated`] agents — an agent explicitly taken out of
+    /// service by [`Self::transition`] must stop being handed out to callers,
+    /// or the §909 lifecycle is decorative. Every *other* state (including
+    /// the freshly `Registered` state every agent starts in and never
+    /// leaves today, since nothing yet drives agents past registration)
+    /// still matches, so this does not change discovery for any agent that
+    /// has never been explicitly suspended or terminated.
     pub fn discover(&self, cap: &Capability) -> Vec<&AgentInstance> {
         self.by_capability
             .get(cap.as_token())
             .into_iter()
             .flatten()
             .filter_map(|id| self.agents.get(id))
+            .filter(|a| !matches!(a.state, AgentState::Suspended | AgentState::Terminated))
             .collect()
     }
 
@@ -335,6 +344,29 @@ priority: high";
         let m = AgentManifest::from_manifest("id: x\ncapabilities: [coding, vision]").unwrap();
         assert_eq!(m.capabilities, vec![Capability::Coding, Capability::Vision]);
         assert!(AgentManifest::from_manifest("version: 1.0").is_err());
+    }
+
+    #[test]
+    fn discover_excludes_suspended_and_terminated_agents() {
+        // §909's whole point is that a suspended/terminated agent is out of
+        // service; §910 discovery must honour that instead of treating the
+        // lifecycle as decorative metadata nobody reads.
+        let mut reg = CapabilityRegistry::new();
+        let alive = reg.register(AgentManifest::new("alive", Capability::Coding));
+        let suspended = reg.register(AgentManifest::new("suspended", Capability::Coding));
+        let terminated = reg.register(AgentManifest::new("terminated", Capability::Coding));
+        assert_eq!(reg.discover(&Capability::Coding).len(), 3);
+
+        for state in [AgentState::Loaded, AgentState::Ready, AgentState::Running] {
+            reg.transition(&suspended, state).unwrap();
+            reg.transition(&terminated, state).unwrap();
+        }
+        reg.transition(&suspended, AgentState::Suspended).unwrap();
+        reg.transition(&terminated, AgentState::Terminated).unwrap();
+
+        let found = reg.discover(&Capability::Coding);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].instance_id, alive);
     }
 
     #[test]

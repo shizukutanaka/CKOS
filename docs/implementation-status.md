@@ -35,7 +35,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 
 | § | Topic | Status | Where |
 |---|-------|--------|-------|
-| 907–909 | Agent as service / manifest / lifecycle | ✅ | `sdk::agent` |
+| 907–909 | Agent as service / manifest / lifecycle | ✅ | `sdk::agent` — `AgentState::transition` validates the §909 graph and `discover` now actually honours it (excludes `Suspended`/`Terminated`; was previously ignored entirely) |
 | 910–912 | Capability registry / discovery | ✅ | `sdk::CapabilityRegistry`, `kernel::Capability` |
 | 913 | Multi-factor agent scheduler | ✅ | `scheduler::ScoreFactors` (+ telemetry `runtime_fit`) |
 | 914–916 | Message bus / format / service mesh | ✅ | `sdk::messaging` |
