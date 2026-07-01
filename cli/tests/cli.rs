@@ -400,3 +400,47 @@ fn workflow_file_executes() {
     assert!(out.status.success());
     assert!(stdout(&out).contains("2/2 step(s) verified"));
 }
+
+#[test]
+fn sensitive_capability_requires_an_authorized_role() {
+    struct TempFile(PathBuf);
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::SeqCst);
+    let path = std::env::temp_dir().join(format!("ckos-medical-{}-{n}.wf", std::process::id()));
+    std::fs::write(&path, "workflow: clinic\nstep diagnose: medical\n").unwrap();
+    let _guard = TempFile(path.clone());
+
+    // Without --role, the engine has no policy attached: unrestricted, as
+    // it always was before this authorization gate existed.
+    let unrestricted = ckos(&["workflow", path.to_str().unwrap()]);
+    assert!(unrestricted.status.success());
+
+    // guest has no RBAC grant for the medical capability: denied.
+    let denied = ckos(&["workflow", "--role", "guest", path.to_str().unwrap()]);
+    assert!(!denied.status.success());
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("policy denied"));
+
+    // admin's capability.* RBAC grant authorizes it.
+    let allowed = ckos(&["workflow", "--role", "admin", path.to_str().unwrap()]);
+    assert!(allowed.status.success());
+    assert!(stdout(&allowed).contains("1/1 step(s) verified"));
+
+    // An ordinary (non-sensitive) capability is never gated, even under a
+    // role with zero grants.
+    let ordinary_path =
+        std::env::temp_dir().join(format!("ckos-ordinary-{}-{n}.wf", std::process::id()));
+    std::fs::write(&ordinary_path, "workflow: chat\nstep reply: reasoning\n").unwrap();
+    let _guard2 = TempFile(ordinary_path.clone());
+    let ordinary = ckos(&[
+        "workflow",
+        "--role",
+        "guest",
+        ordinary_path.to_str().unwrap(),
+    ]);
+    assert!(ordinary.status.success());
+}

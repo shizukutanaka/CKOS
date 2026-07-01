@@ -58,7 +58,7 @@ appear in any position, and `ckos <command> --help` prints per-command usage.
 | Command | What it does | Example |
 |---------|--------------|---------|
 | `plan [--dot] <intent…>` | Decompose an intent into a workflow DAG | `ckos plan "research the Transformer paper"` |
-| `run [--session <dir>] <intent…>` | Plan + execute; with `--session`, persist the run and grow its knowledge graph | `ckos run --session ./sess "research X"` |
+| `run [--session <dir>] [--role R] <intent…>` | Plan + execute; `--session` persists the run and grows its knowledge graph; `--role` authorizes finance/medical/legal/robotics steps (§929) — every other capability always runs unrestricted | `ckos run --session ./sess "research X"` |
 | `history <dir>` | Show a session's past runs | `ckos history ./sess` |
 | `search [--synonyms] [--expand] [--diverse] [--lambda N] <dir> <query…>` | Hybrid BM25 + vector + graph search (RRF-fused); `--synonyms` bridges vocabulary gaps with a built-in domain table, `--expand` widens recall (PRF), `--diverse` re-ranks for variety (MMR, tune with `--lambda` 0..1) | `ckos search --synonyms ./sess "dispatcher urgency"` |
 | `graph [--dot] <text…>` / `graph [--dot] --session <dir>` | Extract a typed knowledge graph from text or a session's docs | `ckos graph --session ./sess` |
@@ -68,7 +68,7 @@ appear in any position, and `ckos <command> --help` prints per-command usage.
 | `verify <text…>` | Run the independent §899 checks (non-empty, repetition, arithmetic, JSON, citations, security) | `ckos verify 'see [1]'` |
 | `tool --list` / `tool [--role <role>] <name> <input…>` | Invoke a tool; required permissions are authorized by RBAC policy (§929), not self-granted (§917/§919) | `ckos tool --role admin reverse hello` |
 | `capabilities` | List the built-in capability vocabulary | `ckos capabilities` |
-| `workflow <file>` | Load and execute a workflow definition file | `ckos workflow pipeline.wf` |
+| `workflow [--role <role>] <file>` | Load and execute a workflow definition file | `ckos workflow pipeline.wf` |
 | `version` | Print the CKOS version | `ckos version` |
 
 ### A typical session flow

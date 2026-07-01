@@ -47,7 +47,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 926 | Distributed workflow | ⏳ | sync engine done; distributed driver pending |
 | 927 | Session manager | ✅ | `sdk::session` (history/reflections + `recall` via Generative-Agents scoring) |
 | 928 | Enterprise identity | 🟡 | `policy::IdentityProvider` (OIDC/LDAP verification ⏳) |
-| 929 | Authorization (RBAC + ABAC) | ✅ | `policy` — now the real authority behind `ckos tool` (was previously unwired outside its own tests) |
+| 929 | Authorization (RBAC + ABAC) | ✅ | `policy` — authorizes `ckos tool`, and `Engine`'s sensitive capabilities (finance/medical/legal/robotics) via opt-in `Engine::with_policy` + `ckos run`/`ckos workflow --role`; ordinary capabilities stay unrestricted |
 | 930 | Distributed security | 🟡 | `sdk::security` (signing + replay; mTLS/cert rotation ⏳) |
 | 931–932 | Kubernetes / Docker Compose | ✅ | `Dockerfile` + `docker-compose.yml` (dev stack) + `deploy/k8s/ckos.yaml` (Deployment + HPA autoscale) |
 | 933 | Observability | 🟡 | `audit` + `telemetry`; OpenTelemetry/Prometheus export ⏳ |

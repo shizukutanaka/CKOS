@@ -22,11 +22,24 @@ use ckos_kernel::event::{Event, EventBus, InMemoryEventBus};
 use ckos_kernel::task::{Task, TaskState};
 use ckos_kernel::telemetry::{InMemoryTelemetry, TaskMetrics, TelemetrySink};
 use ckos_kernel::TaskId;
+use ckos_policy::{AccessRequest, PolicyEngine};
 use ckos_runtime::{InferenceRequest, RuntimeRegistry};
 use ckos_scheduler::{runtime_fit, Scheduler, ScoreFactors};
 use ckos_verifier::Verifier;
 use ckos_workflow::Dag;
+use std::collections::HashMap;
 use std::time::Instant;
+
+/// Capabilities whose real-world stakes (regulated advice, physical action)
+/// warrant a default-deny authorization check (§929) even though the rest of
+/// the capability vocabulary runs unrestricted. Not configurable — deliberately
+/// small and fixed, so it can't be quietly narrowed by a careless caller.
+const SENSITIVE_CAPABILITIES: [Capability; 4] = [
+    Capability::Finance,
+    Capability::Medical,
+    Capability::Legal,
+    Capability::Robotics,
+];
 
 use crate::agent::CapabilityRegistry;
 use crate::reflection::{Reflection, Reflector};
@@ -61,6 +74,10 @@ pub struct Engine {
     bus: InMemoryEventBus,
     audit: InMemoryAuditLog,
     telemetry: InMemoryTelemetry,
+    /// Optional RBAC/ABAC gate (§929) for [`SENSITIVE_CAPABILITIES`]; `None`
+    /// (the default) runs every capability unrestricted, matching the
+    /// engine's behaviour before this existed. See [`with_policy`](Self::with_policy).
+    access: Option<(PolicyEngine, Vec<String>)>,
 }
 
 impl Engine {
@@ -73,7 +90,20 @@ impl Engine {
             bus: InMemoryEventBus::new(),
             audit: InMemoryAuditLog::new(),
             telemetry: InMemoryTelemetry::new(),
+            access: None,
         }
+    }
+
+    /// Opt in to authorization (§929): tasks whose capability is in
+    /// [`SENSITIVE_CAPABILITIES`] (finance/medical/legal/robotics) must be
+    /// permitted for `roles` by `policy`, or [`Engine::execute`] denies them
+    /// before a runtime is even selected. Ordinary capabilities are never
+    /// gated — this narrows the "least privilege" default-deny principle to
+    /// where the stakes justify friction, rather than requiring a role for
+    /// every task, which would make the common single-operator case unusable.
+    pub fn with_policy(mut self, policy: PolicyEngine, roles: Vec<String>) -> Self {
+        self.access = Some((policy, roles));
+        self
     }
 
     /// The event bus, so callers can subscribe to execution events (§894).
@@ -101,6 +131,28 @@ impl Engine {
     pub fn execute(&self, task: &mut Task) -> Result<ExecutionResult> {
         self.bus.publish(Event::TaskStarted(task.id.clone()));
         task.transition_to(TaskState::Queued)?;
+
+        if SENSITIVE_CAPABILITIES.contains(&task.capability) {
+            if let Some((policy, roles)) = &self.access {
+                let req = AccessRequest {
+                    subject: task.id.to_string(),
+                    roles: roles.clone(),
+                    action: format!("capability.{}", task.capability),
+                    attributes: HashMap::new(),
+                };
+                if let Err(e) = policy.evaluate(&req) {
+                    // Denied before a runtime was ever selected — the task
+                    // honestly stays Queued (see the doc comment above; there
+                    // is no Queued -> Failed edge in the §893 graph).
+                    self.audit.record(
+                        AuditRecord::new("task.execute")
+                            .input(&task.description)
+                            .error(e.to_string()),
+                    );
+                    return Err(e);
+                }
+            }
+        }
 
         let agent = self
             .agents
@@ -368,6 +420,43 @@ mod tests {
         let mut task = Task::new("look", Capability::Vision);
         assert!(engine.execute(&mut task).is_err());
         assert_eq!(task.state(), TaskState::Queued);
+    }
+
+    #[test]
+    fn ordinary_capabilities_run_unrestricted_even_with_a_policy_attached() {
+        // Reasoning is not in SENSITIVE_CAPABILITIES, so a deny-everything
+        // policy must not block it — only the fixed sensitive set is gated.
+        let mut runtimes = RuntimeRegistry::new();
+        runtimes.register(Box::new(EchoRuntime::new(vec![Capability::Reasoning])));
+        let engine = Engine::new(runtimes, CapabilityRegistry::new(), Verifier::new())
+            .with_policy(PolicyEngine::new(), vec!["guest".to_string()]);
+        let mut task = Task::new("summarize", Capability::Reasoning);
+        assert!(engine.execute(&mut task).is_ok());
+    }
+
+    #[test]
+    fn sensitive_capability_is_denied_without_a_role_grant() {
+        let mut runtimes = RuntimeRegistry::new();
+        runtimes.register(Box::new(EchoRuntime::new(vec![Capability::Medical])));
+        let engine = Engine::new(runtimes, CapabilityRegistry::new(), Verifier::new())
+            .with_policy(PolicyEngine::new(), vec!["guest".to_string()]);
+        let mut task = Task::new("diagnose", Capability::Medical);
+        assert!(engine.execute(&mut task).is_err());
+        // Denied before a runtime was ever exercised: honestly still Queued.
+        assert_eq!(task.state(), TaskState::Queued);
+    }
+
+    #[test]
+    fn sensitive_capability_runs_once_the_role_is_granted() {
+        let mut runtimes = RuntimeRegistry::new();
+        runtimes.register(Box::new(EchoRuntime::new(vec![Capability::Medical])));
+        let mut policy = PolicyEngine::new();
+        policy.grant("clinician", "capability.medical");
+        let engine = Engine::new(runtimes, CapabilityRegistry::new(), Verifier::new())
+            .with_policy(policy, vec!["clinician".to_string()]);
+        let mut task = Task::new("diagnose", Capability::Medical);
+        let result = engine.execute(&mut task).unwrap();
+        assert_eq!(result.state, TaskState::Completed);
     }
 
     #[test]

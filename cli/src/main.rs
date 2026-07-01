@@ -69,14 +69,15 @@ USAGE:
 COMMANDS:
     plan [--dot] <intent...>         Decompose an intent into a workflow DAG
                                      (--dot emits Graphviz)
-    run [--session <dir>] <intent…>  Plan and execute a workflow end-to-end;
-                                     with --session, persist the run and grow
-                                     the session's knowledge graph
+    run [--session <dir>] [--role R] Plan and execute a workflow end-to-end;
+      <intent…>                      --session persists + grows the graph;
+                                     --role authorizes sensitive capabilities (§929)
     history <dir>                    Show the execution history of a session
     search [--synonyms] [--expand]   Hybrid-search a session (--synonyms: domain
       [--diverse] [--lambda N]       synonym expansion, --expand: pseudo-relevance
       <dir> <query…>                 expansion, --diverse: MMR, --lambda: tradeoff)
-    workflow <file>                  Load and execute a workflow definition file
+    workflow [--role <role>] <file>  Load and execute a workflow definition file
+                                     (--role: as above, §929)
     kql [--session <dir>] <query>    Run a KQL query (demo graph, or a session's
                                      persisted graph with --session)
     eval --relevant <csv> [--k N]    Score search quality (Precision/Recall/
@@ -187,11 +188,18 @@ fn cmd_plan(rest: &[String]) -> ExitCode {
 
 fn cmd_run(rest: &[String]) -> ExitCode {
     if wants_help(rest) {
-        println!("usage: ckos run [--session <dir>] <intent…>\n  Plan and execute end-to-end; --session persists the run and grows its graph.");
+        println!("usage: ckos run [--session <dir>] [--role <role>] <intent…>\n  Plan and execute end-to-end; --session persists the run and grows its graph.\n  --role attaches RBAC authorization (§929): finance/medical/legal/robotics\n  steps are denied unless the role is granted that capability (built-in roles:\n  admin, guest). Without --role, every capability runs unrestricted, as before.");
         return ExitCode::SUCCESS;
     }
-    // Optional `--session <dir>` in any position; the remainder is the intent.
-    let (session_dir, intent_args) = match take_value_flag(rest, "--session") {
+    // Optional flags in any position; the remainder is the intent.
+    let (session_dir, rest) = match take_value_flag(rest, "--session") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let (role, intent_args) = match take_value_flag(&rest, "--role") {
         Ok(v) => v,
         Err(e) => {
             eprintln!("error: {e}");
@@ -217,7 +225,12 @@ fn cmd_run(rest: &[String]) -> ExitCode {
     let verifier = Verifier::new()
         .with_check(Box::new(NonEmptyCheck))
         .with_check(Box::new(CitationCheck));
-    let engine = Engine::new(runtimes, agents, verifier);
+    let mut engine = Engine::new(runtimes, agents, verifier);
+    // Authorization (§929) is opt-in: without --role, every capability runs
+    // unrestricted, exactly as before this existed.
+    if let Some(role) = role {
+        engine = engine.with_policy(demo_policy(), vec![role]);
+    }
 
     println!("intent : {intent}");
     println!("workflow: {} ({} step(s))\n", dag.name(), dag.len());
@@ -525,6 +538,17 @@ fn cmd_eval(rest: &[String]) -> ExitCode {
 }
 
 fn cmd_workflow(rest: &[String]) -> ExitCode {
+    if wants_help(rest) {
+        println!("usage: ckos workflow [--role <role>] <file>\n  Load and execute a workflow definition file. --role attaches RBAC\n  authorization (§929) for finance/medical/legal/robotics steps — the only\n  reachable way to author such a step today, since the heuristic planner\n  behind `ckos plan`/`ckos run` never classifies free text into them.");
+        return ExitCode::SUCCESS;
+    }
+    let (role, rest) = match take_value_flag(rest, "--role") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let Some(path) = rest.first() else {
         eprintln!("error: `workflow` needs a definition file, e.g. `ckos workflow pipeline.wf`");
         return ExitCode::FAILURE;
@@ -551,11 +575,14 @@ fn cmd_workflow(rest: &[String]) -> ExitCode {
         runtimes.register(Box::new(EchoRuntime::new(vec![cap.clone()])));
         agents.register(AgentManifest::new(format!("{cap}-agent"), cap));
     }
-    let engine = Engine::new(
+    let mut engine = Engine::new(
         runtimes,
         agents,
         Verifier::new().with_check(Box::new(NonEmptyCheck)),
     );
+    if let Some(role) = role {
+        engine = engine.with_policy(demo_policy(), vec![role]);
+    }
 
     println!("workflow: {} ({} step(s))\n", dag.name(), dag.len());
     match engine.run_workflow(&dag) {
@@ -847,13 +874,15 @@ fn demo_tools() -> ToolRegistry {
     reg
 }
 
-/// The demo RBAC policy `ckos tool` authorizes against (§929). Two built-in
-/// roles: `admin` (granted the `text.*` wildcard) and `guest` (nothing —
-/// PolicyEngine defaults to deny). A real deployment would load roles from
-/// its own identity provider instead of hardcoding them.
+/// The demo RBAC policy `ckos tool` and `ckos run --role` authorize against
+/// (§929). Two built-in roles: `admin` (granted `text.*` for tools and
+/// `capability.*` for the Engine's sensitive capabilities) and `guest`
+/// (nothing — PolicyEngine defaults to deny). A real deployment would load
+/// roles from its own identity provider instead of hardcoding them.
 fn demo_policy() -> PolicyEngine {
     let mut p = PolicyEngine::new();
     p.grant("admin", "text.*");
+    p.grant("admin", "capability.*"); // sensitive Engine capabilities (§929)
     p
 }
 
