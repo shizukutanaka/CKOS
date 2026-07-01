@@ -170,12 +170,13 @@ impl Engine {
     /// Run a whole workflow in dependency order via the scheduler (§892).
     ///
     /// Returns results in execution order. Fails fast with
-    /// [`KernelError::Other`] if the DAG contains a cycle, or propagates a task
-    /// failure (e.g. no runtime for a capability).
+    /// [`KernelError::Other`] if the DAG cannot be ordered (a cycle, or a
+    /// dangling/foreign step reference — see [`Dag::topological_order`]), or
+    /// propagates a task failure (e.g. no runtime for a capability).
     pub fn run_workflow(&self, dag: &Dag) -> Result<Vec<ExecutionResult>> {
-        let order = dag
-            .topological_order()
-            .ok_or_else(|| KernelError::other("workflow contains a cycle"))?;
+        let order = dag.topological_order().ok_or_else(|| {
+            KernelError::other("workflow contains a cycle or references an unknown step")
+        })?;
 
         let mut scheduler = Scheduler::new();
         for step in &order {
@@ -183,14 +184,17 @@ impl Engine {
                 scheduler.submit(task.clone());
             }
         }
-        self.bus.publish(Event::WorkflowCompleted(dag.id().clone()));
 
         let mut results = Vec::with_capacity(order.len());
         while let Some(task) = scheduler.dispatch_next() {
+            // Propagate a task failure immediately, without publishing
+            // WorkflowCompleted — a subscriber must never observe that event
+            // for a workflow that didn't actually finish.
             let result = self.execute(&task)?;
             scheduler.mark_completed(task.id.clone());
             results.push(result);
         }
+        self.bus.publish(Event::WorkflowCompleted(dag.id().clone()));
         Ok(results)
     }
 
@@ -282,6 +286,43 @@ mod tests {
     }
 
     #[test]
+    fn workflow_completed_fires_only_after_every_task_actually_ran() {
+        let engine = research_engine();
+        let completed_events = Arc::new(AtomicUsize::new(0));
+        let task_completions_when_wf_completed_fires = Arc::new(AtomicUsize::new(0));
+        let tasks_done = Arc::new(AtomicUsize::new(0));
+
+        let done = Arc::clone(&tasks_done);
+        engine.bus().subscribe(Arc::new(move |e: &Event| {
+            if matches!(e, Event::TaskCompleted(_)) {
+                done.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+        let (wf, snapshot, done2) = (
+            Arc::clone(&completed_events),
+            Arc::clone(&task_completions_when_wf_completed_fires),
+            Arc::clone(&tasks_done),
+        );
+        engine.bus().subscribe(Arc::new(move |e: &Event| {
+            if matches!(e, Event::WorkflowCompleted(_)) {
+                wf.fetch_add(1, Ordering::SeqCst);
+                // At the moment this fires, every task must already be done —
+                // proving the event is not published prematurely.
+                snapshot.store(done2.load(Ordering::SeqCst), Ordering::SeqCst);
+            }
+        }));
+
+        let dag = HeuristicPlanner::new().plan("research the Transformer paper");
+        let results = engine.run_workflow(&dag).unwrap();
+
+        assert_eq!(completed_events.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            task_completions_when_wf_completed_fires.load(Ordering::SeqCst),
+            results.len()
+        );
+    }
+
+    #[test]
     fn missing_runtime_fails_the_task() {
         // Engine with no runtime registered for the required capability.
         let engine = Engine::new(
@@ -289,10 +330,20 @@ mod tests {
             CapabilityRegistry::new(),
             Verifier::new(),
         );
+        let completed = Arc::new(AtomicUsize::new(0));
+        let c = Arc::clone(&completed);
+        engine.bus().subscribe(Arc::new(move |e: &Event| {
+            if matches!(e, Event::WorkflowCompleted(_)) {
+                c.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+
         let dag = HeuristicPlanner::new().plan("say hello");
         let err = engine.run_workflow(&dag).unwrap_err();
         assert!(matches!(err, KernelError::CapabilityUnavailable(_)));
         // The failure was still audited.
         assert_eq!(engine.audit().error_count(), 1);
+        // A workflow that failed must never publish WorkflowCompleted.
+        assert_eq!(completed.load(Ordering::SeqCst), 0);
     }
 }

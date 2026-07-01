@@ -153,6 +153,11 @@ impl Dag {
                 }
             }
 
+            if refs.contains_key(step_name) {
+                return Err(KernelError::other(format!(
+                    "duplicate step name: {step_name}"
+                )));
+            }
             let dag = dag.get_or_insert_with(|| Dag::new(&name));
             let r = dag.add_step(Task::new(step_name, capability), &deps);
             refs.insert(step_name.to_string(), r);
@@ -192,7 +197,15 @@ impl Dag {
             .collect()
     }
 
-    /// Kahn's algorithm: a valid execution order, or `None` if a cycle exists.
+    /// Kahn's algorithm: a valid execution order, or `None` if the graph cannot
+    /// be ordered.
+    ///
+    /// `add_step` only accepts dependencies on [`StepRef`]s already returned by
+    /// this same `Dag`, and every step's index is fixed at insertion — so a
+    /// dependency's index is always strictly less than its dependent's. That
+    /// makes a genuine cycle impossible to construct through the public API;
+    /// in practice `None` means a dangling/foreign `StepRef` (one from a
+    /// different `Dag`, or otherwise out of range) was passed to `add_step`.
     pub fn topological_order(&self) -> Option<Vec<StepRef>> {
         let n = self.steps.len();
         let mut indegree = vec![0usize; n];
@@ -201,7 +214,7 @@ impl Dag {
         for (i, s) in self.steps.iter().enumerate() {
             for &d in &s.deps {
                 if d >= n {
-                    return None; // dangling dependency
+                    return None; // dangling/foreign dependency
                 }
                 indegree[i] += 1;
                 dependents[d].push(i);
@@ -272,6 +285,26 @@ step report: reasoning <- summarize, search";
             Err(e) => assert!(e.to_string().contains("unknown step")),
             Ok(_) => panic!("expected an error for the unknown dependency"),
         }
+    }
+
+    #[test]
+    fn rejects_duplicate_step_names() {
+        let text = "step a: coding\nstep a: reasoning";
+        match Dag::from_definition(text) {
+            Err(e) => assert!(e.to_string().contains("duplicate step")),
+            Ok(_) => panic!("expected an error for the duplicate step name"),
+        }
+    }
+
+    #[test]
+    fn dangling_step_reference_fails_ordering() {
+        // A StepRef out of range for this Dag (only reachable via direct
+        // construction within the crate, e.g. a foreign Dag's handle) makes
+        // topological_order return None — the only way `add_step`'s
+        // by-construction acyclic invariant can be violated.
+        let mut dag = Dag::new("broken");
+        dag.add_step(Task::new("a", Capability::Retrieval), &[StepRef(7)]);
+        assert!(dag.topological_order().is_none());
     }
 
     #[test]

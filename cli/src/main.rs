@@ -177,7 +177,9 @@ fn cmd_plan(rest: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         None => {
-            eprintln!("error: workflow contains a cycle and cannot be scheduled");
+            eprintln!(
+                "error: workflow cannot be scheduled (a cycle or a reference to an unknown step)"
+            );
             ExitCode::FAILURE
         }
     }

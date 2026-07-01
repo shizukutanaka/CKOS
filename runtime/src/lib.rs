@@ -100,6 +100,18 @@ pub trait Runtime: Send + Sync {
     fn run(&self, req: &InferenceRequest) -> Result<InferenceResponse>;
 }
 
+/// Locality preference used by [`RuntimeRegistry::select`]: lower is more
+/// preferred. Local/offline-capable kinds rank ahead of remote ones (§925).
+fn locality_rank(kind: RuntimeKind) -> u8 {
+    match kind {
+        RuntimeKind::Edge => 0,
+        RuntimeKind::Npu => 1,
+        RuntimeKind::Gpu => 2,
+        RuntimeKind::Cpu => 3,
+        RuntimeKind::Cloud => 4,
+    }
+}
+
 /// Descriptor stored in the registry table (§900).
 #[derive(Debug, Clone)]
 pub struct RuntimeInfo {
@@ -153,18 +165,13 @@ impl RuntimeRegistry {
         self.runtimes.get(id).map(|b| b.as_ref())
     }
 
-    /// Select the best runtime for a capability (§924). Local kinds rank above
-    /// remote ones so the kernel prefers offline-capable execution.
+    /// Select the best runtime for a capability (§924): among runtimes that
+    /// support it, the most local kind wins (`Edge` first, `Cloud` last, per
+    /// [`locality_rank`] — lower rank = more preferred = selected), so the
+    /// kernel favours offline-capable execution (§925). Ties (same rank,
+    /// multiple runtimes) resolve to the first match in registration order —
+    /// stable and deterministic, not round-robin or random.
     pub fn select(&self, cap: &Capability) -> Result<&dyn Runtime> {
-        fn locality_rank(kind: RuntimeKind) -> u8 {
-            match kind {
-                RuntimeKind::Edge => 0,
-                RuntimeKind::Npu => 1,
-                RuntimeKind::Gpu => 2,
-                RuntimeKind::Cpu => 3,
-                RuntimeKind::Cloud => 4,
-            }
-        }
         self.order
             .iter()
             .filter_map(|id| self.runtimes.get(id))
@@ -237,6 +244,77 @@ mod tests {
         let rt = reg.select(&Capability::Embedding).unwrap();
         assert_eq!(rt.name(), "echo");
         assert!(reg.select(&Capability::Vision).is_err());
+    }
+
+    /// A runtime whose kind is configurable, so locality preference can be
+    /// tested across every [`RuntimeKind`] (`EchoRuntime` is always `Cpu`).
+    struct KindedRuntime {
+        id: RuntimeId,
+        kind: RuntimeKind,
+        name: &'static str,
+        caps: Vec<Capability>,
+    }
+    impl Runtime for KindedRuntime {
+        fn id(&self) -> &RuntimeId {
+            &self.id
+        }
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn kind(&self) -> RuntimeKind {
+            self.kind
+        }
+        fn capabilities(&self) -> &[Capability] {
+            &self.caps
+        }
+        fn run(&self, req: &InferenceRequest) -> Result<InferenceResponse> {
+            Ok(InferenceResponse {
+                output: req.input.clone(),
+                tokens: 0,
+            })
+        }
+    }
+
+    #[test]
+    fn prefers_more_local_runtimes_over_remote_ones() {
+        // Register Cloud, Cpu and Edge (out of locality order) all supporting
+        // the same capability; select() must pick the most local one, Edge,
+        // regardless of registration order.
+        let mut reg = RuntimeRegistry::new();
+        for (name, kind) in [
+            ("cloud", RuntimeKind::Cloud),
+            ("cpu", RuntimeKind::Cpu),
+            ("edge", RuntimeKind::Edge),
+            ("gpu", RuntimeKind::Gpu),
+        ] {
+            reg.register(Box::new(KindedRuntime {
+                id: RuntimeId::new(),
+                kind,
+                name,
+                caps: vec![Capability::Reasoning],
+            }));
+        }
+        assert_eq!(reg.select(&Capability::Reasoning).unwrap().name(), "edge");
+    }
+
+    #[test]
+    fn ties_resolve_to_first_registered() {
+        // Two runtimes of the same (best) kind: selection is stable and
+        // deterministic, picking the one registered first.
+        let mut reg = RuntimeRegistry::new();
+        reg.register(Box::new(KindedRuntime {
+            id: RuntimeId::new(),
+            kind: RuntimeKind::Edge,
+            name: "edge-1",
+            caps: vec![Capability::Coding],
+        }));
+        reg.register(Box::new(KindedRuntime {
+            id: RuntimeId::new(),
+            kind: RuntimeKind::Edge,
+            name: "edge-2",
+            caps: vec![Capability::Coding],
+        }));
+        assert_eq!(reg.select(&Capability::Coding).unwrap().name(), "edge-1");
     }
 
     #[test]

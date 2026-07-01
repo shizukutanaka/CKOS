@@ -18,7 +18,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 892 | Four-layer scheduler | ✅ | `scheduler::Scheduler` (multi-factor score + priority aging / anti-starvation) |
 | 893 | Task state machine | ✅ | `kernel::task::TaskState` |
 | 894 | Event bus | ✅ | `kernel::event` |
-| 895 | Workflow DAG | ✅ | `workflow::Dag` |
+| 895 | Workflow DAG | ✅ | `workflow::Dag` (Kahn's-algorithm topological order; rejects duplicate step names) |
 | 896 | Memory hierarchy L0–L5 | ✅ | `memory::MemoryTier` + `rank_memories` (Generative-Agents recency×importance×relevance) |
 | 897 | Knowledge graph | ✅ | `graph` (+ `GraphStore` file persistence) |
 | 898 | Planner | ✅ | `planner` |
@@ -43,7 +43,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 920 | Workflow compiler | ✅ | `planner` (intent → DAG) |
 | 921–922 | Agent / collective reflection | ✅ | `sdk::reflection` (confidence-weighted majority-vote consensus, self-consistency) |
 | 923 | Knowledge bus | ✅ | `sdk::knowledge_bus` |
-| 924–925 | Runtime pool / edge | 🟡 | `runtime::select` (local-preferred); real edge runtimes ⏳ |
+| 924–925 | Runtime pool / edge | 🟡 | `runtime::select` (local-preferred, deterministic ties, tested across all `RuntimeKind`s); real edge runtimes ⏳ |
 | 926 | Distributed workflow | ⏳ | sync engine done; distributed driver pending |
 | 927 | Session manager | ✅ | `sdk::session` (history/reflections + `recall` via Generative-Agents scoring) |
 | 928 | Enterprise identity | 🟡 | `policy::IdentityProvider` (OIDC/LDAP verification ⏳) |
