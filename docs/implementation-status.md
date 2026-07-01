@@ -70,7 +70,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 946 | Temporal knowledge | ✅ | `graph::Node::date` + KQL `BEFORE`/`AFTER` |
 | 947 | Provenance engine | ✅ | `graph::Node::provenance`; extraction stamps source (`extract_concepts_with_provenance`); KQL `RETURN Sources` |
 | 948 | Confidence score | ✅ | `Node::confidence`, `Document::confidence` |
-| 949 | Retrieval planner | ✅ | `retrieval::plan_retrieval` + `search_diverse`/`mmr_rerank` (MMR) + `expand_query`/`search_expanded` (pseudo-relevance feedback) |
+| 949 | Retrieval planner | ✅ | `retrieval::plan_retrieval` + `search_diverse`/`mmr_rerank` (MMR) + `expand_query`/`search_expanded` (PRF) + `sdk::synonyms::SynonymTable`/`search_synonyms` (a priori domain-term expansion; mitigates the §944 lexical-only gap) |
 | 950 | Hybrid search | ✅ | `retrieval::Retriever` (BM25 keyword + vector + graph, Reciprocal Rank Fusion) |
 | 951 | Graph reasoning | ✅ | retrieval graph hits + `graph::traverse` + `pagerank`/`central_nodes` (node importance) |
 | 952 | Multi-hop planner | ✅ | `graph::traverse`/`traverse_with_hops` + retriever hop expansion (score decays geometrically per hop) |

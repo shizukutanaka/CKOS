@@ -238,6 +238,42 @@ fn eval_reports_correct_precision_and_recall() {
 }
 
 #[test]
+fn search_synonyms_flag_bridges_vocabulary_gap() {
+    struct TempDir(PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("ckos-synonyms-{}-{n}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _guard = TempDir(dir.clone());
+
+    // A true paraphrase sharing zero words with the query.
+    std::fs::write(
+        dir.join("a.doc"),
+        "doc_type: note\ntitle: Task Prioritization\nconfidence: 100\n\n\
+         Ready work is ordered and run according to importance.\n",
+    )
+    .unwrap();
+
+    let baseline = ckos(&["search", dir.to_str().unwrap(), "scheduler priority"]);
+    assert!(baseline.status.success());
+    assert!(stdout(&baseline).contains("no results"));
+
+    let with_synonyms = ckos(&[
+        "search",
+        "--synonyms",
+        dir.to_str().unwrap(),
+        "scheduler priority",
+    ]);
+    assert!(with_synonyms.status.success());
+    assert!(stdout(&with_synonyms).contains("Task Prioritization"));
+}
+
+#[test]
 fn search_lambda_flag_controls_diversity() {
     struct TempDir(PathBuf);
     impl Drop for TempDir {

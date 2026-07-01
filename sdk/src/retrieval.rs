@@ -348,6 +348,23 @@ impl<'a> Retriever<'a> {
         self.search(&expanded, limit)
     }
 
+    /// Search after expanding the query with a [`SynonymTable`](crate::synonyms::SynonymTable)
+    /// (§949). Unlike [`search_expanded`](Self::search_expanded) (pseudo-relevance
+    /// feedback, which only recalls documents reachable from terms *already*
+    /// found by literal overlap), this injects a priori related terms — so it
+    /// can recall a document sharing zero words with the query, closing the
+    /// vocabulary-mismatch gap the default hashing embedder cannot (see
+    /// `ckos_memory::embedding`'s module doc).
+    pub fn search_synonyms(
+        &self,
+        question: &str,
+        limit: usize,
+        table: &crate::synonyms::SynonymTable,
+    ) -> Vec<Hit> {
+        let expanded = crate::synonyms::expand_query_with_synonyms(question, table, 10);
+        self.search(&expanded, limit)
+    }
+
     /// Search, then diversify with MMR (§949–§950). Over-fetches a candidate pool
     /// and re-ranks it down to `limit` so near-duplicate results don't crowd out
     /// distinct, still-relevant ones. `lambda` trades relevance (1.0) against

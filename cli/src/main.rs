@@ -73,9 +73,9 @@ COMMANDS:
                                      with --session, persist the run and grow
                                      the session's knowledge graph
     history <dir>                    Show the execution history of a session
-    search [--expand] [--diverse]    Hybrid-search a session (--expand: query
-      [--lambda N] <dir> <query…>    expansion, --diverse: MMR re-ranking,
-                                     --lambda: relevance/diversity tradeoff)
+    search [--synonyms] [--expand]   Hybrid-search a session (--synonyms: domain
+      [--diverse] [--lambda N]       synonym expansion, --expand: pseudo-relevance
+      <dir> <query…>                 expansion, --diverse: MMR, --lambda: tradeoff)
     workflow <file>                  Load and execute a workflow definition file
     kql [--session <dir>] <query>    Run a KQL query (demo graph, or a session's
                                      persisted graph with --session)
@@ -371,11 +371,12 @@ fn cmd_history(rest: &[String]) -> ExitCode {
 
 fn cmd_search(rest: &[String]) -> ExitCode {
     if wants_help(rest) {
-        println!("usage: ckos search [--expand] [--diverse] [--lambda N] <dir> <query…>\n  Hybrid search (BM25 + vector + graph, RRF-fused). --expand adds pseudo-relevance\n  query expansion; --diverse re-ranks for variety (MMR). --lambda (0..1, default\n  0.7) trades MMR relevance (1.0) against diversity (0.0); only applies with --diverse.");
+        println!("usage: ckos search [--synonyms] [--expand] [--diverse] [--lambda N] <dir> <query…>\n  Hybrid search (BM25 + vector + graph, RRF-fused). --synonyms rewrites the query\n  with a built-in domain synonym table before searching (closes vocabulary gaps\n  literal matching can't); --expand adds pseudo-relevance query expansion;\n  --diverse re-ranks for variety (MMR). --lambda (0..1, default 0.7) trades MMR\n  relevance (1.0) against diversity (0.0); only applies with --diverse.");
         return ExitCode::SUCCESS;
     }
     // Optional flags in any position.
-    let (expand, rest) = take_flag(rest, "--expand");
+    let (synonyms, rest) = take_flag(rest, "--synonyms");
+    let (expand, rest) = take_flag(&rest, "--expand");
     let (diverse, rest) = take_flag(&rest, "--diverse");
     let (lambda_str, rest) = match take_value_flag(&rest, "--lambda") {
         Ok(v) => v,
@@ -396,10 +397,17 @@ fn cmd_search(rest: &[String]) -> ExitCode {
         [dir, q @ ..] if !q.is_empty() => (dir.clone(), q.join(" ")),
         _ => {
             eprintln!(
-                "error: usage `ckos search [--expand] [--diverse] [--lambda N] <dir> <query…>`"
+                "error: usage `ckos search [--synonyms] [--expand] [--diverse] [--lambda N] <dir> <query…>`"
             );
             return ExitCode::FAILURE;
         }
+    };
+    // --synonyms rewrites the query up front, before any other refinement, so
+    // it composes with --expand/--diverse rather than competing with them.
+    let query = if synonyms {
+        expand_query_with_synonyms(&query, &SynonymTable::builtin(), 10)
+    } else {
+        query
     };
     let store = match FileStore::open(&dir) {
         Ok(s) => s,

@@ -27,6 +27,7 @@ pub mod reflection;
 pub mod retrieval;
 pub mod security;
 pub mod session;
+pub mod synonyms;
 
 pub use agent::{AgentInstance, AgentManifest, AgentState, CapabilityRegistry};
 pub use engine::{Engine, ExecutionResult};
@@ -41,6 +42,7 @@ pub use retrieval::{
 };
 pub use security::{sign, ReplayGuard, SecurityError, SignedEnvelope, Signer};
 pub use session::Session;
+pub use synonyms::{expand_query_with_synonyms, SynonymTable};
 
 /// One-stop import surface for applications building on CKOS.
 pub mod prelude {
@@ -60,6 +62,7 @@ pub mod prelude {
     };
     pub use crate::security::{sign, ReplayGuard, SecurityError, SignedEnvelope, Signer};
     pub use crate::session::Session;
+    pub use crate::synonyms::{expand_query_with_synonyms, SynonymTable};
 
     pub use ckos_kernel::audit::{AuditRecord, AuditSink, InMemoryAuditLog};
     pub use ckos_kernel::capability::Capability;
