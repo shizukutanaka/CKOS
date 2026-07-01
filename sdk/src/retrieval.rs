@@ -10,6 +10,12 @@
 //!
 //! Scores fold in each item's confidence (§948), so low-confidence knowledge
 //! ranks below high-confidence knowledge for the same textual match.
+//!
+//! With the default [`HashingEmbedder`](ckos_memory::HashingEmbedder), "vector"
+//! is a second lexical-overlap signal, not a semantic one — it cannot relate a
+//! paraphrase or synonym sharing no words with the query (see
+//! `ckos_memory::embedding`'s module doc). Swap in a real embedding model
+//! behind the same [`Embedder`] trait for genuine semantic recall.
 
 use ckos_graph::KnowledgeGraph;
 use ckos_memory::{cosine, Embedder, Query, Storage};

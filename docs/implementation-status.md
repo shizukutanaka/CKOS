@@ -65,7 +65,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 940 | Semantic compression | 🟡 | `memory::compress_document`/`summarize`/`keywords` (summary + concept tiers; knowledge tier ⏳) |
 | 941 | Knowledge graph builder | 🟡 | `graph::extract` (heuristic entities + typed-relation edges; `ckos graph` and auto-built by `ckos run --session`; statistical NER ⏳) |
 | 942–943 | Graph versioning / merge | ✅ | `graph::versioning` |
-| 944 | Embedding manager | ✅ | `memory::Embedder` / `HashingEmbedder` (real model ⏳) |
+| 944 | Embedding manager | ✅ | `memory::Embedder` / `HashingEmbedder` — a lexical hash, **not semantic**: cannot match paraphrases/synonyms (measured; see embedding.rs); real model ⏳ |
 | 945 | Cross-modal embedding | ⏳ | single-space design; modality encoders pending |
 | 946 | Temporal knowledge | ✅ | `graph::Node::date` + KQL `BEFORE`/`AFTER` |
 | 947 | Provenance engine | ✅ | `graph::Node::provenance`; extraction stamps source (`extract_concepts_with_provenance`); KQL `RETURN Sources` |

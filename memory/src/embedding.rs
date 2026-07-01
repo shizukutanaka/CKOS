@@ -3,8 +3,19 @@
 //! [`Embedder`] abstracts an embedding model so a real one (ONNX/MLX) can be
 //! dropped in later (§900, §945). [`HashingEmbedder`] is a deterministic,
 //! dependency-free default: a hashed bag-of-words projected into a fixed
-//! dimension and L2-normalised, which is enough to exercise vector search
-//! offline. [`cosine`] scores similarity between two vectors.
+//! dimension and L2-normalised.
+//!
+//! **Honest limitation**: this is *not* a semantic embedding. It only
+//! recognises literal token overlap (modulo hash collisions), so it cannot
+//! relate a paraphrase or synonym to the text it restates — two sentences
+//! sharing zero content words score no higher than two unrelated sentences
+//! (see `paraphrase_with_no_shared_words_is_indistinguishable_from_unrelated`
+//! below; measured similarity ~0.13 either way). Its purpose is to exercise
+//! the vector-search code path offline, not to provide meaning-aware
+//! retrieval — in the hybrid pipeline (§950) it is effectively a *second,
+//! noisier lexical signal* alongside BM25, not an independent semantic one.
+//! Real synonym/paraphrase matching needs an actual trained embedding model,
+//! which is necessarily an external dependency (§944 "real model").
 
 /// Produces embedding vectors for text (§944).
 pub trait Embedder: Send + Sync {
@@ -120,6 +131,28 @@ mod tests {
         let close = e.embed("the kernel schedules a task");
         let far = e.embed("banana smoothie recipe with mango");
         assert!(cosine(&q, &close) > cosine(&q, &far));
+    }
+
+    #[test]
+    fn paraphrase_with_no_shared_words_is_indistinguishable_from_unrelated() {
+        // Documents this embedder's real boundary (see the module doc): a true
+        // paraphrase that shares no content words with the original scores no
+        // better than genuinely unrelated text. If this ever changes (e.g. a
+        // real semantic model is dropped in behind the same trait), this test
+        // is expected to start failing — that would be good news, not a
+        // regression, and the module doc should be updated alongside it.
+        let e = HashingEmbedder::new(64);
+        let original = e.embed("The scheduler dispatches ready tasks by priority.");
+        let paraphrase = e.embed("Ready work is ordered and run according to importance."); // same
+                                                                                            // meaning, zero shared content words
+        let unrelated = e.embed("A recipe for pasta involves boiling water and salt.");
+        let sim_paraphrase = cosine(&original, &paraphrase);
+        let sim_unrelated = cosine(&original, &unrelated);
+        assert!(
+            (sim_paraphrase - sim_unrelated).abs() < 0.1,
+            "paraphrase ({sim_paraphrase:.3}) should be statistically indistinguishable \
+             from unrelated ({sim_unrelated:.3}) for a hashing embedder"
+        );
     }
 
     #[test]
