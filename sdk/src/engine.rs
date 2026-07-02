@@ -22,7 +22,7 @@ use ckos_kernel::event::{Event, EventBus, InMemoryEventBus};
 use ckos_kernel::task::{Task, TaskState};
 use ckos_kernel::telemetry::{InMemoryTelemetry, TaskMetrics, TelemetrySink};
 use ckos_kernel::TaskId;
-use ckos_policy::{AccessRequest, PolicyEngine};
+use ckos_policy::{Identity, PolicyEngine};
 use ckos_runtime::{InferenceRequest, RuntimeRegistry};
 use ckos_scheduler::{runtime_fit, Scheduler, ScoreFactors};
 use ckos_verifier::Verifier;
@@ -97,8 +97,9 @@ pub struct Engine {
     telemetry: InMemoryTelemetry,
     /// Optional RBAC/ABAC gate (§929) for [`SENSITIVE_CAPABILITIES`]; `None`
     /// (the default) runs every capability unrestricted, matching the
-    /// engine's behaviour before this existed. See [`with_policy`](Self::with_policy).
-    access: Option<(PolicyEngine, Vec<String>)>,
+    /// engine's behaviour before this existed. See [`with_policy`](Self::with_policy)
+    /// and [`with_identity`](Self::with_identity).
+    access: Option<(PolicyEngine, Identity)>,
 }
 
 impl Engine {
@@ -122,8 +123,32 @@ impl Engine {
     /// gated — this narrows the "least privilege" default-deny principle to
     /// where the stakes justify friction, rather than requiring a role for
     /// every task, which would make the common single-operator case unusable.
-    pub fn with_policy(mut self, policy: PolicyEngine, roles: Vec<String>) -> Self {
-        self.access = Some((policy, roles));
+    ///
+    /// A convenience over [`with_identity`](Self::with_identity) for callers
+    /// that only have bare roles (no authenticated identity/attributes) —
+    /// e.g. a hardcoded `--role` flag. ABAC rules that key off attributes
+    /// (§929) never match through this path, since there are none to carry;
+    /// use `with_identity` with a real [`Identity`] (e.g. from an
+    /// [`ckos_policy::IdentityProvider`]) to exercise ABAC.
+    pub fn with_policy(self, policy: PolicyEngine, roles: Vec<String>) -> Self {
+        self.with_identity(
+            policy,
+            Identity {
+                subject: "role-grant".into(),
+                roles,
+                attributes: HashMap::new(),
+            },
+        )
+    }
+
+    /// Opt in to authorization (§929) with a full [`Identity`] — subject,
+    /// roles *and* ABAC attributes — typically obtained by authenticating a
+    /// credential through an [`ckos_policy::IdentityProvider`]. Unlike
+    /// [`with_policy`](Self::with_policy), this lets ABAC rules (e.g. a
+    /// region- or clearance-based deny) actually evaluate against real
+    /// attribute values.
+    pub fn with_identity(mut self, policy: PolicyEngine, identity: Identity) -> Self {
+        self.access = Some((policy, identity));
         self
     }
 
@@ -159,13 +184,8 @@ impl Engine {
         }
 
         if SENSITIVE_CAPABILITIES.contains(&task.capability) {
-            if let Some((policy, roles)) = &self.access {
-                let req = AccessRequest {
-                    subject: task.id.to_string(),
-                    roles: roles.clone(),
-                    action: format!("capability.{}", task.capability),
-                    attributes: HashMap::new(),
-                };
+            if let Some((policy, identity)) = &self.access {
+                let req = identity.request(format!("capability.{}", task.capability));
                 if let Err(e) = policy.evaluate(&req) {
                     // Denied before a runtime was ever selected — the task
                     // honestly stays Queued (see the doc comment above; there
@@ -387,6 +407,7 @@ mod tests {
     use super::*;
     use crate::agent::AgentManifest;
     use ckos_planner::{HeuristicPlanner, Planner};
+    use ckos_policy::AbacRule;
     use ckos_runtime::EchoRuntime;
     use ckos_verifier::NonEmptyCheck;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -559,6 +580,54 @@ mod tests {
         policy.grant("clinician", "capability.medical");
         let engine = Engine::new(runtimes, CapabilityRegistry::new(), Verifier::new())
             .with_policy(policy, vec!["clinician".to_string()]);
+        let mut task = Task::new("diagnose", Capability::Medical);
+        let result = engine.execute(&mut task).unwrap();
+        assert_eq!(result.state, TaskState::Completed);
+    }
+
+    #[test]
+    fn abac_attributes_from_a_real_identity_change_the_authorization_outcome() {
+        // Proves attributes actually flow Identity -> AccessRequest -> ABAC,
+        // not just RBAC roles: an admin's blanket RBAC grant is overridden by
+        // an explicit ABAC deny keyed on an attribute the identity carries.
+        let mut runtimes = RuntimeRegistry::new();
+        runtimes.register(Box::new(EchoRuntime::new(vec![Capability::Medical])));
+
+        let mut policy = PolicyEngine::new();
+        policy.grant("admin", "capability.*");
+        policy.add_rule(AbacRule {
+            action: "capability.medical".into(),
+            attribute_key: "region".into(),
+            attribute_value: "restricted".into(),
+            deny: true,
+        });
+
+        // Same role, restricted region -> ABAC deny wins over the RBAC grant.
+        let restricted = Identity::new("alice")
+            .with_role("admin")
+            .with_attribute("region", "restricted");
+        let engine = Engine::new(runtimes, CapabilityRegistry::new(), Verifier::new())
+            .with_identity(policy, restricted);
+        let mut task = Task::new("diagnose", Capability::Medical);
+        assert!(engine.execute(&mut task).is_err());
+        assert_eq!(task.state(), TaskState::Queued);
+
+        // Same role, unrestricted region -> the RBAC grant applies normally.
+        let mut runtimes = RuntimeRegistry::new();
+        runtimes.register(Box::new(EchoRuntime::new(vec![Capability::Medical])));
+        let mut policy = PolicyEngine::new();
+        policy.grant("admin", "capability.*");
+        policy.add_rule(AbacRule {
+            action: "capability.medical".into(),
+            attribute_key: "region".into(),
+            attribute_value: "restricted".into(),
+            deny: true,
+        });
+        let unrestricted = Identity::new("alice")
+            .with_role("admin")
+            .with_attribute("region", "hq");
+        let engine = Engine::new(runtimes, CapabilityRegistry::new(), Verifier::new())
+            .with_identity(policy, unrestricted);
         let mut task = Task::new("diagnose", Capability::Medical);
         let result = engine.execute(&mut task).unwrap();
         assert_eq!(result.state, TaskState::Completed);

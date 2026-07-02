@@ -69,15 +69,16 @@ USAGE:
 COMMANDS:
     plan [--dot] <intent...>         Decompose an intent into a workflow DAG
                                      (--dot emits Graphviz)
-    run [--session <dir>] [--role R] Plan and execute a workflow end-to-end;
-      <intent…>                      --session persists + grows the graph;
-                                     --role authorizes sensitive capabilities (§929)
+    run [--session <dir>]            Plan and execute a workflow end-to-end;
+      [--role R | --token T]         --session persists + grows the graph;
+      <intent…>                      --role/--token authorize sensitive
+                                     capabilities (§929/§928)
     history <dir>                    Show the execution history of a session
     search [--synonyms] [--expand]   Hybrid-search a session (--synonyms: domain
       [--diverse] [--lambda N]       synonym expansion, --expand: pseudo-relevance
       <dir> <query…>                 expansion, --diverse: MMR, --lambda: tradeoff)
-    workflow [--role <role>] <file>  Load and execute a workflow definition file
-                                     (--role: as above, §929)
+    workflow [--role R | --token T]  Load and execute a workflow definition file
+      <file>                        (--role/--token: as above, §929/§928)
     kql [--session <dir>] <query>    Run a KQL query (demo graph, or a session's
                                      persisted graph with --session)
     eval --relevant <csv> [--k N]    Score search quality (Precision/Recall/
@@ -88,9 +89,10 @@ COMMANDS:
       [--now YYYY-MM-DD]             (--now enables expiry) + orphaned graph nodes
     verify <text…>                   Run the built-in verifier checks on text
     tool --list                      List built-in tools and required permissions
-    tool [--role <role>] <name>      Invoke a tool; required permissions are
-      <input…>                       authorized by RBAC policy (§929), not
-                                     self-granted (roles: admin, guest)
+    tool [--role R | --token T]      Invoke a tool; required permissions are
+      <name> <input…>                authorized by RBAC+ABAC policy (§929), not
+                                     self-granted (roles: admin, guest; --token
+                                     authenticates via a demo provider, §928)
     capabilities                     List the built-in capability vocabulary
     version                          Print the CKOS version
     help                             Show this help
@@ -189,7 +191,7 @@ fn cmd_plan(rest: &[String]) -> ExitCode {
 
 fn cmd_run(rest: &[String]) -> ExitCode {
     if wants_help(rest) {
-        println!("usage: ckos run [--session <dir>] [--role <role>] <intent…>\n  Plan and execute end-to-end; --session persists the run and grows its graph.\n  --role attaches RBAC authorization (§929) for finance/medical/legal/robotics\n  steps (built-in roles: admin, guest). CAUTION: the built-in planner never\n  classifies free text into those capabilities (a keyword classifier was\n  tested and rejected as unsafe — see planner's docs), so --role has no effect\n  here in practice; use `ckos workflow` with an explicit `step x: medical`\n  (etc.) to actually reach a gated capability.");
+        println!("usage: ckos run [--session <dir>] [--role <role> | --token <token>] <intent…>\n  Plan and execute end-to-end; --session persists the run and grows its graph.\n  --role/--token attach RBAC+ABAC authorization (§929) for finance/medical/\n  legal/robotics steps. --role is bare roles (admin, guest), no attributes.\n  --token authenticates via a demo identity provider (§928: tok-admin-hq,\n  tok-admin-restricted, tok-guest), carrying real ABAC attributes. CAUTION:\n  the built-in planner never classifies free text into those capabilities (a\n  keyword classifier was tested and rejected as unsafe — see planner's docs),\n  so neither flag has effect here in practice; use `ckos workflow` with an\n  explicit `step x: medical` (etc.) to actually reach a gated capability.");
         return ExitCode::SUCCESS;
     }
     // Optional flags in any position; the remainder is the intent.
@@ -200,7 +202,21 @@ fn cmd_run(rest: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let (role, intent_args) = match take_value_flag(&rest, "--role") {
+    let (role, rest) = match take_value_flag(&rest, "--role") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let (token, intent_args) = match take_value_flag(&rest, "--token") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let identity = match resolve_identity(role, token, None) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("error: {e}");
@@ -227,10 +243,10 @@ fn cmd_run(rest: &[String]) -> ExitCode {
         .with_check(Box::new(NonEmptyCheck))
         .with_check(Box::new(CitationCheck));
     let mut engine = Engine::new(runtimes, agents, verifier);
-    // Authorization (§929) is opt-in: without --role, every capability runs
-    // unrestricted, exactly as before this existed.
-    if let Some(role) = role {
-        engine = engine.with_policy(demo_policy(), vec![role]);
+    // Authorization (§929) is opt-in: without --role/--token, every
+    // capability runs unrestricted, exactly as before this existed.
+    if let Some(identity) = identity {
+        engine = engine.with_identity(demo_policy(), identity);
     }
 
     println!("intent : {intent}");
@@ -540,10 +556,24 @@ fn cmd_eval(rest: &[String]) -> ExitCode {
 
 fn cmd_workflow(rest: &[String]) -> ExitCode {
     if wants_help(rest) {
-        println!("usage: ckos workflow [--role <role>] <file>\n  Load and execute a workflow definition file. --role attaches RBAC\n  authorization (§929) for finance/medical/legal/robotics steps — the only\n  reachable way to author such a step today, since the heuristic planner\n  behind `ckos plan`/`ckos run` never classifies free text into them.");
+        println!("usage: ckos workflow [--role <role> | --token <token>] <file>\n  Load and execute a workflow definition file. --role/--token attach RBAC+ABAC\n  authorization (§929) for finance/medical/legal/robotics steps — the only\n  reachable way to author such a step today, since the heuristic planner\n  behind `ckos plan`/`ckos run` never classifies free text into them. --token\n  authenticates via a demo identity provider (§928: tok-admin-hq,\n  tok-admin-restricted, tok-guest), carrying real ABAC attributes.");
         return ExitCode::SUCCESS;
     }
     let (role, rest) = match take_value_flag(rest, "--role") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let (token, rest) = match take_value_flag(&rest, "--token") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let identity = match resolve_identity(role, token, None) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("error: {e}");
@@ -581,8 +611,8 @@ fn cmd_workflow(rest: &[String]) -> ExitCode {
         agents,
         Verifier::new().with_check(Box::new(NonEmptyCheck)),
     );
-    if let Some(role) = role {
-        engine = engine.with_policy(demo_policy(), vec![role]);
+    if let Some(identity) = identity {
+        engine = engine.with_identity(demo_policy(), identity);
     }
 
     println!("workflow: {} ({} step(s))\n", dag.name(), dag.len());
@@ -913,21 +943,76 @@ fn demo_tools() -> ToolRegistry {
     reg
 }
 
-/// The demo RBAC policy `ckos tool` and `ckos run --role` authorize against
-/// (§929). Two built-in roles: `admin` (granted `text.*` for tools and
-/// `capability.*` for the Engine's sensitive capabilities) and `guest`
-/// (nothing — PolicyEngine defaults to deny). A real deployment would load
-/// roles from its own identity provider instead of hardcoding them.
+/// The demo RBAC+ABAC policy `ckos tool`/`ckos run`/`ckos workflow` authorize
+/// against (§929). Two built-in roles: `admin` (granted `text.*` for tools
+/// and `capability.*` for the Engine's sensitive capabilities) and `guest`
+/// (nothing — PolicyEngine defaults to deny). One ABAC rule demonstrates
+/// attribute-based override: `capability.medical` is explicitly denied when
+/// the requester's `region` attribute is `restricted`, regardless of the
+/// `admin` RBAC grant (deny always wins, §929) — only reachable when the
+/// identity actually carries that attribute, i.e. via `--token`
+/// (see [`demo_identity_provider`]), since `--role` carries no attributes.
+/// A real deployment would load roles/rules from its own policy store.
 fn demo_policy() -> PolicyEngine {
     let mut p = PolicyEngine::new();
     p.grant("admin", "text.*");
     p.grant("admin", "capability.*"); // sensitive Engine capabilities (§929)
+    p.add_rule(AbacRule {
+        action: "capability.medical".into(),
+        attribute_key: "region".into(),
+        attribute_value: "restricted".into(),
+        deny: true,
+    });
     p
+}
+
+/// The demo identity provider (§928) `--token` authenticates against — an
+/// in-memory stand-in for a real OIDC/LDAP directory. `tok-admin-restricted`
+/// carries the same `admin` role as `tok-admin-hq` but adds a `region`
+/// attribute the demo policy's ABAC rule denies `capability.medical` for
+/// (see [`demo_policy`]), so the two tokens authorize differently even
+/// though their RBAC role is identical — proving `--token` carries real
+/// attributes that `--role` cannot.
+fn demo_identity_provider() -> StaticTokenProvider {
+    let mut p = StaticTokenProvider::new();
+    p.add_token("tok-admin-hq", Identity::new("admin-hq").with_role("admin"));
+    p.add_token(
+        "tok-admin-restricted",
+        Identity::new("admin-restricted")
+            .with_role("admin")
+            .with_attribute("region", "restricted"),
+    );
+    p.add_token("tok-guest", Identity::new("guest-user").with_role("guest"));
+    p
+}
+
+/// Resolve `--role`/`--token` into an [`Identity`] for §929 authorization.
+/// `--token` authenticates through [`demo_identity_provider`] (§928),
+/// producing an identity with real ABAC attributes; `--role` is a bare-roles
+/// convenience carrying no attributes. The two flags are mutually exclusive.
+/// `default_role` applies when neither is given — callers that always
+/// authorize (`ckos tool`) pass `Some("guest")`; callers where authorization
+/// is opt-in (`ckos run`/`ckos workflow`) pass `None` and skip attaching a
+/// policy at all when the result is `None`.
+fn resolve_identity(
+    role: Option<String>,
+    token: Option<String>,
+    default_role: Option<&str>,
+) -> std::result::Result<Option<Identity>, String> {
+    match (role, token) {
+        (Some(_), Some(_)) => Err("--role and --token are mutually exclusive".into()),
+        (Some(role), None) => Ok(Some(Identity::new("cli-user").with_role(role))),
+        (None, Some(token)) => demo_identity_provider()
+            .authenticate(&token)
+            .map(Some)
+            .map_err(|e| format!("token authentication failed: {e}")),
+        (None, None) => Ok(default_role.map(|r| Identity::new("cli-user").with_role(r))),
+    }
 }
 
 fn cmd_tool(rest: &[String]) -> ExitCode {
     if wants_help(rest) || rest.is_empty() {
-        println!("usage: ckos tool --list | ckos tool [--role <role>] <name> <input…>\n  Invoke a registered tool (§917/§918). Each permission the tool requires is\n  authorized against a role-based policy (§929, PolicyEngine) — not\n  self-granted — before the tool's own least-privilege gate runs (§919).\n  Built-in roles: admin (text.*), guest (nothing). Default: guest.");
+        println!("usage: ckos tool --list | ckos tool [--role <role> | --token <token>] <name> <input…>\n  Invoke a registered tool (§917/§918). Each permission the tool requires is\n  authorized against a role+attribute policy (§929, PolicyEngine) — not\n  self-granted — before the tool's own least-privilege gate runs (§919).\n  --role is bare roles (admin, guest; default guest), no attributes. --token\n  authenticates via a demo identity provider (§928: tok-admin-hq,\n  tok-admin-restricted, tok-guest), carrying real ABAC attributes.");
         return ExitCode::SUCCESS;
     }
     if rest[0] == "--list" {
@@ -936,7 +1021,7 @@ fn cmd_tool(rest: &[String]) -> ExitCode {
         for name in reg.names() {
             println!("  - {name}");
         }
-        println!("(authorize with --role <admin|guest>, default guest)");
+        println!("(authorize with --role <admin|guest> or --token <tok-…>, default guest)");
         return ExitCode::SUCCESS;
     }
     let (role, rest) = match take_value_flag(rest, "--role") {
@@ -946,7 +1031,21 @@ fn cmd_tool(rest: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let role = role.unwrap_or_else(|| "guest".to_string());
+    let (token, rest) = match take_value_flag(&rest, "--token") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let identity = match resolve_identity(role, token, Some("guest")) {
+        Ok(Some(v)) => v,
+        Ok(None) => unreachable!("default_role always yields Some"),
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let (name, input) = match rest.as_slice() {
         [name, i @ ..] if !i.is_empty() => (name.clone(), i.join(" ")),
         _ => {
@@ -967,17 +1066,14 @@ fn cmd_tool(rest: &[String]) -> ExitCode {
     // trail is printed on exit so it is actually observable, not write-only.
     let audit = InMemoryAuditLog::new();
 
-    // Authorize each required permission against the RBAC policy (§929) —
-    // the tool registry never trusts a self-asserted grant.
+    // Authorize each required permission against the RBAC+ABAC policy
+    // (§929) — the tool registry never trusts a self-asserted grant. Built
+    // from the resolved identity, so a --token grant carries real attributes
+    // an ABAC rule can key off, not just bare roles.
     let policy = demo_policy();
     let mut reg = tools;
     for perm in &required {
-        let req = AccessRequest {
-            subject: "cli-user".into(),
-            roles: vec![role.clone()],
-            action: perm.clone(),
-            attributes: std::collections::HashMap::new(),
-        };
+        let req = identity.request(perm.clone());
         match policy.evaluate(&req) {
             Ok(()) => reg.grant(perm.clone()),
             Err(e) => {
@@ -985,10 +1081,13 @@ fn cmd_tool(rest: &[String]) -> ExitCode {
                     AuditRecord::new("tool.invoke")
                         .tool(&name)
                         .input(&input)
-                        .error(format!("denied for role {role}: {e}")),
+                        .error(format!("denied for {}: {e}", identity.subject)),
                 );
                 print_audit(&audit);
-                eprintln!("error: role {role:?} may not use {name}: {e}");
+                eprintln!(
+                    "error: {} (roles {:?}) may not use {name}: {e}",
+                    identity.subject, identity.roles
+                );
                 return ExitCode::FAILURE;
             }
         }

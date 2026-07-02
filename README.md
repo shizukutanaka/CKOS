@@ -58,7 +58,7 @@ appear in any position, and `ckos <command> --help` prints per-command usage.
 | Command | What it does | Example |
 |---------|--------------|---------|
 | `plan [--dot] <intent…>` | Decompose an intent into a workflow DAG | `ckos plan "research the Transformer paper"` |
-| `run [--session <dir>] [--role R] <intent…>` | Plan + execute; `--session` persists the run and grows its knowledge graph; `--role` authorizes finance/medical/legal/robotics steps (§929). **Caution**: the built-in planner never classifies free text into those capabilities, so `--role` has no observable effect via `run` — see `ckos workflow` | `ckos run --session ./sess "research X"` |
+| `run [--session <dir>] [--role R \| --token T] <intent…>` | Plan + execute; `--session` persists the run and grows its knowledge graph; `--role`/`--token` authorize finance/medical/legal/robotics steps (§929). `--token` authenticates via a demo identity provider (§928) carrying real ABAC attributes, unlike bare `--role`. **Caution**: the built-in planner never classifies free text into those capabilities, so neither flag has an observable effect via `run` — see `ckos workflow` | `ckos run --session ./sess "research X"` |
 | `history <dir>` | Show a session's past runs | `ckos history ./sess` |
 | `search [--synonyms] [--expand] [--diverse] [--lambda N] <dir> <query…>` | Hybrid BM25 + vector + graph search (RRF-fused); `--synonyms` bridges vocabulary gaps with a built-in domain table, `--expand` widens recall (PRF), `--diverse` re-ranks for variety (MMR, tune with `--lambda` 0..1) | `ckos search --synonyms ./sess "dispatcher urgency"` |
 | `graph [--dot] <text…>` / `graph [--dot] --session <dir>` | Extract a typed knowledge graph from text or a session's docs | `ckos graph --session ./sess` |
@@ -66,9 +66,9 @@ appear in any position, and `ckos <command> --help` prints per-command usage.
 | `eval --relevant <csv> [--k N] <dir> <query…>` | Score search quality (Precision/Recall/MRR/nDCG) against known-relevant titles | `ckos eval --relevant "Transformer" ./sess Transformer` |
 | `gc <dir> [--min-confidence N] [--now <date>]` | Garbage-collect low-value documents and sweep orphaned graph nodes (§954); `--now` enables expiry of documents whose `expires` metadata has passed | `ckos gc ./sess --min-confidence 30 --now 2026-07-02` |
 | `verify <text…>` | Run the independent §899 checks (non-empty, repetition, arithmetic, JSON, citations, security) | `ckos verify 'see [1]'` |
-| `tool --list` / `tool [--role <role>] <name> <input…>` | Invoke a tool; required permissions are authorized by RBAC policy (§929), not self-granted (§917/§919); every run — allowed or denied — prints its §903 audit record | `ckos tool --role admin reverse hello` |
+| `tool --list` / `tool [--role <role> \| --token <token>] <name> <input…>` | Invoke a tool; required permissions are authorized by RBAC+ABAC policy (§929), not self-granted (§917/§919); every run — allowed or denied — prints its §903 audit record | `ckos tool --role admin reverse hello` |
 | `capabilities` | List the built-in capability vocabulary | `ckos capabilities` |
-| `workflow [--role <role>] <file>` | Load and execute a workflow definition file | `ckos workflow pipeline.wf` |
+| `workflow [--role <role> \| --token <token>] <file>` | Load and execute a workflow definition file; `--token` authenticates via a demo identity provider (§928: `tok-admin-hq`, `tok-admin-restricted`, `tok-guest`), carrying real ABAC attributes | `ckos workflow pipeline.wf` |
 | `version` | Print the CKOS version | `ckos version` |
 
 ### A typical session flow
