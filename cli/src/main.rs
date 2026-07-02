@@ -86,7 +86,8 @@ COMMANDS:
     graph [--dot] <text…>            Extract a knowledge graph from text (§941)
     graph [--dot] --session <dir>    Extract a graph from a session's documents
     gc <dir> [--min-confidence N]    Garbage-collect a session: low-value docs
-      [--now YYYY-MM-DD]             (--now enables expiry) + orphaned graph nodes
+      [--now YYYY-MM-DD]             (--now enables expiry) + orphaned graph nodes;
+      [--consolidate N]              --consolidate compresses docs over N chars first (§953)
     verify <text…>                   Run the built-in verifier checks on text
     tool --list                      List built-in tools and required permissions
     tool [--role R | --token T]      Invoke a tool; required permissions are
@@ -810,7 +811,7 @@ fn cmd_graph(rest: &[String]) -> ExitCode {
 
 fn cmd_gc(rest: &[String]) -> ExitCode {
     if wants_help(rest) {
-        println!("usage: ckos gc <dir> [--min-confidence N] [--now YYYY-MM-DD]\n  Garbage-collect a session (§954): removes low-value documents AND sweeps\n  orphaned knowledge-graph nodes from the session's persisted graph.\n  --now enables expiry: documents whose `expires` metadata is <= the given\n  ISO date are collected (without --now, expiry is skipped).");
+        println!("usage: ckos gc <dir> [--min-confidence N] [--now YYYY-MM-DD] [--consolidate N]\n  Garbage-collect a session (§954): removes low-value documents AND sweeps\n  orphaned knowledge-graph nodes from the session's persisted graph.\n  --now enables expiry: documents whose `expires` metadata is <= the given\n  ISO date are collected (without --now, expiry is skipped).\n  --consolidate N runs the §953 sleep-phase pass first: any document body\n  over N characters is compressed (summary + keywords) and written back,\n  before garbage collection runs over the (now smaller) store.");
         return ExitCode::SUCCESS;
     }
     let (now, rest) = match take_value_flag(rest, "--now") {
@@ -827,6 +828,13 @@ fn cmd_gc(rest: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let (consolidate_max_chars, rest) = match take_value_flag(&rest, "--consolidate") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let min_confidence: u8 = match min_conf {
         Some(v) => match v.parse() {
             Ok(n) => n,
@@ -836,6 +844,16 @@ fn cmd_gc(rest: &[String]) -> ExitCode {
             }
         },
         None => 0,
+    };
+    let consolidate_max_chars: Option<usize> = match consolidate_max_chars {
+        Some(v) => match v.parse() {
+            Ok(n) => Some(n),
+            Err(_) => {
+                eprintln!("error: --consolidate needs a character count, e.g. --consolidate 2000");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
     };
     let Some(dir) = rest.first() else {
         eprintln!("error: `gc` needs a session directory, e.g. `ckos gc ./my-session`");
@@ -849,6 +867,19 @@ fn cmd_gc(rest: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    // §953 sleep-phase pass runs first, so GC below sees the (now smaller)
+    // consolidated bodies rather than acting on stale, oversized ones.
+    if let Some(max_chars) = consolidate_max_chars {
+        match consolidate(&mut store, max_chars) {
+            Ok(n) => println!("consolidated {n} document(s) over {max_chars} chars"),
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
     let policy = GcPolicy {
         min_confidence,
         ..GcPolicy::default()

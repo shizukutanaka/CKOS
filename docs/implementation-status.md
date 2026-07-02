@@ -62,7 +62,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 937 | Unified document model | ✅ | `memory::Document` |
 | 938 | Index pipeline | 🟡 | `knowledge_bus::ingest_text` (extract → queue) + `Reindexer` (embed + insert); deep parse/chunk ⏳ |
 | 939 | Chunk evolution | 🟡 | `memory::chunk` (Paragraph/Fixed/Adaptive/Recursive + `chunk_with_overlap`; semantic & hierarchical ⏳) |
-| 940 | Semantic compression | 🟡 | `memory::compress_document`/`summarize`/`keywords` (summary + concept tiers; knowledge tier ⏳) |
+| 940 | Semantic compression | 🟡 | `memory::compress_document`/`summarize`/`keywords` (summary + concept tiers; knowledge tier ⏳), reachable via `ckos gc --consolidate` (§953) |
 | 941 | Knowledge graph builder | 🟡 | `graph::extract` (heuristic entities + typed-relation edges; `ckos graph` and auto-built by `ckos run --session`; re-extraction over a persisted graph reinforces nodes without duplicating edges; statistical NER ⏳) |
 | 942–943 | Graph versioning / merge | 🟡 | `graph::versioning` (complete, tested library — commits/branches/3 merge strategies — but no CLI or engine path uses it yet) |
 | 944 | Embedding manager | ✅ | `memory::Embedder` / `HashingEmbedder` — a lexical hash, **not semantic**: cannot match paraphrases/synonyms (measured; see embedding.rs); real model ⏳ |
@@ -74,7 +74,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 950 | Hybrid search | ✅ | `retrieval::Retriever` (BM25 keyword + vector + graph, Reciprocal Rank Fusion) |
 | 951 | Graph reasoning | ✅ | retrieval graph hits + `graph::traverse` + `pagerank`/`central_nodes` (node importance) |
 | 952 | Multi-hop planner | ✅ | `graph::traverse`/`traverse_with_hops` + retriever hop expansion (score decays geometrically per hop) |
-| 953 | Memory consolidation | 🟡 | `memory::consolidate` (sleep-phase pass compressing oversized docs; unit-tested, but no CLI command or engine hook reaches it yet — the §940 compression ladder it drives is likewise entry-point-less) |
+| 953 | Memory consolidation | ✅ | `memory::consolidate` (sleep-phase pass compressing oversized docs), reachable via `ckos gc --consolidate N`, which runs before the document/graph GC passes; also driving the §940 compression ladder it calls into |
 | 954 | Garbage collection | ✅ | `ckos gc`: `memory::collect` (documents; expiry via `--now <date>`) + `graph::KnowledgeGraph::remove_orphans` sweeping the session's persisted graph |
 | 955 | Data encryption | ⏳ | at-rest/in-transit pending (transport layer) |
 | 956 | Offline-first | ✅ | `FileStore` + std-only build |

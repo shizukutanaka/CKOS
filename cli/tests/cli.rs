@@ -444,3 +444,44 @@ fn sensitive_capability_requires_an_authorized_role() {
     ]);
     assert!(ordinary.status.success());
 }
+
+#[test]
+fn gc_consolidate_compresses_oversized_documents_before_collecting() {
+    // §953 previously had no entry point anywhere (memory::consolidate had
+    // zero callers outside its own tests, and wasn't even in the SDK
+    // prelude) — this proves `ckos gc --consolidate` actually reaches it.
+    struct TempDir(PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("ckos-gc-consolidate-{}-{n}", std::process::id()));
+    let _guard = TempDir(dir.clone());
+
+    // A generic (non-classified) intent echoes back verbatim as the session
+    // document's body, so a long intent yields a long stored document.
+    let long_intent = "lorem ipsum dolor sit amet consectetur adipiscing elit ".repeat(4);
+    let run = ckos(&[
+        "run",
+        "--session",
+        dir.to_str().unwrap(),
+        long_intent.trim(),
+    ]);
+    assert!(run.status.success());
+
+    // Without --consolidate, gc's document pass is unaffected (no flag ->
+    // no compression, matching every other opt-in flag on this command).
+    let plain = ckos(&["gc", dir.to_str().unwrap()]);
+    assert!(plain.status.success());
+    assert!(!stdout(&plain).contains("consolidated"));
+
+    // --consolidate 50 compresses the oversized document before GC runs.
+    let consolidated = ckos(&["gc", dir.to_str().unwrap(), "--consolidate", "50"]);
+    assert!(consolidated.status.success());
+    let s = stdout(&consolidated);
+    assert!(s.contains("consolidated"));
+    assert!(!s.contains("consolidated 0 document"));
+}
