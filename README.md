@@ -64,9 +64,9 @@ appear in any position, and `ckos <command> --help` prints per-command usage.
 | `graph [--dot] <text…>` / `graph [--dot] --session <dir>` | Extract a typed knowledge graph from text or a session's docs | `ckos graph --session ./sess` |
 | `kql [--session <dir>] <query>` | Run a Knowledge Query Language query | `ckos kql 'FIND Concept "Transformer" RELATED Algorithm'` |
 | `eval --relevant <csv> [--k N] <dir> <query…>` | Score search quality (Precision/Recall/MRR/nDCG) against known-relevant titles | `ckos eval --relevant "Transformer" ./sess Transformer` |
-| `gc <dir> [--min-confidence N]` | Garbage-collect low-value documents | `ckos gc ./sess --min-confidence 30` |
+| `gc <dir> [--min-confidence N] [--now <date>]` | Garbage-collect low-value documents and sweep orphaned graph nodes (§954); `--now` enables expiry of documents whose `expires` metadata has passed | `ckos gc ./sess --min-confidence 30 --now 2026-07-02` |
 | `verify <text…>` | Run the independent §899 checks (non-empty, repetition, arithmetic, JSON, citations, security) | `ckos verify 'see [1]'` |
-| `tool --list` / `tool [--role <role>] <name> <input…>` | Invoke a tool; required permissions are authorized by RBAC policy (§929), not self-granted (§917/§919) | `ckos tool --role admin reverse hello` |
+| `tool --list` / `tool [--role <role>] <name> <input…>` | Invoke a tool; required permissions are authorized by RBAC policy (§929), not self-granted (§917/§919); every run — allowed or denied — prints its §903 audit record | `ckos tool --role admin reverse hello` |
 | `capabilities` | List the built-in capability vocabulary | `ckos capabilities` |
 | `workflow [--role <role>] <file>` | Load and execute a workflow definition file | `ckos workflow pipeline.wf` |
 | `version` | Print the CKOS version | `ckos version` |

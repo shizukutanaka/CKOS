@@ -15,19 +15,19 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 889 | System overview | ✅ | `README.md`, `docs/architecture.md` |
 | 890 | Rust workspace | ✅ | `Cargo.toml` (12 crates) |
 | 891 | Kernel responsibilities (no inference) | ✅ | `kernel` |
-| 892 | Four-layer scheduler | ✅ | `scheduler::Scheduler` (multi-factor score + priority aging / anti-starvation) |
-| 893 | Task state machine | ✅ | `kernel::task::TaskState`, driven live by `Engine::execute` (was previously unwired — see implementation notes) |
-| 894 | Event bus | ✅ | `kernel::event` |
+| 892 | Four-layer scheduler | ✅ | `scheduler::Scheduler` (multi-factor score + priority aging; note aging only matters under continuous arrivals — `run_workflow` drains a batch, where retries are the only mid-loop arrivals) |
+| 893 | Task state machine | ✅ | `kernel::task::TaskState`, driven live by `Engine::execute`; the recovery loop (`Failed → Rollback → Retry → Queued`, bounded by `MAX_TASK_RETRIES`) is driven by `Engine::run_workflow`. `Planning` remains a declared-but-unentered state (execute goes `Queued → Running` directly) |
+| 894 | Event bus | 🟡 | `kernel::event` — published & consumed: TaskStarted/TaskCompleted/TaskFailed (both failure paths)/PolicyViolation (on §929 denial)/GraphChanged/WorkflowCompleted. Never published anywhere yet: TaskCreated, RuntimeLoaded, MemoryUpdated, PluginInstalled, AgentRegistered; `topic()` has no caller |
 | 895 | Workflow DAG | ✅ | `workflow::Dag` (Kahn's-algorithm topological order; rejects duplicate step names) |
-| 896 | Memory hierarchy L0–L5 | ✅ | `memory::MemoryTier` + `rank_memories` (Generative-Agents recency×importance×relevance) |
+| 896 | Memory hierarchy L0–L5 | 🟡 | `memory::MemoryTier` (a classification vocabulary only — documents carry no tier and nothing promotes/demotes across tiers yet) + `rank_memories` (Generative-Agents recency×importance×relevance; consumed by `Session::recall`, which itself has no CLI surface yet) |
 | 897 | Knowledge graph | ✅ | `graph` (+ `GraphStore` file persistence) |
 | 898 | Planner | ✅ | `planner` — deliberately never infers regulated capabilities (finance/medical/legal/robotics) from free text; a keyword classifier was tested and rejected as unsafe (see module doc) |
 | 899 | Verifier (independent) | ✅ | `verifier` (non-empty, repetition/degeneration, arithmetic, JSON, citation, security-policy) |
 | 900 | Runtime registry | ✅ | `runtime` (trait + registry; real engines ⏳) |
 | 901 | Plugin SDK | 🟡 | `plugins` (tool/registry/permissions, `ckos tool`; WASM sandbox ⏳) |
 | 902 | API gateway | 🟡 | `cli` done; REST/gRPC/WebSocket/MCP ⏳ |
-| 903 | Audit logging | ✅ | `kernel::audit` |
-| 904 | Telemetry | ✅ | `kernel::telemetry` (hardware probe seam; real probe ⏳) |
+| 903 | Audit logging | ✅ | `kernel::audit` — task execution (`Engine::execute`, incl. policy denials) and tool runs (`ckos tool`, allowed *and* denied, trail printed on exit). `.plugin()` field still has no producer |
+| 904 | Telemetry | ✅ | `kernel::telemetry` — latency feeds scheduling via `run_workflow`'s telemetry-scored submission (§913). Hardware `ResourceProbe` is a seam with no consumer yet; real probe ⏳ |
 | 905 | CI/CD | ✅ | `docs/ci-workflow.yml` (copy to `.github/workflows/`) |
 | 906 | Implementation priority | ✅ | `docs/roadmap.md` |
 
@@ -37,7 +37,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 |---|-------|--------|-------|
 | 907–909 | Agent as service / manifest / lifecycle | ✅ | `sdk::agent` — `AgentState::transition` validates the §909 graph and `discover` now actually honours it (excludes `Suspended`/`Terminated`; was previously ignored entirely) |
 | 910–912 | Capability registry / discovery | ✅ | `sdk::CapabilityRegistry`, `kernel::Capability` |
-| 913 | Multi-factor agent scheduler | ✅ | `scheduler::ScoreFactors` (+ telemetry `runtime_fit`) |
+| 913 | Multi-factor agent scheduler | ✅ | `scheduler::ScoreFactors`, fed live: `Engine::run_workflow` submits every task via `submit_scored` with `recommended_factors` (observed runtime latency → `runtime_fit`), closing §904→§913. The other factors (deadline/importance/cost/energy/confidence) still have no producer |
 | 914–916 | Message bus / format / service mesh | ✅ | `sdk::messaging` |
 | 917–919 | Tool registry / adapter / permissions | ✅ | `plugins` (permission gate incl. `.*` wildcards, shared with `policy` via `kernel::permission_matches`); `ckos tool` grants are authorized by `PolicyEngine`, not self-asserted |
 | 920 | Workflow compiler | ✅ | `planner` (intent → DAG) |
@@ -45,9 +45,9 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 923 | Knowledge bus | ✅ | `sdk::knowledge_bus` |
 | 924–925 | Runtime pool / edge | 🟡 | `runtime::select` (local-preferred, deterministic ties, tested across all `RuntimeKind`s); real edge runtimes ⏳ |
 | 926 | Distributed workflow | ⏳ | sync engine done; distributed driver pending |
-| 927 | Session manager | ✅ | `sdk::session` (history/reflections + `recall` via Generative-Agents scoring) |
+| 927 | Session manager | ✅ | `sdk::session` (history/reflections persisted by `ckos run --session`; `recall` implements Generative-Agents scoring but has no CLI/engine caller yet — `ckos history` dumps raw history) |
 | 928 | Enterprise identity | 🟡 | `policy::IdentityProvider` (OIDC/LDAP verification ⏳) |
-| 929 | Authorization (RBAC + ABAC) | ✅ | `policy` — authorizes `ckos tool`, and `Engine`'s sensitive capabilities (finance/medical/legal/robotics) via opt-in `Engine::with_policy` + `ckos run`/`ckos workflow --role`; ordinary capabilities stay unrestricted |
+| 929 | Authorization (RBAC + ABAC) | ✅ | `policy` — RBAC authorizes `ckos tool` and `Engine`'s sensitive capabilities (finance/medical/legal/robotics) via opt-in `Engine::with_policy` + `ckos run`/`ckos workflow --role`; denials emit `Event::PolicyViolation`. ABAC rules are implemented+tested but every real caller passes empty attributes today (the `IdentityProvider` that would supply them is unwired, §928) |
 | 930 | Distributed security | 🟡 | `sdk::security` (signing + replay; mTLS/cert rotation ⏳) |
 | 931–932 | Kubernetes / Docker Compose | ✅ | `Dockerfile` + `docker-compose.yml` (dev stack) + `deploy/k8s/ckos.yaml` (Deployment + HPA autoscale) |
 | 933 | Observability | 🟡 | `audit` + `telemetry`; OpenTelemetry/Prometheus export ⏳ |
@@ -63,8 +63,8 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 938 | Index pipeline | 🟡 | `knowledge_bus::ingest_text` (extract → queue) + `Reindexer` (embed + insert); deep parse/chunk ⏳ |
 | 939 | Chunk evolution | 🟡 | `memory::chunk` (Paragraph/Fixed/Adaptive/Recursive + `chunk_with_overlap`; semantic & hierarchical ⏳) |
 | 940 | Semantic compression | 🟡 | `memory::compress_document`/`summarize`/`keywords` (summary + concept tiers; knowledge tier ⏳) |
-| 941 | Knowledge graph builder | 🟡 | `graph::extract` (heuristic entities + typed-relation edges; `ckos graph` and auto-built by `ckos run --session`; statistical NER ⏳) |
-| 942–943 | Graph versioning / merge | ✅ | `graph::versioning` |
+| 941 | Knowledge graph builder | 🟡 | `graph::extract` (heuristic entities + typed-relation edges; `ckos graph` and auto-built by `ckos run --session`; re-extraction over a persisted graph reinforces nodes without duplicating edges; statistical NER ⏳) |
+| 942–943 | Graph versioning / merge | 🟡 | `graph::versioning` (complete, tested library — commits/branches/3 merge strategies — but no CLI or engine path uses it yet) |
 | 944 | Embedding manager | ✅ | `memory::Embedder` / `HashingEmbedder` — a lexical hash, **not semantic**: cannot match paraphrases/synonyms (measured; see embedding.rs); real model ⏳ |
 | 945 | Cross-modal embedding | ⏳ | single-space design; modality encoders pending |
 | 946 | Temporal knowledge | ✅ | `graph::Node::date` + KQL `BEFORE`/`AFTER` |
@@ -74,12 +74,12 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 950 | Hybrid search | ✅ | `retrieval::Retriever` (BM25 keyword + vector + graph, Reciprocal Rank Fusion) |
 | 951 | Graph reasoning | ✅ | retrieval graph hits + `graph::traverse` + `pagerank`/`central_nodes` (node importance) |
 | 952 | Multi-hop planner | ✅ | `graph::traverse`/`traverse_with_hops` + retriever hop expansion (score decays geometrically per hop) |
-| 953 | Memory consolidation | ✅ | `memory::consolidate` (sleep-phase pass compressing oversized docs) |
-| 954 | Garbage collection | ✅ | `memory::collect` (documents) + `graph::KnowledgeGraph::remove_orphans` (orphaned nodes) |
+| 953 | Memory consolidation | 🟡 | `memory::consolidate` (sleep-phase pass compressing oversized docs; unit-tested, but no CLI command or engine hook reaches it yet — the §940 compression ladder it drives is likewise entry-point-less) |
+| 954 | Garbage collection | ✅ | `ckos gc`: `memory::collect` (documents; expiry via `--now <date>`) + `graph::KnowledgeGraph::remove_orphans` sweeping the session's persisted graph |
 | 955 | Data encryption | ⏳ | at-rest/in-transit pending (transport layer) |
 | 956 | Offline-first | ✅ | `FileStore` + std-only build |
 | 957 | Distributed knowledge | ⏳ | sharding/partial-sync pending |
-| 958 | Search cache | ✅ | `sdk::retrieval::SearchCache` (LRU query→hits cache) |
+| 958 | Search cache | 🟡 | `sdk::retrieval::SearchCache` (LRU query→hits cache; SDK-only — the CLI's one-shot processes have no cache to warm, so nothing constructs it outside tests) |
 | 959 | Learning pipeline | 🟡 | reflection persistence + auto-reindex + `sdk::eval` (Precision/Recall/MRR/nDCG); full closed loop ⏳ |
 | 960 | Unified knowledge API | 🟡 | `cli` (`search`/`kql`/`history`/`eval`); network API ⏳ |
 | 961 | AI-native filesystem | ⏳ | proposal |

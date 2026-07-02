@@ -251,9 +251,15 @@ impl KnowledgeGraph {
             .collect();
 
         let mut report = ExtractReport::default();
-        // Track edges we have already drawn this pass to avoid duplicates.
-        let mut edge_seen: std::collections::HashSet<(NodeId, NodeId)> =
-            std::collections::HashSet::new();
+        // Track edges we have already drawn to avoid duplicates — seeded with
+        // the edges already in the graph, so re-extracting the same corpus
+        // (e.g. every `ckos run --session` over a persisted graph) reinforces
+        // nodes without accumulating parallel copies of the same edge, which
+        // would skew PageRank centrality (§951) and grow the store unboundedly.
+        let mut edge_seen: std::collections::HashSet<(NodeId, NodeId)> = self
+            .edges()
+            .map(|e| (e.from.clone(), e.to.clone()))
+            .collect();
 
         // First ensure every entity has a node with the right confidence.
         let mut label_for: HashMap<String, NodeId> = HashMap::new();
@@ -423,6 +429,23 @@ mod tests {
         assert_eq!(g.len(), before);
         assert_eq!(r.nodes_added, 0);
         assert_eq!(r.nodes_reinforced, 1);
+    }
+
+    #[test]
+    fn re_extraction_does_not_duplicate_edges() {
+        // Regression: edge_seen used to start empty each pass, so re-running
+        // extraction over a persisted graph appended a parallel copy of every
+        // edge per run (observed empirically: two passes -> 2 identical
+        // CKOS->Scheduler edges), inflating PageRank weight and the .kg file.
+        let mut g = KnowledgeGraph::new();
+        let first = g.extract_concepts("CKOS depends on the Scheduler.");
+        assert_eq!(first.edges_added, 1);
+        assert_eq!(g.edges().count(), 1);
+
+        let second = g.extract_concepts("CKOS depends on the Scheduler.");
+        assert_eq!(second.edges_added, 0);
+        assert_eq!(second.nodes_reinforced, 2);
+        assert_eq!(g.edges().count(), 1, "identical edge must not accumulate");
     }
 
     #[test]

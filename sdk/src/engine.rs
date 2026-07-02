@@ -52,6 +52,16 @@ const SENSITIVE_CAPABILITIES: [Capability; 4] = [
     Capability::Robotics,
 ];
 
+/// How many times a `Failed` task is recovered through the §893 loop
+/// (`Failed → Rollback → Retry → Queued`) before the failure is final.
+/// Bounded so a deterministic failure cannot spin forever.
+pub const MAX_TASK_RETRIES: u32 = 2;
+
+/// Latency target used to derive `runtime_fit` from observed telemetry when
+/// scoring submissions (§904 → §913): runtimes at or under this mean latency
+/// are a perfect fit; fit degrades proportionally beyond it.
+const TARGET_LATENCY_MS: u64 = 50;
+
 use crate::agent::CapabilityRegistry;
 use crate::reflection::{Reflection, Reflector};
 
@@ -141,7 +151,12 @@ impl Engine {
     /// place `TaskState` advances, so `task.state()` always reflects reality.
     pub fn execute(&self, task: &mut Task) -> Result<ExecutionResult> {
         self.bus.publish(Event::TaskStarted(task.id.clone()));
-        task.transition_to(TaskState::Queued)?;
+        // A fresh task enters the queue here; a task re-queued through the
+        // §893 recovery loop (Failed → Rollback → Retry → Queued, see
+        // `run_workflow`) is already Queued and re-enters directly.
+        if task.state() == TaskState::Created {
+            task.transition_to(TaskState::Queued)?;
+        }
 
         if SENSITIVE_CAPABILITIES.contains(&task.capability) {
             if let Some((policy, roles)) = &self.access {
@@ -155,6 +170,10 @@ impl Engine {
                     // Denied before a runtime was ever selected — the task
                     // honestly stays Queued (see the doc comment above; there
                     // is no Queued -> Failed edge in the §893 graph).
+                    self.bus.publish(Event::PolicyViolation {
+                        subject: req.subject.clone(),
+                        action: req.action.clone(),
+                    });
                     self.audit.record(
                         AuditRecord::new("task.execute")
                             .input(&task.description)
@@ -194,6 +213,10 @@ impl Engine {
             Ok(r) => r,
             Err(e) => {
                 task.transition_to(TaskState::Failed)?;
+                self.bus.publish(Event::TaskFailed {
+                    task: task.id.clone(),
+                    reason: e.to_string(),
+                });
                 self.audit.record(
                     AuditRecord::new("task.execute")
                         .runtime(&runtime_name)
@@ -249,10 +272,21 @@ impl Engine {
 
     /// Run a whole workflow in dependency order via the scheduler (§892).
     ///
+    /// Tasks are submitted with telemetry-derived scoring (§904 → §913): each
+    /// task's `runtime_fit` comes from the observed mean latency of the
+    /// runtime that would serve it, so among equally-ready tasks the one on a
+    /// faster runtime dispatches first.
+    ///
+    /// A task that reaches `Failed` (runtime error or verification failure)
+    /// is recovered through the §893 loop — `Failed → Rollback → Retry →
+    /// Queued` — and re-dispatched, up to [`MAX_TASK_RETRIES`] times. A task
+    /// denied before it ever started (policy, no runtime — it stays `Queued`)
+    /// is *not* retried: that failure is deterministic.
+    ///
     /// Returns results in execution order. Fails fast with
     /// [`KernelError::Other`] if the DAG cannot be ordered (a cycle, or a
     /// dangling/foreign step reference — see [`Dag::topological_order`]), or
-    /// propagates a task failure (e.g. no runtime for a capability).
+    /// propagates a task failure once its retries are exhausted.
     pub fn run_workflow(&self, dag: &Dag) -> Result<Vec<ExecutionResult>> {
         let order = dag.topological_order().ok_or_else(|| {
             KernelError::other("workflow contains a cycle or references an unknown step")
@@ -261,21 +295,69 @@ impl Engine {
         let mut scheduler = Scheduler::new();
         for step in &order {
             if let Some(task) = dag.task(*step) {
-                scheduler.submit(task.clone());
+                self.submit_scored_by_telemetry(&mut scheduler, task.clone());
             }
         }
 
         let mut results = Vec::with_capacity(order.len());
         while let Some(mut task) = scheduler.dispatch_next() {
-            // Propagate a task failure immediately, without publishing
-            // WorkflowCompleted — a subscriber must never observe that event
-            // for a workflow that didn't actually finish.
-            let result = self.execute(&mut task)?;
-            scheduler.mark_completed(task.id.clone());
-            results.push(result);
+            match self.execute(&mut task) {
+                Ok(result) => {
+                    // Verification failure is retryable; once the budget is
+                    // spent the failed result is reported as-is.
+                    if result.state == TaskState::Failed
+                        && self.requeue(&mut scheduler, &mut task)?
+                    {
+                        continue;
+                    }
+                    scheduler.mark_completed(task.id.clone());
+                    results.push(result);
+                }
+                Err(e) => {
+                    // Only a task that actually reached Failed is worth
+                    // retrying; a Queued denial (policy, no runtime) is
+                    // deterministic. Propagate exhausted/unretryable failures
+                    // without publishing WorkflowCompleted — a subscriber
+                    // must never observe that event for a workflow that
+                    // didn't actually finish.
+                    if task.state() == TaskState::Failed
+                        && self.requeue(&mut scheduler, &mut task)?
+                    {
+                        continue;
+                    }
+                    return Err(e);
+                }
+            }
         }
         self.bus.publish(Event::WorkflowCompleted(dag.id().clone()));
         Ok(results)
+    }
+
+    /// Submit a task scored by observed telemetry (§904 → §913): the runtime
+    /// that would serve the task contributes its measured `runtime_fit`. With
+    /// no telemetry (or no runtime — the failure then surfaces at execution
+    /// time), defaults apply.
+    fn submit_scored_by_telemetry(&self, scheduler: &mut Scheduler, task: Task) {
+        let factors = match self.runtimes.select(&task.capability) {
+            Ok(rt) => self.recommended_factors(rt.name(), TARGET_LATENCY_MS),
+            Err(_) => ScoreFactors::default(),
+        };
+        scheduler.submit_scored(task, factors);
+    }
+
+    /// Drive a `Failed` task through the §893 recovery loop and resubmit it,
+    /// returning `true` if it was re-queued or `false` if its retry budget
+    /// ([`MAX_TASK_RETRIES`]) is exhausted. Entering `Retry` increments the
+    /// task's attempt counter (see [`Task::attempts`]).
+    fn requeue(&self, scheduler: &mut Scheduler, task: &mut Task) -> Result<bool> {
+        if task.attempts() >= MAX_TASK_RETRIES {
+            return Ok(false);
+        }
+        task.transition_to(TaskState::Rollback)?;
+        task.transition_to(TaskState::Retry)?;
+        task.transition_to(TaskState::Queued)?;
+        self.submit_scored_by_telemetry(scheduler, task.clone());
+        Ok(true)
     }
 
     /// Recommend scheduling factors for a runtime from observed telemetry,
@@ -451,10 +533,22 @@ mod tests {
         runtimes.register(Box::new(EchoRuntime::new(vec![Capability::Medical])));
         let engine = Engine::new(runtimes, CapabilityRegistry::new(), Verifier::new())
             .with_policy(PolicyEngine::new(), vec!["guest".to_string()]);
+
+        // A denial is a security-relevant occurrence: it must be observable on
+        // the event bus (§894 policy.violation), not only in the audit log.
+        let violations = Arc::new(AtomicUsize::new(0));
+        let v = Arc::clone(&violations);
+        engine.bus().subscribe(Arc::new(move |e: &Event| {
+            if matches!(e, Event::PolicyViolation { .. }) {
+                v.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+
         let mut task = Task::new("diagnose", Capability::Medical);
         assert!(engine.execute(&mut task).is_err());
         // Denied before a runtime was ever exercised: honestly still Queued.
         assert_eq!(task.state(), TaskState::Queued);
+        assert_eq!(violations.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -468,6 +562,159 @@ mod tests {
         let mut task = Task::new("diagnose", Capability::Medical);
         let result = engine.execute(&mut task).unwrap();
         assert_eq!(result.state, TaskState::Completed);
+    }
+
+    /// A runtime that fails its first `failures` calls, then succeeds —
+    /// exercising the §893 recovery loop with a genuinely transient fault.
+    struct FlakyRuntime {
+        id: ckos_kernel::RuntimeId,
+        caps: Vec<Capability>,
+        failures: usize,
+        calls: AtomicUsize,
+    }
+
+    impl FlakyRuntime {
+        fn new(cap: Capability, failures: usize) -> Self {
+            FlakyRuntime {
+                id: ckos_kernel::RuntimeId::new(),
+                caps: vec![cap],
+                failures,
+                calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl ckos_runtime::Runtime for FlakyRuntime {
+        fn id(&self) -> &ckos_kernel::RuntimeId {
+            &self.id
+        }
+        fn name(&self) -> &str {
+            "flaky"
+        }
+        fn kind(&self) -> ckos_runtime::RuntimeKind {
+            ckos_runtime::RuntimeKind::Cpu
+        }
+        fn capabilities(&self) -> &[Capability] {
+            &self.caps
+        }
+        fn run(&self, req: &InferenceRequest) -> Result<ckos_runtime::InferenceResponse> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) < self.failures {
+                return Err(KernelError::other("transient runtime fault"));
+            }
+            Ok(ckos_runtime::InferenceResponse {
+                output: req.input.clone(),
+                tokens: 1,
+            })
+        }
+    }
+
+    #[test]
+    fn transient_failure_recovers_through_the_893_retry_loop() {
+        let mut runtimes = RuntimeRegistry::new();
+        runtimes.register(Box::new(FlakyRuntime::new(Capability::Reasoning, 2)));
+        let engine = Engine::new(runtimes, CapabilityRegistry::new(), Verifier::new());
+
+        let failed = Arc::new(AtomicUsize::new(0));
+        let f = Arc::clone(&failed);
+        engine.bus().subscribe(Arc::new(move |e: &Event| {
+            if matches!(e, Event::TaskFailed { .. }) {
+                f.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+
+        let dag = HeuristicPlanner::new().plan("say hello");
+        let results = engine.run_workflow(&dag).unwrap();
+
+        // Two transient faults, then success on the final allowed attempt:
+        // the workflow completes instead of dying on the first fault.
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].state, TaskState::Completed);
+        assert_eq!(failed.load(Ordering::SeqCst), 2);
+        // Each failed attempt was audited.
+        assert_eq!(engine.audit().error_count(), 2);
+    }
+
+    #[test]
+    fn deterministic_failure_exhausts_the_bounded_retry_budget() {
+        let mut runtimes = RuntimeRegistry::new();
+        // Fails more times than the budget allows: never recovers.
+        runtimes.register(Box::new(FlakyRuntime::new(
+            Capability::Reasoning,
+            usize::MAX,
+        )));
+        let engine = Engine::new(runtimes, CapabilityRegistry::new(), Verifier::new());
+
+        let dag = HeuristicPlanner::new().plan("say hello");
+        let err = engine.run_workflow(&dag).unwrap_err();
+        assert!(err.to_string().contains("transient runtime fault"));
+        // 1 initial attempt + MAX_TASK_RETRIES retries, each audited — the
+        // loop is bounded, not infinite.
+        assert_eq!(engine.audit().error_count(), 1 + MAX_TASK_RETRIES as usize);
+    }
+
+    #[test]
+    fn observed_latency_orders_dispatch_between_independent_tasks() {
+        // §904 → §913 closed loop: pre-record telemetry showing the Vision
+        // runtime is slow and the Retrieval runtime fast; of two independent,
+        // equal-priority tasks, the fast-runtime one must dispatch first.
+        struct NamedEcho {
+            id: ckos_kernel::RuntimeId,
+            name: &'static str,
+            caps: Vec<Capability>,
+        }
+        impl ckos_runtime::Runtime for NamedEcho {
+            fn id(&self) -> &ckos_kernel::RuntimeId {
+                &self.id
+            }
+            fn name(&self) -> &str {
+                self.name
+            }
+            fn kind(&self) -> ckos_runtime::RuntimeKind {
+                ckos_runtime::RuntimeKind::Cpu
+            }
+            fn capabilities(&self) -> &[Capability] {
+                &self.caps
+            }
+            fn run(&self, req: &InferenceRequest) -> Result<ckos_runtime::InferenceResponse> {
+                Ok(ckos_runtime::InferenceResponse {
+                    output: req.input.clone(),
+                    tokens: 1,
+                })
+            }
+        }
+        let mut runtimes = RuntimeRegistry::new();
+        for (name, cap) in [
+            ("slow-rt", Capability::Vision),
+            ("fast-rt", Capability::Retrieval),
+        ] {
+            runtimes.register(Box::new(NamedEcho {
+                id: ckos_kernel::RuntimeId::new(),
+                name,
+                caps: vec![cap],
+            }));
+        }
+        let engine = Engine::new(runtimes, CapabilityRegistry::new(), Verifier::new());
+        for (rt, latency) in [("slow-rt", 500), ("fast-rt", 1)] {
+            engine.telemetry().record(TaskMetrics {
+                runtime: rt.into(),
+                latency_ms: latency,
+                tokens: 1,
+            });
+        }
+
+        // Two independent steps; the slow-runtime one is added first, so a
+        // regression to default (tied) scoring would dispatch it first.
+        let mut dag = Dag::new("mixed");
+        dag.add_step(Task::new("look", Capability::Vision), &[]);
+        dag.add_step(Task::new("fetch", Capability::Retrieval), &[]);
+        let results = engine.run_workflow(&dag).unwrap();
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(
+            results[0].capability,
+            Capability::Retrieval,
+            "telemetry-scored submission must dispatch the faster runtime's task first"
+        );
     }
 
     #[test]

@@ -84,7 +84,8 @@ COMMANDS:
       <dir> <query…>                 MRR/nDCG) against known-relevant titles
     graph [--dot] <text…>            Extract a knowledge graph from text (§941)
     graph [--dot] --session <dir>    Extract a graph from a session's documents
-    gc <dir> [--min-confidence N]    Garbage-collect a session's stored documents
+    gc <dir> [--min-confidence N]    Garbage-collect a session: low-value docs
+      [--now YYYY-MM-DD]             (--now enables expiry) + orphaned graph nodes
     verify <text…>                   Run the built-in verifier checks on text
     tool --list                      List built-in tools and required permissions
     tool [--role <role>] <name>      Invoke a tool; required permissions are
@@ -778,20 +779,37 @@ fn cmd_graph(rest: &[String]) -> ExitCode {
 }
 
 fn cmd_gc(rest: &[String]) -> ExitCode {
-    let Some(dir) = rest.first() else {
-        eprintln!("error: `gc` needs a session directory, e.g. `ckos gc ./my-session`");
-        return ExitCode::FAILURE;
+    if wants_help(rest) {
+        println!("usage: ckos gc <dir> [--min-confidence N] [--now YYYY-MM-DD]\n  Garbage-collect a session (§954): removes low-value documents AND sweeps\n  orphaned knowledge-graph nodes from the session's persisted graph.\n  --now enables expiry: documents whose `expires` metadata is <= the given\n  ISO date are collected (without --now, expiry is skipped).");
+        return ExitCode::SUCCESS;
+    }
+    let (now, rest) = match take_value_flag(rest, "--now") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
     };
-    // Optional `--min-confidence N`.
-    let min_confidence: u8 = match rest.iter().position(|a| a == "--min-confidence") {
-        Some(i) => match rest.get(i + 1).and_then(|v| v.parse().ok()) {
-            Some(n) => n,
-            None => {
+    let (min_conf, rest) = match take_value_flag(&rest, "--min-confidence") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let min_confidence: u8 = match min_conf {
+        Some(v) => match v.parse() {
+            Ok(n) => n,
+            Err(_) => {
                 eprintln!("error: --min-confidence needs a number 0..=255");
                 return ExitCode::FAILURE;
             }
         },
         None => 0,
+    };
+    let Some(dir) = rest.first() else {
+        eprintln!("error: `gc` needs a session directory, e.g. `ckos gc ./my-session`");
+        return ExitCode::FAILURE;
     };
 
     let mut store = match FileStore::open(dir) {
@@ -805,7 +823,7 @@ fn cmd_gc(rest: &[String]) -> ExitCode {
         min_confidence,
         ..GcPolicy::default()
     };
-    match gc_collect(&mut store, &policy, None) {
+    match gc_collect(&mut store, &policy, now.as_deref()) {
         Ok(report) => {
             println!(
                 "garbage-collected {} document(s) from {dir}",
@@ -814,13 +832,34 @@ fn cmd_gc(rest: &[String]) -> ExitCode {
             for (id, reason) in &report.removed {
                 println!("  - {id} ({reason:?})");
             }
-            ExitCode::SUCCESS
         }
         Err(e) => {
             eprintln!("error: {e}");
-            ExitCode::FAILURE
+            return ExitCode::FAILURE;
         }
     }
+
+    // The graph half of §954: sweep orphaned nodes from the session's
+    // persisted knowledge graph (nodes with no edges in either direction).
+    let graph_path = Path::new(dir.as_str()).join(GRAPH_FILE);
+    if graph_path.exists() {
+        let mut graph = match GraphStore::load(&graph_path) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("error: could not load {}: {e}", graph_path.display());
+                return ExitCode::FAILURE;
+            }
+        };
+        let swept = graph.remove_orphans();
+        if swept > 0 {
+            if let Err(e) = GraphStore::save(&graph_path, &graph) {
+                eprintln!("error: could not save {}: {e}", graph_path.display());
+                return ExitCode::FAILURE;
+            }
+        }
+        println!("swept {swept} orphaned graph node(s)");
+    }
+    ExitCode::SUCCESS
 }
 
 fn cmd_verify(rest: &[String]) -> ExitCode {
@@ -924,6 +963,10 @@ fn cmd_tool(rest: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     };
 
+    // Every tool run — allowed or denied — leaves an audit record (§903); the
+    // trail is printed on exit so it is actually observable, not write-only.
+    let audit = InMemoryAuditLog::new();
+
     // Authorize each required permission against the RBAC policy (§929) —
     // the tool registry never trusts a self-asserted grant.
     let policy = demo_policy();
@@ -938,6 +981,13 @@ fn cmd_tool(rest: &[String]) -> ExitCode {
         match policy.evaluate(&req) {
             Ok(()) => reg.grant(perm.clone()),
             Err(e) => {
+                audit.record(
+                    AuditRecord::new("tool.invoke")
+                        .tool(&name)
+                        .input(&input)
+                        .error(format!("denied for role {role}: {e}")),
+                );
+                print_audit(&audit);
                 eprintln!("error: role {role:?} may not use {name}: {e}");
                 return ExitCode::FAILURE;
             }
@@ -946,13 +996,44 @@ fn cmd_tool(rest: &[String]) -> ExitCode {
 
     match reg.invoke(&name, &input) {
         Ok(output) => {
+            audit.record(
+                AuditRecord::new("tool.invoke")
+                    .tool(&name)
+                    .input(&input)
+                    .output(&output),
+            );
+            print_audit(&audit);
             println!("{output}");
             ExitCode::SUCCESS
         }
         Err(e) => {
+            audit.record(
+                AuditRecord::new("tool.invoke")
+                    .tool(&name)
+                    .input(&input)
+                    .error(e.to_string()),
+            );
+            print_audit(&audit);
             eprintln!("error: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Print an audit trail (§903) to stderr in a compact single-line-per-record
+/// form: hashes rather than payloads, so the trail is verifiable without
+/// leaking content — mirroring what a file/SIEM sink would receive.
+fn print_audit(log: &InMemoryAuditLog) {
+    for r in log.snapshot() {
+        let subject = r.tool.or(r.plugin).or(r.runtime).unwrap_or_default();
+        let outcome = match &r.error {
+            Some(e) => format!("error: {e}"),
+            None => "ok".to_string(),
+        };
+        eprintln!(
+            "audit: {} {} in#{:016x} out#{:016x} @{} — {}",
+            r.action, subject, r.input_hash, r.output_hash, r.timestamp_ms, outcome
+        );
     }
 }
 
