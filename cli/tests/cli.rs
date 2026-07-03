@@ -485,3 +485,48 @@ fn gc_consolidate_compresses_oversized_documents_before_collecting() {
     assert!(s.contains("consolidated"));
     assert!(!s.contains("consolidated 0 document"));
 }
+
+#[test]
+fn history_with_a_query_recalls_instead_of_dumping_raw_history() {
+    // Session::recall (§896/§927, Generative-Agents memory scoring) had zero
+    // callers anywhere outside its own unit tests — `ckos history` only ever
+    // dumped raw history. This proves a query on the CLI actually reaches it,
+    // taking a visibly different, --k-bounded code path. The ranking math
+    // itself is already covered by
+    // sdk::session::tests::recall_ranks_by_recency_importance_relevance.
+    struct TempDir(PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("ckos-history-recall-{}-{n}", std::process::id()));
+    let _guard = TempDir(dir.clone());
+
+    for intent in ["the quokka eats bamboo", "the platypus swims upriver"] {
+        let run = ckos(&["run", "--session", dir.to_str().unwrap(), intent]);
+        assert!(run.status.success());
+    }
+
+    // No query: unchanged raw-dump behavior.
+    let plain = ckos(&["history", dir.to_str().unwrap()]);
+    assert!(plain.status.success());
+    let plain_s = stdout(&plain);
+    assert!(plain_s.contains("recorded step(s)"));
+    assert!(!plain_s.contains("recalled"));
+
+    // With a query and --k 1: a different, bounded code path.
+    let recalled = ckos(&["history", dir.to_str().unwrap(), "quokka", "--k", "1"]);
+    assert!(recalled.status.success());
+    let recalled_s = stdout(&recalled);
+    assert!(recalled_s.contains("recalled"));
+    assert!(!recalled_s.contains("recorded step(s)"));
+    // Exactly one record line ("[ok] " or "[FAIL] " prefix per record).
+    assert_eq!(
+        recalled_s.matches("] ").count(),
+        1,
+        "expected --k 1 to bound output to one record, got: {recalled_s}"
+    );
+}

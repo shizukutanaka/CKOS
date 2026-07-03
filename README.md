@@ -59,7 +59,7 @@ appear in any position, and `ckos <command> --help` prints per-command usage.
 |---------|--------------|---------|
 | `plan [--dot] <intent…>` | Decompose an intent into a workflow DAG | `ckos plan "research the Transformer paper"` |
 | `run [--session <dir>] [--role R \| --token T] <intent…>` | Plan + execute; `--session` persists the run and grows its knowledge graph; `--role`/`--token` authorize finance/medical/legal/robotics steps (§929). `--token` authenticates via a demo identity provider (§928) carrying real ABAC attributes, unlike bare `--role`. **Caution**: the built-in planner never classifies free text into those capabilities, so neither flag has an observable effect via `run` — see `ckos workflow` | `ckos run --session ./sess "research X"` |
-| `history <dir>` | Show a session's past runs | `ckos history ./sess` |
+| `history <dir> [<query…>] [--k N]` | Show a session's past runs; with a query, recalls the top `--k` (default 5) records ranked by Generative-Agents memory score — recency × importance × relevance (§896/§927) — instead of dumping raw history | `ckos history ./sess "scheduler urgency"` |
 | `search [--synonyms] [--expand] [--diverse] [--lambda N] <dir> <query…>` | Hybrid BM25 + vector + graph search (RRF-fused); `--synonyms` bridges vocabulary gaps with a built-in domain table, `--expand` widens recall (PRF), `--diverse` re-ranks for variety (MMR, tune with `--lambda` 0..1) | `ckos search --synonyms ./sess "dispatcher urgency"` |
 | `graph [--dot] <text…>` / `graph [--dot] --session <dir>` | Extract a typed knowledge graph from text or a session's docs | `ckos graph --session ./sess` |
 | `kql [--session <dir>] <query>` | Run a Knowledge Query Language query | `ckos kql 'FIND Concept "Transformer" RELATED Algorithm'` |

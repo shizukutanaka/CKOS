@@ -73,7 +73,9 @@ COMMANDS:
       [--role R | --token T]         --session persists + grows the graph;
       <intent…>                      --role/--token authorize sensitive
                                      capabilities (§929/§928)
-    history <dir>                    Show the execution history of a session
+    history <dir> [<query…>]         Show a session's execution history, or
+      [--k N]                        (with a query) recall top --k records by
+                                     Generative-Agents memory score (§896/§927)
     search [--synonyms] [--expand]   Hybrid-search a session (--synonyms: domain
       [--diverse] [--lambda N]       synonym expansion, --expand: pseudo-relevance
       <dir> <query…>                 expansion, --diverse: MMR, --lambda: tradeoff)
@@ -368,7 +370,28 @@ fn cmd_run(rest: &[String]) -> ExitCode {
 }
 
 fn cmd_history(rest: &[String]) -> ExitCode {
-    let Some(dir) = rest.first() else {
+    if wants_help(rest) {
+        println!("usage: ckos history <dir> [<query…>] [--k N]\n  Show a session's execution history, in stored order. With a query, ranks\n  records by the §896/§927 Generative-Agents memory score (recency ×\n  importance × relevance) instead — --k caps how many are returned\n  (default 5).");
+        return ExitCode::SUCCESS;
+    }
+    let (k, rest) = match take_value_flag(rest, "--k") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let k: usize = match k {
+        Some(v) => match v.parse() {
+            Ok(n) => n,
+            Err(_) => {
+                eprintln!("error: --k needs a positive integer");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => 5,
+    };
+    let Some((dir, query_words)) = rest.split_first() else {
         eprintln!("error: `history` needs a session directory, e.g. `ckos history ./my-session`");
         return ExitCode::FAILURE;
     };
@@ -379,6 +402,34 @@ fn cmd_history(rest: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    if !query_words.is_empty() {
+        let query = query_words.join(" ");
+        let session = Session::new("cli", Box::new(store))
+            .with_embedder(Box::new(HashingEmbedder::default()));
+        let recalled = match session.recall(&query, k) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        if recalled.is_empty() {
+            println!("session {dir}: no records recalled for {query:?}");
+            return ExitCode::SUCCESS;
+        }
+        println!(
+            "session {dir}: top {} recalled for {query:?} (recency × importance × relevance)",
+            recalled.len()
+        );
+        for doc in &recalled {
+            let verified = doc.metadata.get("verified").map(String::as_str) == Some("true");
+            let mark = if verified { "ok" } else { "FAIL" };
+            println!("  [{mark}] {} -> {}", doc.title, doc.body);
+        }
+        return ExitCode::SUCCESS;
+    }
+
     let session = Session::new("cli", Box::new(store));
     let history = match session.history() {
         Ok(h) => h,
