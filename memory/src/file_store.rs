@@ -16,6 +16,15 @@
 //! the body starts here and runs verbatim to end of file
 //! ```
 //!
+//! Header **field values** (`doc_type`, `title`, `author`, and every
+//! `meta.*` key/value) are backslash-escaped on write and unescaped on read
+//! (`\` -> `\\`, newline -> `\n`, CR -> `\r`) — arbitrary `Document` content
+//! (§937) is not guaranteed to be newline-free, and an unescaped title or
+//! metadata value containing a blank line would otherwise be split at the
+//! wrong point, silently shifting real headers (confidence, embedding, other
+//! metadata) into the body on the next load. The **body** itself is never
+//! escaped: it always follows the first unescaped blank line, unambiguously.
+//!
 //! The store keeps an in-memory index and writes through to disk, so reads and
 //! searches stay fast while every mutation is durable.
 
@@ -115,13 +124,59 @@ impl Storage for FileStore {
     }
 }
 
+/// Escape a header field value so an embedded newline/CR/backslash can't be
+/// mistaken for the header/body separator or corrupt line-by-line parsing:
+/// `\` -> `\\`, `\n` -> `\n` (literal backslash-n), `\r` -> `\r`.
+fn escape_header(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Reverse [`escape_header`]. An unrecognised escape (a lone trailing
+/// backslash, or `\` followed by anything else) is kept literally rather than
+/// dropped, so still-valid-looking-but-foreign content never vanishes.
+fn unescape_header(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('\\') => out.push('\\'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+/// Format one escaped `key: value\n` header line.
+fn header_line(key: &str, value: &str) -> String {
+    format!("{key}: {}\n", escape_header(value))
+}
+
 /// Encode a document to the on-disk format.
 fn serialize(doc: &Document) -> String {
     let mut s = String::new();
-    s.push_str(&format!("doc_type: {}\n", doc.doc_type));
-    s.push_str(&format!("title: {}\n", doc.title));
+    s.push_str(&header_line("doc_type", &doc.doc_type));
+    s.push_str(&header_line("title", &doc.title));
     if let Some(a) = &doc.author {
-        s.push_str(&format!("author: {a}\n"));
+        s.push_str(&header_line("author", a));
     }
     s.push_str(&format!("confidence: {}\n", doc.confidence));
     if let Some(emb) = &doc.embedding {
@@ -129,7 +184,7 @@ fn serialize(doc: &Document) -> String {
         s.push_str(&format!("embedding: {}\n", joined.join(",")));
     }
     for (k, v) in &doc.metadata {
-        s.push_str(&format!("meta.{k}: {v}\n"));
+        s.push_str(&header_line(&format!("meta.{}", escape_header(k)), v));
     }
     s.push('\n'); // header/body separator
     s.push_str(&doc.body);
@@ -152,9 +207,9 @@ fn deserialize(id: DocumentId, content: &str) -> Document {
             continue;
         };
         match key {
-            "doc_type" => doc.doc_type = value.to_string(),
-            "title" => doc.title = value.to_string(),
-            "author" => doc.author = Some(value.to_string()),
+            "doc_type" => doc.doc_type = unescape_header(value),
+            "title" => doc.title = unescape_header(value),
+            "author" => doc.author = Some(unescape_header(value)),
             "confidence" => doc.confidence = value.parse().unwrap_or(0),
             "embedding" => {
                 let v: Vec<f32> = value
@@ -165,8 +220,8 @@ fn deserialize(id: DocumentId, content: &str) -> Document {
                 doc.embedding = Some(v);
             }
             k if k.starts_with("meta.") => {
-                doc.metadata
-                    .insert(k.trim_start_matches("meta.").to_string(), value.to_string());
+                let meta_key = unescape_header(k.trim_start_matches("meta."));
+                doc.metadata.insert(meta_key, unescape_header(value));
             }
             _ => {}
         }
@@ -256,5 +311,76 @@ mod tests {
             .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].title, "alpha");
+    }
+
+    #[test]
+    fn title_with_embedded_blank_line_does_not_corrupt_other_fields() {
+        // Regression: an unescaped title/metadata value containing "\n\n"
+        // used to be split at the wrong point by deserialize's naive
+        // `split_once("\n\n")`, silently shifting confidence/embedding/other
+        // metadata into what became the body, and defaulting confidence to 0.
+        let tmp = TempDir::new();
+        let mut store = FileStore::open(&tmp.0).unwrap();
+        let mut doc = Document::new(
+            "note",
+            "Title\n\nwith a blank line inside it",
+            "the real body",
+        );
+        doc.confidence = 77;
+        doc.embedding = Some(vec![0.1, 0.2]);
+        doc.metadata
+            .insert("summary".into(), "line one\n\nline two".into());
+        let id = doc.id.clone();
+        store.write(doc).unwrap();
+
+        let reopened = FileStore::open(&tmp.0).unwrap();
+        let got = reopened.read(&id).unwrap().unwrap();
+        assert_eq!(got.title, "Title\n\nwith a blank line inside it");
+        assert_eq!(got.body, "the real body");
+        assert_eq!(got.confidence, 77, "confidence must survive intact");
+        assert_eq!(got.embedding, Some(vec![0.1, 0.2]));
+        assert_eq!(
+            got.metadata.get("summary").map(String::as_str),
+            Some("line one\n\nline two")
+        );
+    }
+
+    #[test]
+    fn backslashes_and_crlf_round_trip_in_header_fields() {
+        let tmp = TempDir::new();
+        let mut store = FileStore::open(&tmp.0).unwrap();
+        let mut doc = Document::new(
+            "note",
+            r"a title with a \backslash\ and \n literal text",
+            "body",
+        );
+        doc.author = Some("line1\r\nline2".into());
+        doc.metadata
+            .insert(r"weird\key".into(), r"value\with\backslashes".into());
+        let id = doc.id.clone();
+        store.write(doc).unwrap();
+
+        let reopened = FileStore::open(&tmp.0).unwrap();
+        let got = reopened.read(&id).unwrap().unwrap();
+        assert_eq!(got.title, r"a title with a \backslash\ and \n literal text");
+        assert_eq!(got.author.as_deref(), Some("line1\r\nline2"));
+        assert_eq!(
+            got.metadata.get(r"weird\key").map(String::as_str),
+            Some(r"value\with\backslashes")
+        );
+    }
+
+    #[test]
+    fn escape_unescape_round_trips_arbitrary_strings() {
+        for s in [
+            "",
+            "plain",
+            "back\\slash",
+            "new\nline",
+            "carriage\rreturn",
+            "mixed\\\n\r weird \\n \\\\ end",
+        ] {
+            assert_eq!(unescape_header(&escape_header(s)), s, "round-trip: {s:?}");
+        }
     }
 }
