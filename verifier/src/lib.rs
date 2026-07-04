@@ -252,6 +252,34 @@ fn parse_uint(bytes: &[u8], start: usize) -> Option<(i128, usize)> {
     Some((v, i))
 }
 
+/// Parse a standalone non-negative integer operand — rejecting any run of
+/// digits that is actually a *fragment* of a larger grouped or decimal number,
+/// so a correct sentence like `1,000 + 1 = 1001` or `2 + 2 = 4.5` is never
+/// mis-evaluated (`parse_uint` alone would read `000`/`4` and fabricate a wrong
+/// equation). A verifier reporting a false positive — rejecting valid output —
+/// is worse than skipping an equation it cannot judge, so an operand touching a
+/// `,` or `.` grouping/decimal separator makes the whole equation non-evaluable.
+fn parse_operand(bytes: &[u8], start: usize) -> Option<(i128, usize)> {
+    // Not the start of a number if the previous byte is a digit or a
+    // grouping/decimal separator (we'd be reading a fragment, e.g. the `000`
+    // in `1,000`).
+    if start > 0 {
+        let prev = bytes[start - 1];
+        if prev.is_ascii_digit() || prev == b',' || prev == b'.' {
+            return None;
+        }
+    }
+    let (v, end) = parse_uint(bytes, start)?;
+    // Not a plain integer if it continues into a grouped/decimal number, e.g.
+    // the `1` in `1,001` or the `4` in `4.5`.
+    if matches!(bytes.get(end), Some(b',') | Some(b'.'))
+        && bytes.get(end + 1).is_some_and(u8::is_ascii_digit)
+    {
+        return None;
+    }
+    Some((v, end))
+}
+
 fn skip_spaces(bytes: &[u8], mut i: usize) -> usize {
     while matches!(bytes.get(i), Some(b' ' | b'\t')) {
         i += 1;
@@ -262,14 +290,14 @@ fn skip_spaces(bytes: &[u8], mut i: usize) -> usize {
 /// Try to match an `A op B = C` equation at byte offset `i`. Returns
 /// `(correct, rendered)` or `None` if no (evaluable) equation starts here.
 fn match_equation(bytes: &[u8], i: usize) -> Option<(bool, String)> {
-    let (a, i) = parse_uint(bytes, i)?;
+    let (a, i) = parse_operand(bytes, i)?;
     let i = skip_spaces(bytes, i);
     let op = *bytes.get(i)?;
     if !matches!(op, b'+' | b'-' | b'*' | b'/') {
         return None;
     }
     let i = skip_spaces(bytes, i + 1);
-    let (b, i) = parse_uint(bytes, i)?;
+    let (b, i) = parse_operand(bytes, i)?;
     let i = skip_spaces(bytes, i);
     if bytes.get(i) != Some(&b'=') {
         return None;
@@ -280,7 +308,7 @@ fn match_equation(bytes: &[u8], i: usize) -> Option<(bool, String)> {
     } else {
         (false, i)
     };
-    let (c_abs, _) = parse_uint(bytes, i)?;
+    let (c_abs, _) = parse_operand(bytes, i)?;
     let c = if neg { -c_abs } else { c_abs };
     let expected = match op {
         b'+' => a.checked_add(b)?,
@@ -541,6 +569,35 @@ mod tests {
         assert!(v.verify("Released on 2024-01-01, version 2.5.").passed());
         // Non-exact division is ignored, not failed.
         assert!(v.verify("7 / 2 = 3").passed());
+    }
+
+    #[test]
+    fn grouped_and_decimal_numbers_do_not_cause_false_positives() {
+        // Regression: a comma-grouped operand used to be read as a fragment
+        // (`1,000` → the scanner picked up `000`), fabricating a wrong
+        // equation and rejecting perfectly correct output. A verifier that
+        // fails valid text is worse than one that skips — these must pass.
+        let v = Verifier::new().with_check(Box::new(ArithmeticCheck));
+        assert!(
+            v.verify("1,000 + 1 = 1001").passed(),
+            "grouped left operand"
+        );
+        assert!(
+            v.verify("1000 + 1 = 1,001").passed(),
+            "grouped right operand"
+        );
+        assert!(
+            v.verify("Revenue rose 1,200 + 300 = 1,500 this year.")
+                .passed(),
+            "grouped operands throughout"
+        );
+        // A decimal result is not judged as an integer equality (skipped, not
+        // falsely passed or failed).
+        assert!(v.verify("2 + 2 = 4.5").passed());
+        // The genuine check still fires on plain-integer equations nearby.
+        let report = v.verify("Totals: 1,000 items, but 2 + 2 = 5 is wrong.");
+        assert!(!report.passed());
+        assert_eq!(report.failures()[0].0, "arithmetic");
     }
 
     #[test]
