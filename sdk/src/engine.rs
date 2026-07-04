@@ -19,7 +19,7 @@ use ckos_kernel::audit::{AuditRecord, AuditSink, InMemoryAuditLog};
 use ckos_kernel::capability::Capability;
 use ckos_kernel::error::{KernelError, Result};
 use ckos_kernel::event::{Event, EventBus, InMemoryEventBus};
-use ckos_kernel::task::{Task, TaskState};
+use ckos_kernel::task::{Priority, Task, TaskState};
 use ckos_kernel::telemetry::{InMemoryTelemetry, TaskMetrics, TelemetrySink};
 use ckos_kernel::TaskId;
 use ckos_policy::{Identity, PolicyEngine};
@@ -315,7 +315,18 @@ impl Engine {
         let mut scheduler = Scheduler::new();
         for step in &order {
             if let Some(task) = dag.task(*step) {
-                self.submit_scored_by_telemetry(&mut scheduler, task.clone());
+                let mut task = task.clone();
+                // §913: adopt the serving agent's declared scheduling priority
+                // (`AgentManifest.priority`) when the task carries no explicit
+                // (non-default) priority of its own, so an agent that declares
+                // its work High/Critical actually dispatches sooner. An explicit
+                // task priority (e.g. from a hand-authored workflow) wins.
+                if task.priority == Priority::Normal {
+                    if let Some(agent) = self.agents.discover(&task.capability).first() {
+                        task.priority = agent.manifest.priority;
+                    }
+                }
+                self.submit_scored_by_telemetry(&mut scheduler, task);
             }
         }
 
@@ -783,6 +794,38 @@ mod tests {
             results[0].capability,
             Capability::Retrieval,
             "telemetry-scored submission must dispatch the faster runtime's task first"
+        );
+    }
+
+    #[test]
+    fn agent_declared_priority_orders_dispatch() {
+        // §913: AgentManifest.priority was parsed but never consumed. Two
+        // independent, equal-runtime tasks; the one whose serving agent
+        // declares Critical priority must dispatch first, even though its step
+        // is added second (so a regression to first-registered tie-breaking
+        // would pick the other one).
+        let mut runtimes = RuntimeRegistry::new();
+        runtimes.register(Box::new(EchoRuntime::new(vec![Capability::Vision])));
+        runtimes.register(Box::new(EchoRuntime::new(vec![Capability::Retrieval])));
+
+        let mut agents = CapabilityRegistry::new();
+        agents.register(AgentManifest::new("vision", Capability::Vision)); // Normal
+        let mut important = AgentManifest::new("retrieval", Capability::Retrieval);
+        important.priority = Priority::Critical;
+        agents.register(important);
+
+        let engine = Engine::new(runtimes, agents, Verifier::new());
+
+        let mut dag = Dag::new("mixed");
+        dag.add_step(Task::new("look", Capability::Vision), &[]); // added first
+        dag.add_step(Task::new("fetch", Capability::Retrieval), &[]);
+        let results = engine.run_workflow(&dag).unwrap();
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(
+            results[0].capability,
+            Capability::Retrieval,
+            "the Critical-priority agent's task must dispatch first"
         );
     }
 

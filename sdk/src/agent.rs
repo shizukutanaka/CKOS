@@ -21,12 +21,18 @@ pub struct AgentManifest {
     /// Capabilities this agent provides (§910, §911).
     pub capabilities: Vec<Capability>,
     /// Memory tiers the agent needs, by name e.g. `working`, `graph` (§908).
+    /// Declarative metadata; not yet consumed by the execution path.
     pub memory: Vec<String>,
-    /// Runtimes the agent can run on, by name (§908).
+    /// Runtimes the agent can run on, by name (§908). Declarative metadata;
+    /// runtime selection currently goes through the capability-keyed
+    /// `RuntimeRegistry`, not this list.
     pub runtimes: Vec<String>,
-    /// Permission tokens the agent requests (§908, §919).
+    /// Permission tokens the agent requests (§908, §919). Declarative metadata;
+    /// the current execution path runs runtimes directly rather than invoking
+    /// tools through an agent, so there is no gate that reads this yet.
     pub permissions: Vec<String>,
-    /// Scheduling priority hint (§913).
+    /// Scheduling priority hint (§913). Consumed by `Engine::run_workflow`,
+    /// which adopts it as the task priority when the task has none of its own.
     pub priority: Priority,
 }
 

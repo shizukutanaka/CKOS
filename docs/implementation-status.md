@@ -37,7 +37,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 |---|-------|--------|-------|
 | 907–909 | Agent as service / manifest / lifecycle | ✅ | `sdk::agent` — `AgentState::transition` validates the §909 graph and `discover` now actually honours it (excludes `Suspended`/`Terminated`; was previously ignored entirely) |
 | 910–912 | Capability registry / discovery | ✅ | `sdk::CapabilityRegistry`, `kernel::Capability` |
-| 913 | Multi-factor agent scheduler | ✅ | `scheduler::ScoreFactors`, fed live: `Engine::run_workflow` submits every task via `submit_scored` with `recommended_factors` (observed runtime latency → `runtime_fit`), closing §904→§913. The other factors (deadline/importance/cost/energy/confidence) still have no producer |
+| 913 | Multi-factor agent scheduler | ✅ | `scheduler::ScoreFactors`, fed live: `Engine::run_workflow` submits every task via `submit_scored` with `recommended_factors` (observed runtime latency → `runtime_fit`, closing §904→§913) and adopts the serving agent's `AgentManifest.priority` as the task priority. The remaining factors (deadline/importance/cost/energy/confidence) still have no producer |
 | 914–916 | Message bus / format / service mesh | ✅ | `sdk::messaging` |
 | 917–919 | Tool registry / adapter / permissions | ✅ | `plugins` (permission gate incl. `.*` wildcards, shared with `policy` via `kernel::permission_matches`); `ckos tool` grants are authorized by `PolicyEngine`, not self-asserted |
 | 920 | Workflow compiler | ✅ | `planner` (intent → DAG) |
