@@ -40,6 +40,20 @@ fn capabilities_lists_vocabulary() {
 }
 
 #[test]
+fn runtimes_lists_the_registry_table() {
+    // §900 registry table (RuntimeRegistry::list / RuntimeInfo) — previously
+    // had no caller anywhere; this surfaces it.
+    let out = ckos(&["runtimes"]);
+    assert!(out.status.success());
+    let s = stdout(&out);
+    assert!(s.contains("registered runtimes"));
+    // The demo pool serves each capability with a Cpu-local echo runtime.
+    assert!(s.contains("echo"));
+    assert!(s.contains("Cpu"));
+    assert!(s.contains("reasoning"));
+}
+
+#[test]
 fn plan_and_run_research() {
     let plan = ckos(&["plan", "research the Transformer paper"]);
     assert!(plan.status.success());

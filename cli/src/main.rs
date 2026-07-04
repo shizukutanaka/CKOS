@@ -97,6 +97,8 @@ COMMANDS:
                                      self-granted (roles: admin, guest; --token
                                      authenticates via a demo provider, §928)
     capabilities                     List the built-in capability vocabulary
+    runtimes                         List the runtime registry table (§900):
+                                     backends, locality, capabilities served
     version                          Print the CKOS version
     help                             Show this help
 ";
@@ -116,6 +118,7 @@ fn main() -> ExitCode {
         Some("verify") => cmd_verify(&args[1..]),
         Some("tool") => cmd_tool(&args[1..]),
         Some("capabilities") => cmd_capabilities(),
+        Some("runtimes") => cmd_runtimes(),
         Some("version") => {
             println!("ckos {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
@@ -1222,6 +1225,29 @@ fn cmd_capabilities() -> ExitCode {
     println!("built-in capabilities (§911):");
     for c in Capability::builtin() {
         println!("  - {c}");
+    }
+    ExitCode::SUCCESS
+}
+
+/// Show the runtime registry table (§900): which backends are registered, their
+/// execution locality (§924), and the capabilities each serves. Uses the same
+/// demo pool `ckos run`/`ckos workflow` build, so operators can see what would
+/// serve a given capability before running anything.
+fn cmd_runtimes() -> ExitCode {
+    let mut registry = RuntimeRegistry::new();
+    for cap in demo_capabilities() {
+        registry.register(Box::new(EchoRuntime::new(vec![cap])));
+    }
+    let infos = registry.list();
+    println!("registered runtimes (§900): {}", infos.len());
+    for info in &infos {
+        let caps: Vec<String> = info.capabilities.iter().map(|c| c.to_string()).collect();
+        println!(
+            "  - {} [{:?}] serves: {}",
+            info.name,
+            info.kind,
+            caps.join(", ")
+        );
     }
     ExitCode::SUCCESS
 }

@@ -77,7 +77,8 @@ pub mod prelude {
     pub use ckos_scheduler::{runtime_fit, Scheduler, ScoreFactors};
 
     pub use ckos_runtime::{
-        EchoRuntime, InferenceRequest, InferenceResponse, Runtime, RuntimeKind, RuntimeRegistry,
+        EchoRuntime, InferenceRequest, InferenceResponse, Runtime, RuntimeInfo, RuntimeKind,
+        RuntimeRegistry,
     };
 
     pub use ckos_graph::{

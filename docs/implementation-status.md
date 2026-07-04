@@ -23,7 +23,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 897 | Knowledge graph | ✅ | `graph` (+ `GraphStore` file persistence) |
 | 898 | Planner | ✅ | `planner` — deliberately never infers regulated capabilities (finance/medical/legal/robotics) from free text; a keyword classifier was tested and rejected as unsafe (see module doc) |
 | 899 | Verifier (independent) | ✅ | `verifier` (non-empty, repetition/degeneration, arithmetic, JSON, citation, security-policy) |
-| 900 | Runtime registry | ✅ | `runtime` (trait + registry; real engines ⏳) |
+| 900 | Runtime registry | ✅ | `runtime` (trait + registry; the `list`/`RuntimeInfo` table is surfaced by `ckos runtimes`; real engines ⏳) |
 | 901 | Plugin SDK | 🟡 | `plugins` (tool/registry/permissions, `ckos tool`; WASM sandbox ⏳) |
 | 902 | API gateway | 🟡 | `cli` done; REST/gRPC/WebSocket/MCP ⏳ |
 | 903 | Audit logging | ✅ | `kernel::audit` — task execution (`Engine::execute`, incl. policy denials) and tool runs (`ckos tool`, allowed *and* denied, trail printed on exit). `.plugin()` field still has no producer |

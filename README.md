@@ -68,6 +68,7 @@ appear in any position, and `ckos <command> --help` prints per-command usage.
 | `verify <text…>` | Run the independent §899 checks (non-empty, repetition, arithmetic, JSON, citations, security) | `ckos verify 'see [1]'` |
 | `tool --list` / `tool [--role <role> \| --token <token>] <name> <input…>` | Invoke a tool; required permissions are authorized by RBAC+ABAC policy (§929), not self-granted (§917/§919); every run — allowed or denied — prints its §903 audit record | `ckos tool --role admin reverse hello` |
 | `capabilities` | List the built-in capability vocabulary | `ckos capabilities` |
+| `runtimes` | List the runtime registry table (§900): registered backends, execution locality, and the capabilities each serves | `ckos runtimes` |
 | `workflow [--role <role> \| --token <token>] <file>` | Load and execute a workflow definition file; `--token` authenticates via a demo identity provider (§928: `tok-admin-hq`, `tok-admin-restricted`, `tok-guest`), carrying real ABAC attributes | `ckos workflow pipeline.wf` |
 | `version` | Print the CKOS version | `ckos version` |
 
