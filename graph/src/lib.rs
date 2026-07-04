@@ -313,6 +313,20 @@ impl KnowledgeGraph {
             .collect()
     }
 
+    /// Outgoing neighbours reached by an edge of a specific [`EdgeKind`] — the
+    /// typed-relation traversal §951/§952 reasoning needs (e.g. "what does X
+    /// *depend on*", following only `DependsOn` edges). Complements
+    /// [`neighbors`](Self::neighbors), which ignores edge type.
+    pub fn neighbors_via(&self, id: &NodeId, kind: &EdgeKind) -> Vec<&Node> {
+        self.adjacency
+            .get(id)
+            .into_iter()
+            .flatten()
+            .filter(|e| &e.kind == kind)
+            .filter_map(|e| self.nodes.get(&e.to))
+            .collect()
+    }
+
     /// PageRank node importance (Page & Brin, 1998) — the query-independent
     /// centrality used by Graph-RAG systems (FastGraphRAG, HippoRAG) to rank
     /// influential nodes (§948/§951). `damping` is the teleport factor (0.85 is

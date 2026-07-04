@@ -63,7 +63,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 938 | Index pipeline | 🟡 | `knowledge_bus::ingest_text` (extract → queue) + `Reindexer` (embed + insert); deep parse/chunk ⏳ |
 | 939 | Chunk evolution | 🟡 | `memory::chunk` (Paragraph/Fixed/Adaptive/Recursive + `chunk_with_overlap`; semantic & hierarchical ⏳) |
 | 940 | Semantic compression | 🟡 | `memory::compress_document`/`summarize`/`keywords` (summary + concept tiers; knowledge tier ⏳), reachable via `ckos gc --consolidate` (§953) |
-| 941 | Knowledge graph builder | 🟡 | `graph::extract` (heuristic entities + typed-relation edges; `ckos graph` and auto-built by `ckos run --session`; re-extraction over a persisted graph reinforces nodes without duplicating edges; statistical NER ⏳) |
+| 941 | Knowledge graph builder | 🟡 | `graph::extract` (heuristic entities + typed-relation edges, now queryable by relation type via KQL `RELATED … VIA <edge-kind>`; `ckos graph` and auto-built by `ckos run --session`; re-extraction over a persisted graph reinforces nodes without duplicating edges; statistical NER ⏳) |
 | 942–943 | Graph versioning / merge | 🟡 | `graph::versioning` (complete, tested library — commits/branches/3 merge strategies — but no CLI or engine path uses it yet) |
 | 944 | Embedding manager | ✅ | `memory::Embedder` / `HashingEmbedder` — a lexical hash, **not semantic**: cannot match paraphrases/synonyms (measured; see embedding.rs); real model ⏳ |
 | 945 | Cross-modal embedding | ⏳ | single-space design; modality encoders pending |
@@ -72,7 +72,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 948 | Confidence score | ✅ | `Node::confidence`, `Document::confidence` |
 | 949 | Retrieval planner | ✅ | `retrieval::plan_retrieval` + `search_diverse`/`mmr_rerank` (MMR) + `expand_query`/`search_expanded` (PRF) + `sdk::synonyms::SynonymTable`/`search_synonyms` (a priori domain-term expansion; mitigates the §944 lexical-only gap) |
 | 950 | Hybrid search | ✅ | `retrieval::Retriever` (BM25 keyword + vector + graph, Reciprocal Rank Fusion) |
-| 951 | Graph reasoning | ✅ | retrieval graph hits + `graph::traverse` + `pagerank`/`central_nodes` (node importance) |
+| 951 | Graph reasoning | ✅ | retrieval graph hits + `graph::traverse`/`neighbors_via` (typed-relation hop) + `pagerank`/`central_nodes` (node importance); KQL `RELATED … VIA <edge-kind>` reasons over relation types |
 | 952 | Multi-hop planner | ✅ | `graph::traverse`/`traverse_with_hops` + retriever hop expansion (score decays geometrically per hop) |
 | 953 | Memory consolidation | ✅ | `memory::consolidate` (sleep-phase pass compressing oversized docs), reachable via `ckos gc --consolidate N`, which runs before the document/graph GC passes; also driving the §940 compression ladder it calls into |
 | 954 | Garbage collection | ✅ | `ckos gc`: `memory::collect` (documents; expiry via `--now <date>`) + `graph::KnowledgeGraph::remove_orphans` sweeping the session's persisted graph |
@@ -83,7 +83,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 959 | Learning pipeline | 🟡 | reflection persistence + auto-reindex + `sdk::eval` (Precision/Recall/MRR/nDCG); full closed loop ⏳ |
 | 960 | Unified knowledge API | 🟡 | `cli` (`search`/`kql`/`history`/`eval`); network API ⏳ |
 | 961 | AI-native filesystem | ⏳ | proposal |
-| 962 | Knowledge Query Language | ✅ | `sdk::kql` — FIND/RELATED/FILTER (AND/OR/NOT)/BEFORE/AFTER/ORDER/LIMIT/RETURN; `ckos kql` incl. `--session` |
+| 962 | Knowledge Query Language | ✅ | `sdk::kql` — FIND/RELATED (with `VIA <edge-kind>` typed-relation filter)/FILTER (AND/OR/NOT)/BEFORE/AFTER/ORDER/LIMIT/RETURN; `ckos kql` incl. `--session` |
 
 ## Summary
 

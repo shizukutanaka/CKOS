@@ -98,7 +98,9 @@ execution order:
 
 ```text
 FIND Concept "Transformer"          # select by kind and/or quoted text (or *)
-RELATED Algorithm                   # one hop to neighbours of a given kind
+RELATED Algorithm VIA References    # one hop to neighbours of a kind (* = any);
+                                    # optional VIA <edge-kind> filters by relation
+                                    # (DependsOn/Implements/CreatedBy/References/RelatedTo)
 FILTER (Confidence > 90 AND Confidence < 99) OR NOT Confidence < 50
 BEFORE 2025-01-01                   # temporal bounds (also AFTER)
 ORDER BY Confidence DESC            # ranking (ASC/DESC)

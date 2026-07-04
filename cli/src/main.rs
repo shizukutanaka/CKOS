@@ -718,7 +718,7 @@ fn cmd_kql(rest: &[String]) -> ExitCode {
     };
     let session_dir = session_dir.as_deref();
     if rest.is_empty() {
-        eprintln!("error: usage `ckos kql [--session <dir>] \"FIND Concept \\\"Transformer\\\" RELATED Algorithm\"`");
+        eprintln!("error: usage `ckos kql [--session <dir>] \"FIND Concept \\\"Transformer\\\" RELATED Algorithm VIA References\"`");
         return ExitCode::FAILURE;
     }
     let source = rest.join(" ");

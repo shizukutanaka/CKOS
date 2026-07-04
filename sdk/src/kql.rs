@@ -5,13 +5,19 @@
 //!
 //! ```text
 //! FIND Concept "Transformer"
-//! RELATED Algorithm
+//! RELATED Algorithm VIA References
 //! FILTER (Confidence > 90 AND Confidence < 99) OR NOT Confidence < 50
 //! BEFORE 2025-01-01
 //! ORDER BY Confidence DESC
 //! LIMIT 10
 //! RETURN Graph + Sources
 //! ```
+//!
+//! `RELATED <kind>` follows one hop to neighbours of a given node kind (`*` =
+//! any kind). An optional `VIA <edge-kind>` qualifier restricts the hop to a
+//! single typed relation (`DependsOn`, `Implements`, `CreatedBy`, `References`,
+//! `RelatedTo`, §941), so e.g. `RELATED * VIA DependsOn` finds everything a
+//! node depends on regardless of the neighbour's kind.
 //!
 //! `FILTER` accepts a boolean expression over `Confidence <op> <value>` leaves
 //! combined with `AND`, `OR`, `NOT` and parentheses (precedence: `NOT` > `AND` >
@@ -21,7 +27,7 @@
 //! and [`execute`] (runs an AST against a [`KnowledgeGraph`]). Clauses may appear
 //! in any order after `FIND`.
 
-use ckos_graph::{KnowledgeGraph, Node, NodeKind};
+use ckos_graph::{EdgeKind, KnowledgeGraph, Node, NodeKind};
 use std::fmt;
 
 // ---------------------------------------------------------------------------
@@ -33,8 +39,13 @@ use std::fmt;
 pub struct KqlQuery {
     /// The `FIND` selector (required).
     pub find: NodeSelector,
-    /// Optional `RELATED <kind>` traversal target.
+    /// Optional `RELATED <kind>` traversal target (neighbour node kind, or `*`
+    /// for any kind).
     pub related: Option<String>,
+    /// Optional `VIA <edge-kind>` qualifier on `RELATED`: restrict the hop to
+    /// neighbours reached by an edge of this [`ckos_graph::EdgeKind`] token
+    /// (e.g. `DependsOn`, `References`). `None` traverses edges of any kind.
+    pub related_via: Option<String>,
     /// `FILTER` predicates.
     pub filters: Vec<Filter>,
     /// Optional `BEFORE <date>` bound (ISO date, lexicographically comparable).
@@ -298,6 +309,7 @@ pub fn parse(input: &str) -> Result<KqlQuery, KqlError> {
     let mut q = KqlQuery {
         find,
         related: None,
+        related_via: None,
         filters: Vec::new(),
         before: None,
         after: None,
@@ -314,7 +326,14 @@ pub fn parse(input: &str) -> Result<KqlQuery, KqlError> {
         let kw_up = kw.to_ascii_uppercase();
         p.pos += 1;
         match kw_up.as_str() {
-            "RELATED" => q.related = Some(p.next_word()?),
+            "RELATED" => {
+                q.related = Some(p.next_word()?);
+                // Optional `VIA <edge-kind>` qualifier restricts the hop to a
+                // single relation type (§941 typed edges).
+                if p.eat_keyword("VIA") {
+                    q.related_via = Some(p.next_word()?);
+                }
+            }
             "FILTER" => q.filters.push(parse_filter(&mut p)?),
             "BEFORE" => q.before = Some(p.next_word()?),
             "AFTER" => q.after = Some(p.next_word()?),
@@ -469,6 +488,32 @@ fn kind_token(kind: &NodeKind) -> String {
     kind.as_token()
 }
 
+/// Resolve a user-typed edge-kind word to an [`EdgeKind`], tolerating the
+/// natural spellings — `DependsOn`, `dependson`, `depends_on`, `DEPENDS_ON`
+/// all resolve to [`EdgeKind::DependsOn`] — while the on-disk token format
+/// (`EdgeKind::from_token`, snake_case) stays strict for round-trip fidelity.
+/// An unknown relation falls through to `from_token` (→ `Other`), matching no
+/// real edge rather than erroring.
+fn edge_kind_from_query(token: &str) -> EdgeKind {
+    let squash = |s: &str| -> String {
+        s.chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(|c| c.to_lowercase())
+            .collect()
+    };
+    let want = squash(token);
+    [
+        EdgeKind::DependsOn,
+        EdgeKind::Implements,
+        EdgeKind::References,
+        EdgeKind::CreatedBy,
+        EdgeKind::RelatedTo,
+    ]
+    .into_iter()
+    .find(|k| squash(&k.as_token()) == want)
+    .unwrap_or_else(|| EdgeKind::from_token(token))
+}
+
 /// Order a result set deterministically and apply any `LIMIT`. Without an
 /// explicit `ORDER`, results are sorted by descending confidence then label, so
 /// output is stable regardless of the graph's internal hash order.
@@ -567,9 +612,18 @@ pub fn execute(query: &KqlQuery, graph: &KnowledgeGraph) -> KqlResult {
 
     let mut related = Vec::new();
     if let Some(related_kind) = &query.related {
+        // A `VIA <edge-kind>` qualifier restricts the hop to one relation type
+        // (§941 typed edges); otherwise every outgoing edge is followed.
+        let via = query.related_via.as_deref().map(edge_kind_from_query);
+        // `*` matches any neighbour kind, mirroring the FIND selector.
+        let any_kind = related_kind == "*";
         for n in &primary_nodes {
-            for neighbor in graph.traverse(&n.id, 1) {
-                if kind_token(&neighbor.kind).eq_ignore_ascii_case(related_kind)
+            let neighbors = match &via {
+                Some(edge_kind) => graph.neighbors_via(&n.id, edge_kind),
+                None => graph.traverse(&n.id, 1),
+            };
+            for neighbor in neighbors {
+                if (any_kind || kind_token(&neighbor.kind).eq_ignore_ascii_case(related_kind))
                     && passes_filters(neighbor, &query.filters)
                     && passes_temporal(neighbor, query)
                 {
@@ -618,6 +672,57 @@ mod tests {
         assert!(q.find.kind.is_none());
         assert_eq!(q.find.text.as_deref(), Some("kernel"));
         assert_eq!(q.returns, vec![ReturnTarget::Documents]);
+    }
+
+    #[test]
+    fn parses_related_via_edge_kind() {
+        let q = parse("FIND Concept \"X\" RELATED Concept VIA DependsOn").unwrap();
+        assert_eq!(q.related.as_deref(), Some("Concept"));
+        assert_eq!(q.related_via.as_deref(), Some("DependsOn"));
+        // RELATED without VIA leaves the qualifier unset (any edge kind).
+        let q2 = parse("FIND Concept \"X\" RELATED Concept").unwrap();
+        assert_eq!(q2.related_via, None);
+    }
+
+    #[test]
+    fn related_via_filters_by_edge_kind() {
+        // A node with two outgoing edges of different types; VIA must select
+        // only the matching relation — this is the first query path where the
+        // §941 typed edges actually change the result set.
+        let mut g = KnowledgeGraph::new();
+        let ckos = g.add_node(NodeKind::Concept, "CKOS", 95);
+        let sched = g.add_node(NodeKind::Concept, "Scheduler", 90);
+        let paper = g.add_node(NodeKind::Concept, "Paper", 90);
+        g.connect(&ckos, &sched, EdgeKind::DependsOn);
+        g.connect(&ckos, &paper, EdgeKind::References);
+
+        // VIA DependsOn → only the Scheduler.
+        let dep = execute(
+            &parse("FIND Concept \"CKOS\" RELATED Concept VIA DependsOn").unwrap(),
+            &g,
+        );
+        assert_eq!(dep.related.len(), 1);
+        assert_eq!(dep.related[0].label, "Scheduler");
+
+        // VIA References → only the Paper.
+        let refs = execute(
+            &parse("FIND Concept \"CKOS\" RELATED Concept VIA References").unwrap(),
+            &g,
+        );
+        assert_eq!(refs.related.len(), 1);
+        assert_eq!(refs.related[0].label, "Paper");
+
+        // No VIA → both neighbours (any edge kind).
+        let any = execute(&parse("FIND Concept \"CKOS\" RELATED Concept").unwrap(), &g);
+        assert_eq!(any.related.len(), 2);
+
+        // `RELATED * VIA DependsOn` ignores neighbour kind, keeps the edge filter.
+        let star = execute(
+            &parse("FIND Concept \"CKOS\" RELATED * VIA DependsOn").unwrap(),
+            &g,
+        );
+        assert_eq!(star.related.len(), 1);
+        assert_eq!(star.related[0].label, "Scheduler");
     }
 
     #[test]
