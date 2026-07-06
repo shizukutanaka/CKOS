@@ -25,7 +25,19 @@ edition = "2021"
 rust-version = "1.75"
 license = "Apache-2.0"
 repository = "https://github.com/shizukutanaka/CKOS"
+homepage = "https://github.com/shizukutanaka/CKOS"
 description = "CKOS — an AI-native cognitive kernel for orchestrating agents, workflows, memory and runtimes"
+keywords = ["ai", "agents", "knowledge-graph", "orchestration", "kernel"]
+categories = ["command-line-utilities", "data-structures"]
+readme = "../README.md"
+
+# Enforced across every member crate via `[lints] workspace = true`.
+# The workspace has zero `unsafe` — forbid makes that machine-checked — and
+# every public item must be documented (escalated to an error in CI, which
+# builds with RUSTFLAGS="-D warnings").
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
 
 [workspace.dependencies]
 ckos-kernel = { path = "kernel" }
@@ -44,3 +56,4 @@ ckos-sdk = { path = "sdk" }
 opt-level = 3
 lto = "thin"
 codegen-units = 1
+strip = "symbols"

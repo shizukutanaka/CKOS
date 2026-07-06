@@ -5,6 +5,13 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
 description = "CKOS core kernel: task lifecycle, event bus, capabilities and resource primitives"
+
+[lints]
+workspace = true
 
 [dependencies]

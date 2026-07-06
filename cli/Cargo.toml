@@ -5,7 +5,14 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
 description = "CKOS command-line interface"
+
+[lints]
+workspace = true
 
 [[bin]]
 name = "ckos"

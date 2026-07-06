@@ -48,10 +48,15 @@ impl TaskMetrics {
 /// `0.0..=1.0` for utilisations; `None` when a counter is unavailable.
 #[derive(Debug, Clone, Default)]
 pub struct ResourceSnapshot {
+    /// CPU utilisation fraction, if available.
     pub cpu: Option<f32>,
+    /// GPU utilisation fraction, if available.
     pub gpu: Option<f32>,
+    /// NPU utilisation fraction, if available.
     pub npu: Option<f32>,
+    /// Resident memory usage in megabytes, if available.
     pub memory_mb: Option<u64>,
+    /// Instantaneous power draw in watts, if available.
     pub power_watts: Option<f32>,
 }
 

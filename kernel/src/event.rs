@@ -12,16 +12,43 @@ use std::sync::{Arc, Mutex};
 /// Events emitted across the kernel (representative set from §894 + §923).
 #[derive(Debug, Clone)]
 pub enum Event {
+    /// A task entered the kernel in the `Created` state (§893).
     TaskCreated(TaskId),
+    /// A task began executing on a runtime.
     TaskStarted(TaskId),
+    /// A task reached the terminal `Completed` state.
     TaskCompleted(TaskId),
-    TaskFailed { task: TaskId, reason: String },
+    /// A task failed during execution or verification.
+    TaskFailed {
+        /// The failing task.
+        task: TaskId,
+        /// Human-readable failure cause.
+        reason: String,
+    },
+    /// A runtime was loaded and registered with the kernel.
     RuntimeLoaded(RuntimeId),
-    MemoryUpdated { key: String },
+    /// A memory entry was written or changed.
+    MemoryUpdated {
+        /// Key of the updated entry.
+        key: String,
+    },
+    /// A knowledge-graph node was added or modified.
     GraphChanged(NodeId),
-    PluginInstalled { name: String },
-    PolicyViolation { subject: String, action: String },
+    /// A plugin was installed into the host.
+    PluginInstalled {
+        /// Name of the installed plugin.
+        name: String,
+    },
+    /// A policy check denied an action (§929).
+    PolicyViolation {
+        /// The principal that attempted the action.
+        subject: String,
+        /// The permission token that was denied.
+        action: String,
+    },
+    /// An agent registered with the capability registry (§910).
     AgentRegistered(AgentId),
+    /// A workflow ran all of its tasks to completion (§895).
     WorkflowCompleted(WorkflowId),
 }
 

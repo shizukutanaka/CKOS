@@ -15,8 +15,11 @@ use std::collections::HashMap;
 /// Declarative metadata describing an agent (§908).
 #[derive(Debug, Clone)]
 pub struct AgentManifest {
+    /// Unique agent identifier, e.g. `planner-agent`.
     pub id: String,
+    /// Semantic version of the agent.
     pub version: String,
+    /// Human-readable summary of what the agent does.
     pub description: String,
     /// Capabilities this agent provides (§910, §911).
     pub capabilities: Vec<Capability>,
@@ -188,12 +191,19 @@ fn push_list_item(
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentState {
+    /// Present on disk but not yet known to the registry.
     Installed,
+    /// Known to the registry; code not yet loaded.
     Registered,
+    /// Code and resources loaded into memory.
     Loaded,
+    /// Initialised and waiting for work.
     Ready,
+    /// Actively processing a task.
     Running,
+    /// Paused; may resume to `Ready` or be terminated.
     Suspended,
+    /// Shut down; the terminal state.
     Terminated,
 }
 
@@ -219,8 +229,11 @@ impl AgentState {
 /// A registered, running agent instance.
 #[derive(Debug, Clone)]
 pub struct AgentInstance {
+    /// Unique id of this running instance.
     pub instance_id: AgentId,
+    /// The manifest the instance was created from (§908).
     pub manifest: AgentManifest,
+    /// Current lifecycle state (§909).
     pub state: AgentState,
 }
 

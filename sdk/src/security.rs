@@ -1,6 +1,6 @@
 //! Distributed security (§930): message signing and replay protection.
 //!
-//! Inter-agent [`Message`](crate::messaging::Message)s crossing a trust boundary
+//! Inter-agent [`Message`] values crossing a trust boundary
 //! are wrapped in a [`SignedEnvelope`] carrying a nonce, a timestamp and a
 //! signature over the canonical message bytes. A [`ReplayGuard`] verifies the
 //! signature, rejects messages outside a freshness window, and rejects repeated
@@ -53,9 +53,13 @@ fn canonical(message: &Message, nonce: u64, timestamp_ms: u64) -> String {
 /// A signed, replay-protected message envelope (§930).
 #[derive(Debug, Clone)]
 pub struct SignedEnvelope {
+    /// The wrapped message.
     pub message: Message,
+    /// Unique value preventing replay of an identical envelope.
     pub nonce: u64,
+    /// Sealing time in milliseconds since the Unix epoch.
     pub timestamp_ms: u64,
+    /// Keyed digest over the message, nonce and timestamp.
     pub signature: u64,
 }
 

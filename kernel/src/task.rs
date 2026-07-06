@@ -19,14 +19,23 @@ use std::str::FromStr;
 /// The lifecycle state of a task (§893).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TaskState {
+    /// Just constructed; not yet submitted to the scheduler.
     Created,
+    /// Waiting in the scheduler queue for dispatch.
     Queued,
+    /// Being decomposed into an execution plan.
     Planning,
+    /// Actively executing on a runtime.
     Running,
+    /// Output is being checked by the verifier (§899).
     Verifying,
+    /// Finished successfully; the only terminal state.
     Completed,
+    /// Execution or verification failed.
     Failed,
+    /// Undoing side effects after a failure.
     Rollback,
+    /// Preparing to re-queue after rollback.
     Retry,
 }
 
@@ -74,10 +83,14 @@ impl TaskState {
 /// Scheduling priority used by the scheduler's priority queue (§892, §913).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum Priority {
+    /// Background work; runs when nothing more urgent is queued.
     Low,
+    /// Default priority for ordinary tasks.
     #[default]
     Normal,
+    /// Preferred over normal work by the scheduler.
     High,
+    /// Most urgent; scheduled ahead of everything else.
     Critical,
 }
 

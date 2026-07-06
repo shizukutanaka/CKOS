@@ -13,18 +13,26 @@ use std::collections::{HashMap, HashSet};
 /// Plugin categories (§901).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PluginKind {
+    /// Provides a model execution backend (§900).
     Runtime,
+    /// Provides a memory tier or storage backend (§896).
     Memory,
+    /// Provides a knowledge-graph backend (§897).
     Graph,
+    /// Provides an external integration behind the [`Tool`] trait (§918).
     Tool,
+    /// Provides a user-facing surface or interface.
     Ui,
+    /// Provides reusable workflow definitions (§895).
     Workflow,
 }
 
 /// Metadata returned by every tool (§918).
 #[derive(Debug, Clone)]
 pub struct ToolMetadata {
+    /// Unique name the registry keys the tool by.
     pub name: String,
+    /// Human-readable summary of what the tool does.
     pub description: String,
     /// Permission tokens this tool requires, e.g. `filesystem.read` (§919).
     pub permissions: Vec<String>,

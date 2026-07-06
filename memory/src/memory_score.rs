@@ -21,8 +21,11 @@
 /// reference implementation).
 #[derive(Debug, Clone, Copy)]
 pub struct MemoryWeights {
+    /// Weight of the recency component (α_recency).
     pub recency: f32,
+    /// Weight of the importance component (α_importance).
     pub importance: f32,
+    /// Weight of the relevance component (α_relevance).
     pub relevance: f32,
 }
 

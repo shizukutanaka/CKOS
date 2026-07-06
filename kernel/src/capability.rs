@@ -12,19 +12,33 @@ use std::str::FromStr;
 /// third-party agents can declare domain capabilities (e.g. `robotics`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Capability {
+    /// Decomposing goals into ordered steps and subtasks.
     Planning,
+    /// Drawing inferences and conclusions over knowledge.
     Reasoning,
+    /// Writing or modifying source code.
     Coding,
+    /// Converting text between natural languages.
     Translation,
+    /// Producing vector representations of content.
     Embedding,
+    /// Finding relevant documents or knowledge for a query.
     Retrieval,
+    /// Checking outputs for correctness and safety.
     Verification,
+    /// Modelling scenarios and predicting their outcomes.
     Simulation,
+    /// Understanding images and other visual input.
     Vision,
+    /// Recognising or synthesising spoken audio.
     Speech,
+    /// Controlling physical actuators and devices.
     Robotics,
+    /// Domain expertise in financial analysis.
     Finance,
+    /// Domain expertise in medicine and healthcare.
     Medical,
+    /// Domain expertise in law and compliance.
     Legal,
     /// Escape hatch for capabilities not enumerated above.
     Custom(String),

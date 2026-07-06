@@ -3,7 +3,7 @@
 //! A [`GraphRepo`] manages immutable snapshots of a [`KnowledgeGraph`] like a
 //! tiny Git: commits form a parent chain, branches are named pointers, and
 //! [`GraphRepo::merge`] combines two branches by *semantic node identity*
-//! (kind + label) rather than the internal [`NodeId`], which differs across
+//! (kind + label) rather than the internal [`NodeId`](ckos_kernel::NodeId), which differs across
 //! branches. Conflicts (same identity, differing attributes) are resolved by a
 //! [`MergeStrategy`] and reported in a [`MergeReport`].
 
@@ -29,8 +29,11 @@ pub enum MergeStrategy {
 pub struct MergeConflict {
     /// Semantic identity (`kind:label`).
     pub identity: String,
+    /// Confidence of the node on the current branch.
     pub ours_confidence: u8,
+    /// Confidence of the node on the merged-in branch.
     pub theirs_confidence: u8,
+    /// Confidence kept in the merge result after applying the strategy.
     pub resolved_confidence: u8,
 }
 

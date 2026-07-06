@@ -5,7 +5,14 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
 description = "CKOS scheduler: task queue, priority queue, dependency resolver, dispatcher"
+
+[lints]
+workspace = true
 
 [dependencies]
 ckos-kernel.workspace = true

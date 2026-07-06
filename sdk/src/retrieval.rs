@@ -202,7 +202,7 @@ fn hit_similarity(a: &Hit, b: &Hit) -> f32 {
 /// hit maximizing `λ·relevance − (1−λ)·max similarity-to-already-selected`.
 /// `lambda` in `[0,1]`: 1 = pure relevance (original order), 0 = pure diversity.
 /// Relevance is each hit's score normalized by the max; redundancy is lexical
-/// [`hit_similarity`]. Returns up to `k` hits.
+/// `hit_similarity`. Returns up to `k` hits.
 pub fn mmr_rerank(hits: &[Hit], lambda: f32, k: usize) -> Vec<Hit> {
     let lambda = lambda.clamp(0.0, 1.0);
     let max_score = hits

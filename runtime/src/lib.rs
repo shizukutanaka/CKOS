@@ -115,9 +115,13 @@ fn locality_rank(kind: RuntimeKind) -> u8 {
 /// Descriptor stored in the registry table (§900).
 #[derive(Debug, Clone)]
 pub struct RuntimeInfo {
+    /// Stable identifier.
     pub id: RuntimeId,
+    /// Human-readable runtime name.
     pub name: String,
+    /// Hardware/locality class (§900).
     pub kind: RuntimeKind,
+    /// Capabilities this runtime can serve (§911).
     pub capabilities: Vec<Capability>,
 }
 
@@ -167,7 +171,7 @@ impl RuntimeRegistry {
 
     /// Select the best runtime for a capability (§924): among runtimes that
     /// support it, the most local kind wins (`Edge` first, `Cloud` last, per
-    /// [`locality_rank`] — lower rank = more preferred = selected), so the
+    /// `locality_rank` — lower rank = more preferred = selected), so the
     /// kernel favours offline-capable execution (§925). Ties (same rank,
     /// multiple runtimes) resolve to the first match in registration order —
     /// stable and deterministic, not round-robin or random.

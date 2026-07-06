@@ -50,10 +50,15 @@ impl MemoryTier {
 /// notebook — shares this shape.
 #[derive(Debug, Clone)]
 pub struct Document {
+    /// Stable identifier.
     pub id: DocumentId,
+    /// Artifact kind, e.g. `markdown`, `pdf`, `code`.
     pub doc_type: String,
+    /// Human-readable title.
     pub title: String,
+    /// Author, when known.
     pub author: Option<String>,
+    /// Full textual content.
     pub body: String,
     /// Free-form metadata.
     pub metadata: HashMap<String, String>,

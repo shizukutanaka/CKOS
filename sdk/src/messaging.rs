@@ -29,11 +29,17 @@ pub struct Payload {
 /// An inter-agent message (§915).
 #[derive(Debug, Clone)]
 pub struct Message {
+    /// Unique message id, assigned at construction.
     pub id: String,
+    /// Sending agent.
     pub source: AgentId,
+    /// Receiving agent.
     pub destination: AgentId,
+    /// Application-defined type tag, e.g. `plan.request`.
     pub msg_type: String,
+    /// Delivery priority (§915).
     pub priority: Priority,
+    /// References and body carried by the message.
     pub payload: Payload,
 }
 

@@ -18,12 +18,19 @@ pub use versioning::{GraphRepo, MergeConflict, MergeReport, MergeStrategy, Versi
 /// Node categories from §897.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeKind {
+    /// An abstract idea or topic.
     Concept,
+    /// A written artifact such as a paper or page.
     Document,
+    /// An individual human.
     Person,
+    /// A company, team or institution.
     Organization,
+    /// A software tool or utility.
     Tool,
+    /// A programmatic interface or service endpoint.
     Api,
+    /// A body of work with a goal, such as a codebase.
     Project,
     /// Open category for domain-specific nodes.
     Other(String),
@@ -64,10 +71,15 @@ impl NodeKind {
 /// Edge relationship types from §897.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EdgeKind {
+    /// The source requires the target to function.
     DependsOn,
+    /// The source realises or fulfils the target.
     Implements,
+    /// The source cites or mentions the target.
     References,
+    /// The source was authored by the target.
     CreatedBy,
+    /// A generic association between the two nodes.
     RelatedTo,
     /// Open category for domain-specific relations.
     Other(String),
@@ -104,8 +116,11 @@ impl EdgeKind {
 /// A graph node with an optional confidence score (§948).
 #[derive(Debug, Clone)]
 pub struct Node {
+    /// Stable identifier within the graph.
     pub id: NodeId,
+    /// Node category (§897).
     pub kind: NodeKind,
+    /// Human-readable name of the node.
     pub label: String,
     /// Confidence 0..=100 (§948).
     pub confidence: u8,
@@ -119,8 +134,11 @@ pub struct Node {
 /// A directed, typed edge.
 #[derive(Debug, Clone)]
 pub struct Edge {
+    /// Source node of the relation.
     pub from: NodeId,
+    /// Target node of the relation.
     pub to: NodeId,
+    /// Relation type (§897).
     pub kind: EdgeKind,
 }
 

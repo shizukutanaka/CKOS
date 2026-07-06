@@ -29,9 +29,13 @@ pub struct AccessRequest {
 /// granted (or, if `deny`, explicitly forbidden — deny wins).
 #[derive(Debug, Clone)]
 pub struct AbacRule {
+    /// Permission token the rule applies to, e.g. `graph.write`.
     pub action: String,
+    /// Attribute name the request must carry for the rule to match.
     pub attribute_key: String,
+    /// Attribute value that triggers the rule.
     pub attribute_value: String,
+    /// When true the rule forbids the action instead of granting it.
     pub deny: bool,
 }
 

@@ -37,6 +37,7 @@ pub trait Check: Send + Sync {
 /// Aggregated report over all checks.
 #[derive(Debug, Clone)]
 pub struct Report {
+    /// Each check's name paired with its verdict.
     pub results: Vec<(String, Verdict)>,
 }
 

@@ -64,7 +64,9 @@ pub struct KqlQuery {
 /// Sort direction for `ORDER BY Confidence`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortDir {
+    /// Lowest confidence first.
     Asc,
+    /// Highest confidence first.
     Desc,
 }
 
@@ -80,10 +82,15 @@ pub struct NodeSelector {
 /// A comparison operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CmpOp {
+    /// Strictly greater than (`>`).
     Gt,
+    /// Greater than or equal (`>=`).
     Ge,
+    /// Strictly less than (`<`).
     Lt,
+    /// Less than or equal (`<=`).
     Le,
+    /// Equal (`=` or `==`).
     Eq,
 }
 
@@ -103,17 +110,29 @@ impl CmpOp {
 /// leaves combine with `AND`, `OR`, `NOT` and parentheses.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Filter {
-    Confidence { op: CmpOp, value: u8 },
+    /// Leaf comparison against a node's confidence score (§948).
+    Confidence {
+        /// Comparison operator.
+        op: CmpOp,
+        /// Threshold in 0..=100 to compare against.
+        value: u8,
+    },
+    /// All sub-filters must hold.
     And(Vec<Filter>),
+    /// At least one sub-filter must hold.
     Or(Vec<Filter>),
+    /// Inverts the inner filter.
     Not(Box<Filter>),
 }
 
 /// A `RETURN` target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReturnTarget {
+    /// Return matching nodes with their graph relations.
     Graph,
+    /// Return provenance/source information for matches (§947).
     Sources,
+    /// Return the matching documents themselves (the default).
     Documents,
 }
 
@@ -465,8 +484,11 @@ fn parse_returns(p: &mut Parser) -> Result<Vec<ReturnTarget>, KqlError> {
 /// A node returned from a KQL query.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NodeMatch {
+    /// Human-readable label of the matched node.
     pub label: String,
+    /// Node kind token, e.g. `concept` (§897).
     pub kind: String,
+    /// Confidence 0..=100 (§948).
     pub confidence: u8,
     /// Temporal date, if the node carries one (§946).
     pub date: Option<String>,

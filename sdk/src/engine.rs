@@ -7,7 +7,7 @@
 //! 3. verifies the output on the independent verifier (§899);
 //! 4. emits lifecycle events on the bus (§894).
 //!
-//! Dependency ordering is delegated to the [`Scheduler`](ckos_scheduler::Scheduler)
+//! Dependency ordering is delegated to the [`Scheduler`]
 //! (§892): every task carries its dependency ids (populated by the workflow DAG),
 //! so a step only dispatches once its prerequisites complete.
 //!
@@ -117,7 +117,7 @@ impl Engine {
     }
 
     /// Opt in to authorization (§929): tasks whose capability is in
-    /// [`SENSITIVE_CAPABILITIES`] (finance/medical/legal/robotics) must be
+    /// `SENSITIVE_CAPABILITIES` (finance/medical/legal/robotics) must be
     /// permitted for `roles` by `policy`, or [`Engine::execute`] denies them
     /// before a runtime is even selected. Ordinary capabilities are never
     /// gated — this narrows the "least privilege" default-deny principle to
