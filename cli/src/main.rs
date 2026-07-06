@@ -114,6 +114,24 @@ COMMANDS:
 ";
 
 fn main() -> ExitCode {
+    // Rust's runtime ignores SIGPIPE, so when the read end of a pipe closes
+    // early (`ckos search … | head -1`) println! panics with "Broken pipe"
+    // and dumps a backtrace instead of exiting quietly like a conventional
+    // Unix CLI. std-only mitigation: intercept exactly that panic and exit
+    // with the shell convention 141 (128 + SIGPIPE); every other panic keeps
+    // the default (backtrace-printing) hook.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let broken_pipe = info
+            .payload()
+            .downcast_ref::<String>()
+            .is_some_and(|m| m.contains("Broken pipe"));
+        if broken_pipe {
+            std::process::exit(141);
+        }
+        default_hook(info);
+    }));
+
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("plan") => cmd_plan(&args[1..]),

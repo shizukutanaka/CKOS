@@ -544,3 +544,42 @@ fn history_with_a_query_recalls_instead_of_dumping_raw_history() {
         "expected --k 1 to bound output to one record, got: {recalled_s}"
     );
 }
+
+#[test]
+fn closed_output_pipe_never_panics() {
+    // Regression: `ckos … | head -1` used to dump a "Broken pipe" panic and
+    // backtrace, because Rust ignores SIGPIPE and println! panics when the
+    // pipe's read end closes. main() now exits quietly with the shell
+    // convention 141 (128 + SIGPIPE). Dropping the child's stdout handle
+    // closes the read end; whether the child hits EPIPE is a race we don't
+    // control, so the invariant asserted is: EITHER a clean success (child
+    // finished writing first) OR exit 141 — and never a panic on stderr.
+    use std::process::{Command, Stdio};
+    for _ in 0..5 {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_ckos"))
+            .arg("capabilities")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn ckos");
+        drop(child.stdout.take()); // close the pipe's read end immediately
+        let status = child.wait().expect("wait ckos");
+        let mut stderr = String::new();
+        use std::io::Read;
+        child
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_string(&mut stderr)
+            .unwrap();
+        assert!(
+            !stderr.contains("panicked"),
+            "broken pipe must not panic: {stderr}"
+        );
+        let code = status.code();
+        assert!(
+            matches!(code, Some(0) | Some(141)),
+            "expected exit 0 or 141, got {code:?}"
+        );
+    }
+}
