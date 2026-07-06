@@ -70,7 +70,23 @@ impl GraphStore {
                 e.kind.as_token(),
             ));
         }
-        std::fs::write(path, out)
+        // Atomic replace: write a sibling temp file, flush it, then rename
+        // over the destination. This file holds the *entire* graph, so a
+        // crash during a plain in-place write would corrupt all of it; with
+        // the rename, readers see either the old graph or the complete new
+        // one, never a truncation.
+        let path = path.as_ref();
+        let tmp = path.with_extension(format!(
+            "{}.tmp",
+            path.extension().and_then(|s| s.to_str()).unwrap_or("")
+        ));
+        {
+            use std::io::Write;
+            let mut f = std::fs::File::create(&tmp)?;
+            f.write_all(out.as_bytes())?;
+            f.sync_all()?;
+        }
+        std::fs::rename(&tmp, path)
     }
 
     /// Load a graph from `path`. A missing file yields an empty graph, so callers

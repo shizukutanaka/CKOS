@@ -37,19 +37,47 @@ use std::path::{Path, PathBuf};
 
 const EXT: &str = "doc";
 
+/// Write `contents` to `path` atomically: write a sibling `<path>.tmp`, flush
+/// it to disk, then rename over the destination. On POSIX the rename is
+/// atomic, so a crash mid-write can never leave a truncated/corrupt file in
+/// place of the previous good copy — readers see either the old file or the
+/// complete new one.
+fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension(format!(
+        "{}.tmp",
+        path.extension().and_then(|s| s.to_str()).unwrap_or("")
+    ));
+    {
+        use std::io::Write;
+        let mut f = fs::File::create(&tmp)?;
+        f.write_all(contents.as_bytes())?;
+        f.sync_all()?;
+    }
+    fs::rename(&tmp, path)
+}
+
 /// A directory of documents persisted to disk.
 pub struct FileStore {
     dir: PathBuf,
     index: HashMap<DocumentId, Document>,
+    /// How many `.doc` files were skipped as unreadable (I/O error or
+    /// non-UTF-8) when the store was opened. See [`FileStore::skipped`].
+    skipped: usize,
 }
 
 impl FileStore {
     /// Open (creating if needed) a store rooted at `dir`, loading any existing
     /// `*.doc` files into the index.
+    ///
+    /// A file that cannot be read (OS error, non-UTF-8 bytes) is **skipped**,
+    /// not fatal: one damaged or foreign file must not make every other valid
+    /// document in the session unreachable. The number of skipped files is
+    /// reported by [`skipped`](Self::skipped) so callers can warn.
     pub fn open(dir: impl AsRef<Path>) -> Result<Self> {
         let dir = dir.as_ref().to_path_buf();
         fs::create_dir_all(&dir).map_err(|e| KernelError::other(format!("create dir: {e}")))?;
         let mut index = HashMap::new();
+        let mut skipped = 0usize;
         for entry in fs::read_dir(&dir).map_err(|e| KernelError::other(format!("read dir: {e}")))? {
             let entry = entry.map_err(|e| KernelError::other(format!("dir entry: {e}")))?;
             let path = entry.path();
@@ -60,12 +88,28 @@ impl FileStore {
                 Some(s) => s.to_string(),
                 None => continue,
             };
-            let content =
-                fs::read_to_string(&path).map_err(|e| KernelError::other(format!("read: {e}")))?;
+            let content = match fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => {
+                    skipped += 1;
+                    continue;
+                }
+            };
             let doc = deserialize(DocumentId::from_raw(stem), &content);
             index.insert(doc.id.clone(), doc);
         }
-        Ok(FileStore { dir, index })
+        Ok(FileStore {
+            dir,
+            index,
+            skipped,
+        })
+    }
+
+    /// Number of `.doc` files skipped as unreadable when the store was opened
+    /// (0 for a healthy directory). Callers surfacing sessions to users should
+    /// warn when this is non-zero.
+    pub fn skipped(&self) -> usize {
+        self.skipped
     }
 
     /// Number of documents currently stored.
@@ -85,7 +129,7 @@ impl FileStore {
 
 impl Storage for FileStore {
     fn write(&mut self, doc: Document) -> Result<()> {
-        fs::write(self.path_for(&doc.id), serialize(&doc))
+        write_atomic(&self.path_for(&doc.id), &serialize(&doc))
             .map_err(|e| KernelError::other(format!("write: {e}")))?;
         self.index.insert(doc.id.clone(), doc);
         Ok(())
@@ -212,12 +256,16 @@ fn deserialize(id: DocumentId, content: &str) -> Document {
             "author" => doc.author = Some(unescape_header(value)),
             "confidence" => doc.confidence = value.parse().unwrap_or(0),
             "embedding" => {
-                let v: Vec<f32> = value
+                // All-or-nothing: silently dropping unparseable components
+                // would yield a wrong-dimension vector that skews similarity.
+                // A corrupt embedding becomes None — the document stays fully
+                // usable through keyword search and can be re-embedded.
+                let parsed: std::result::Result<Vec<f32>, _> = value
                     .split(',')
                     .filter(|s| !s.is_empty())
-                    .filter_map(|s| s.parse().ok())
+                    .map(str::parse)
                     .collect();
-                doc.embedding = Some(v);
+                doc.embedding = parsed.ok();
             }
             k if k.starts_with("meta.") => {
                 let meta_key = unescape_header(k.trim_start_matches("meta."));
@@ -368,6 +416,68 @@ mod tests {
             got.metadata.get(r"weird\key").map(String::as_str),
             Some(r"value\with\backslashes")
         );
+    }
+
+    #[test]
+    fn writes_are_atomic_and_leave_no_temp_residue() {
+        let tmp = TempDir::new();
+        let mut store = FileStore::open(&tmp.0).unwrap();
+        let doc = Document::new("note", "durable", "body");
+        let id = doc.id.clone();
+        store.write(doc).unwrap();
+
+        // The final file exists with the full content; no `.tmp` sibling
+        // survives the rename.
+        let entries: Vec<String> = fs::read_dir(&tmp.0)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(entries.iter().any(|n| n.ends_with(".doc")));
+        assert!(
+            !entries.iter().any(|n| n.ends_with(".tmp")),
+            "temp file must be renamed away, found: {entries:?}"
+        );
+        let got = FileStore::open(&tmp.0).unwrap().read(&id).unwrap().unwrap();
+        assert_eq!(got.body, "body");
+    }
+
+    #[test]
+    fn one_unreadable_doc_does_not_take_down_the_session() {
+        // Regression: open() used to propagate the first read error, so a
+        // single damaged/foreign .doc file made every other valid document
+        // in the session unreachable.
+        let tmp = TempDir::new();
+        let id;
+        {
+            let mut store = FileStore::open(&tmp.0).unwrap();
+            let doc = Document::new("note", "good", "healthy content");
+            id = doc.id.clone();
+            store.write(doc).unwrap();
+        }
+        // Drop a non-UTF-8 file with the .doc extension next to it.
+        fs::write(tmp.0.join("damaged.doc"), [0xFF, 0xFE, 0x00, 0x80]).unwrap();
+
+        let store = FileStore::open(&tmp.0).unwrap();
+        assert_eq!(store.skipped(), 1, "the damaged file is skipped, counted");
+        let got = store.read(&id).unwrap().unwrap();
+        assert_eq!(got.title, "good", "healthy documents still load");
+    }
+
+    #[test]
+    fn corrupt_embedding_component_drops_the_whole_vector() {
+        // All-or-nothing: a partially unparseable embedding must become None,
+        // never a silently shorter (wrong-dimension) vector.
+        let doc = deserialize(
+            DocumentId::from_raw("x"),
+            "doc_type: note\ntitle: t\nembedding: 0.5,not_a_float,0.25\n\nbody",
+        );
+        assert_eq!(doc.embedding, None);
+        // A fully valid vector still parses.
+        let ok = deserialize(
+            DocumentId::from_raw("y"),
+            "doc_type: note\ntitle: t\nembedding: 0.5,0.25\n\nbody",
+        );
+        assert_eq!(ok.embedding, Some(vec![0.5, 0.25]));
     }
 
     #[test]

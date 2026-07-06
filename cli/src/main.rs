@@ -54,6 +54,16 @@ fn take_value_flag(
     Ok((value, rest))
 }
 
+/// Warn (non-fatally) when a session store skipped unreadable `.doc` files on
+/// open — the session still works with the readable remainder, but the user
+/// should know some documents were not loaded.
+fn warn_skipped(store: &FileStore) {
+    let n = store.skipped();
+    if n > 0 {
+        eprintln!("warning: {n} unreadable document(s) skipped in this session");
+    }
+}
+
 /// Whether the user asked for help on a (sub)command: `-h`/`--help` as the
 /// first argument.
 fn wants_help(args: &[String]) -> bool {
@@ -310,6 +320,7 @@ fn cmd_run(rest: &[String]) -> ExitCode {
             if let Some(dir) = session_dir {
                 match FileStore::open(dir) {
                     Ok(store) => {
+                        warn_skipped(&store);
                         let mut session = Session::new("cli", Box::new(store))
                             .with_embedder(Box::new(HashingEmbedder::default()));
                         if let Err(e) = session
@@ -405,6 +416,7 @@ fn cmd_history(rest: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    warn_skipped(&store);
 
     if !query_words.is_empty() {
         let query = query_words.join(" ");
@@ -501,6 +513,7 @@ fn cmd_search(rest: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    warn_skipped(&store);
     // Load the persisted knowledge graph (empty if none has been built yet),
     // so graph-based hits work across processes (§936). Build it with
     // `ckos graph --session <dir>`. A genuine read/parse error is surfaced
@@ -595,7 +608,17 @@ fn cmd_eval(rest: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let graph = GraphStore::load(Path::new(&dir).join(GRAPH_FILE)).unwrap_or_default();
+    warn_skipped(&store);
+    // A real graph load/parse error must fail loudly (matching search/kql/
+    // run/gc) — silently scoring against an empty graph would skew the very
+    // numbers this command exists to report.
+    let graph = match GraphStore::load(Path::new(&dir).join(GRAPH_FILE)) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("error: could not load session graph: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let embedder = HashingEmbedder::default();
     let retriever = Retriever::with_embedder(&store, &graph, &embedder);
     let hits = retriever.search(&query, k.max(1));
@@ -797,6 +820,7 @@ fn cmd_graph(rest: &[String]) -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
+            warn_skipped(&store);
             // Empty query (limit 0) returns every stored document.
             match store.search(&Query::default()) {
                 Ok(docs) => docs
@@ -921,6 +945,7 @@ fn cmd_gc(rest: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    warn_skipped(&store);
 
     // §953 sleep-phase pass runs first, so GC below sees the (now smaller)
     // consolidated bodies rather than acting on stale, oversized ones.
