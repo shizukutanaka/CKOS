@@ -28,7 +28,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 902 | API gateway | 🟡 | `cli` done; REST/gRPC/WebSocket/MCP ⏳ |
 | 903 | Audit logging | ✅ | `kernel::audit` — task execution (`Engine::execute`, incl. policy denials) and tool runs (`ckos tool`, allowed *and* denied, trail printed on exit). `.plugin()` field still has no producer |
 | 904 | Telemetry | ✅ | `kernel::telemetry` — latency feeds scheduling via `run_workflow`'s telemetry-scored submission (§913). Hardware `ResourceProbe` is a seam with no consumer yet; real probe ⏳ |
-| 905 | CI/CD | ✅ | `docs/ci-workflow.yml` (copy to `.github/workflows/`) |
+| 905 | CI/CD | 🟡 | `docs/ci-workflow.yml` (fmt → clippy `-D warnings` → build → test → CLI smoke) — complete and ready, but the automation lacks the `workflows` permission to push `.github/workflows/` (verified: the push was rejected), so a maintainer must copy it to `.github/workflows/ci.yml` once |
 | 906 | Implementation priority | ✅ | `docs/roadmap.md` |
 
 ## v2.6 — Agent Service Mesh
@@ -77,7 +77,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 953 | Memory consolidation | ✅ | `memory::consolidate` (sleep-phase pass compressing oversized docs), reachable via `ckos gc --consolidate N`, which runs before the document/graph GC passes; also driving the §940 compression ladder it calls into |
 | 954 | Garbage collection | ✅ | `ckos gc`: `memory::collect` (documents; expiry via `--now <date>`) + `graph::KnowledgeGraph::remove_orphans` sweeping the session's persisted graph |
 | 955 | Data encryption | ⏳ | at-rest/in-transit pending (transport layer) |
-| 956 | Offline-first | ✅ | `FileStore` + std-only build; header fields (title/author/metadata) are backslash-escaped on write so an embedded newline can't shift real headers into the body on reload |
+| 956 | Offline-first | ✅ | `FileStore` + std-only build; header fields (title/author/metadata) are backslash-escaped on write so an embedded newline can't shift real headers into the body on reload; writes are atomic (temp + fsync + rename) and one unreadable `.doc` is skipped with a warning instead of blocking the whole session |
 | 957 | Distributed knowledge | ⏳ | sharding/partial-sync pending |
 | 958 | Search cache | 🟡 | `sdk::retrieval::SearchCache` (LRU query→hits cache; SDK-only — the CLI's one-shot processes have no cache to warm, so nothing constructs it outside tests) |
 | 959 | Learning pipeline | 🟡 | reflection persistence + auto-reindex + `sdk::eval` (Precision/Recall/MRR/nDCG); full closed loop ⏳ |
