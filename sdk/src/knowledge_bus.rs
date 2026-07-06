@@ -91,14 +91,23 @@ pub struct ReindexQueue {
 }
 
 impl ReindexQueue {
+    /// Take the queue lock, recovering from poisoning: the queue is a plain
+    /// Vec with no partial-update invariants, and a poisoned queue must not
+    /// turn every later push/drain into a panic cascade.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<NodeId>> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     /// Push a node id onto the queue.
     pub fn push(&self, id: NodeId) {
-        self.inner.lock().expect("reindex queue poisoned").push(id);
+        self.lock().push(id);
     }
 
     /// Number of pending ids.
     pub fn len(&self) -> usize {
-        self.inner.lock().expect("reindex queue poisoned").len()
+        self.lock().len()
     }
 
     /// Whether the queue is empty.
@@ -108,7 +117,7 @@ impl ReindexQueue {
 
     /// Remove and return all pending ids (the worker processes these).
     pub fn drain(&self) -> Vec<NodeId> {
-        std::mem::take(&mut *self.inner.lock().expect("reindex queue poisoned"))
+        std::mem::take(&mut *self.lock())
     }
 }
 

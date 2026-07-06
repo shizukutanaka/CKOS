@@ -59,10 +59,22 @@ pub trait EventBus: Send + Sync {
 }
 
 /// Simple synchronous, in-memory event bus.
+///
+/// The subscriber list is bounded only by caller discipline: subscribers that
+/// never [`unsubscribe`](EventBus::unsubscribe) accumulate for the process
+/// lifetime, so long-lived hosts registering per-request callbacks must
+/// unsubscribe them.
 #[derive(Default, Clone)]
 pub struct InMemoryEventBus {
     inner: Arc<Mutex<Vec<(usize, Subscriber)>>>,
     next_id: Arc<Mutex<usize>>,
+}
+
+/// Take a lock, recovering from poisoning: the subscriber list and id counter
+/// have no partial-update invariants, and a poisoned bus must degrade rather
+/// than turn every later publish into a panic cascade (§894).
+fn lock_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 impl InMemoryEventBus {
@@ -76,7 +88,7 @@ impl EventBus for InMemoryEventBus {
     fn publish(&self, event: Event) {
         // Clone the subscriber list so callbacks can't deadlock by (un)subscribing.
         let subs: Vec<Subscriber> = {
-            let guard = self.inner.lock().expect("event bus poisoned");
+            let guard = lock_recover(&self.inner);
             guard.iter().map(|(_, s)| Arc::clone(s)).collect()
         };
         for sub in subs {
@@ -85,22 +97,16 @@ impl EventBus for InMemoryEventBus {
     }
 
     fn subscribe(&self, subscriber: Subscriber) -> usize {
-        let mut id_guard = self.next_id.lock().expect("event bus poisoned");
+        let mut id_guard = lock_recover(&self.next_id);
         let id = *id_guard;
         *id_guard += 1;
         drop(id_guard);
-        self.inner
-            .lock()
-            .expect("event bus poisoned")
-            .push((id, subscriber));
+        lock_recover(&self.inner).push((id, subscriber));
         id
     }
 
     fn unsubscribe(&self, id: usize) {
-        self.inner
-            .lock()
-            .expect("event bus poisoned")
-            .retain(|(sid, _)| *sid != id);
+        lock_recover(&self.inner).retain(|(sid, _)| *sid != id);
     }
 }
 

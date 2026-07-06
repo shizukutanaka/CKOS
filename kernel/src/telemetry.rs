@@ -7,7 +7,20 @@
 //! seam; the default [`NullProbe`] reports nothing so the core stays dependency
 //! free, and a platform probe plugs in without touching callers.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+/// Take a lock, recovering from poisoning: telemetry state is a plain
+/// append-only Vec with no partial-update invariants, so if another thread
+/// panicked while holding the lock the data inside is still coherent.
+/// Propagating the poison would turn one unrelated panic into a permanent
+/// cascade where every later telemetry call also panics (§904 must degrade,
+/// not amplify).
+fn lock_recover<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Default cap on retained samples; see [`InMemoryTelemetry::with_max_samples`].
+const DEFAULT_MAX_SAMPLES: usize = 10_000;
 
 /// Metrics for a single task execution (§904).
 #[derive(Debug, Clone)]
@@ -65,9 +78,23 @@ pub trait TelemetrySink: Send + Sync {
 }
 
 /// In-memory, thread-safe telemetry aggregator. Cheap to clone (shared store).
-#[derive(Clone, Default)]
+///
+/// Retention is bounded (drop-oldest, default 10 000 samples) so a long-lived
+/// process cannot grow memory without limit; recent samples are also the ones
+/// scheduling decisions should weigh (§913).
+#[derive(Clone)]
 pub struct InMemoryTelemetry {
     samples: Arc<Mutex<Vec<TaskMetrics>>>,
+    max_samples: usize,
+}
+
+impl Default for InMemoryTelemetry {
+    fn default() -> Self {
+        InMemoryTelemetry {
+            samples: Arc::default(),
+            max_samples: DEFAULT_MAX_SAMPLES,
+        }
+    }
 }
 
 impl InMemoryTelemetry {
@@ -76,9 +103,16 @@ impl InMemoryTelemetry {
         Self::default()
     }
 
+    /// Cap retained samples at `max` (minimum 1); when full, the oldest
+    /// sample is dropped to admit the newest.
+    pub fn with_max_samples(mut self, max: usize) -> Self {
+        self.max_samples = max.max(1);
+        self
+    }
+
     /// Number of recorded samples.
     pub fn len(&self) -> usize {
-        self.samples.lock().expect("telemetry poisoned").len()
+        lock_recover(&self.samples).len()
     }
 
     /// Whether nothing has been recorded.
@@ -88,17 +122,12 @@ impl InMemoryTelemetry {
 
     /// Total tokens produced across all samples.
     pub fn total_tokens(&self) -> usize {
-        self.samples
-            .lock()
-            .expect("telemetry poisoned")
-            .iter()
-            .map(|m| m.tokens)
-            .sum()
+        lock_recover(&self.samples).iter().map(|m| m.tokens).sum()
     }
 
     /// Mean latency in milliseconds, or `None` if there are no samples.
     pub fn mean_latency_ms(&self) -> Option<f64> {
-        let g = self.samples.lock().expect("telemetry poisoned");
+        let g = lock_recover(&self.samples);
         if g.is_empty() {
             return None;
         }
@@ -109,7 +138,7 @@ impl InMemoryTelemetry {
     /// Mean latency for a specific runtime, or `None` if it has no samples.
     /// Lets the scheduler bias `runtime_fit` toward faster runtimes (§913).
     pub fn mean_latency_for(&self, runtime: &str) -> Option<f64> {
-        let g = self.samples.lock().expect("telemetry poisoned");
+        let g = lock_recover(&self.samples);
         let matching: Vec<u64> = g
             .iter()
             .filter(|m| m.runtime == runtime)
@@ -123,7 +152,7 @@ impl InMemoryTelemetry {
 
     /// Aggregate tokens-per-second across all samples.
     pub fn mean_tokens_per_sec(&self) -> f64 {
-        let g = self.samples.lock().expect("telemetry poisoned");
+        let g = lock_recover(&self.samples);
         let total_ms: u64 = g.iter().map(|m| m.latency_ms).sum();
         let total_tokens: usize = g.iter().map(|m| m.tokens).sum();
         if total_ms == 0 {
@@ -136,10 +165,12 @@ impl InMemoryTelemetry {
 
 impl TelemetrySink for InMemoryTelemetry {
     fn record(&self, metrics: TaskMetrics) {
-        self.samples
-            .lock()
-            .expect("telemetry poisoned")
-            .push(metrics);
+        let mut g = lock_recover(&self.samples);
+        g.push(metrics);
+        let len = g.len();
+        if len > self.max_samples {
+            g.drain(..len - self.max_samples);
+        }
     }
 }
 
@@ -155,6 +186,21 @@ mod tests {
             tokens: 10,
         };
         assert_eq!(m.tokens_per_sec(), 20.0);
+    }
+
+    #[test]
+    fn retention_is_bounded_drop_oldest() {
+        let t = InMemoryTelemetry::new().with_max_samples(2);
+        for latency in [1, 2, 3] {
+            t.record(TaskMetrics {
+                runtime: "echo".into(),
+                latency_ms: latency,
+                tokens: 1,
+            });
+        }
+        assert_eq!(t.len(), 2, "capped at max_samples");
+        // The oldest sample (1ms) was dropped: mean over the survivors only.
+        assert_eq!(t.mean_latency_ms(), Some(2.5));
     }
 
     #[test]
