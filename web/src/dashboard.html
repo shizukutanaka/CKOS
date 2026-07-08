@@ -481,8 +481,6 @@ function panelGraph() {
   const card = el("div", { class: "card" });
   const text = el("input", { type: "text", placeholder: "text to extract from (used when no session is set)" });
   const out = el("div", {});
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("id", "graph-svg");
   out.append(el("div", { class: "empty", text: "Extract or load a knowledge graph." }));
   const go = el("button", {
     class: "action",
