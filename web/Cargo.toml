@@ -1,5 +1,5 @@
 [package]
-name = "ckos-cli"
+name = "ckos-web"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,15 +9,10 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme.workspace = true
-description = "CKOS command-line interface"
+description = "CKOS API gateway (§902): a std-only HTTP/JSON server and embedded browser dashboard over the SDK"
 
 [lints]
 workspace = true
 
-[[bin]]
-name = "ckos"
-path = "src/main.rs"
-
 [dependencies]
 ckos-sdk.workspace = true
-ckos-web.workspace = true

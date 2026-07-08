@@ -1,0 +1,669 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'">
+<title>CKOS — Cognitive Kernel OS</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f7f7fb;
+    --panel: #ffffff;
+    --border: #e2e2ea;
+    --text: #1b1b23;
+    --muted: #6b6b78;
+    --accent: #4f46e5;
+    --accent-ink: #ffffff;
+    --ok: #15803d;
+    --fail: #b91c1c;
+    --skip: #a16207;
+    --code-bg: #f1f1f7;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f0f14;
+      --panel: #17171f;
+      --border: #2a2a35;
+      --text: #ececf2;
+      --muted: #9b9ba8;
+      --accent: #818cf8;
+      --accent-ink: #0f0f14;
+      --ok: #4ade80;
+      --fail: #f87171;
+      --skip: #fbbf24;
+      --code-bg: #1d1d27;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.45;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.9rem 1.25rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    flex-wrap: wrap;
+  }
+  header h1 {
+    font-size: 1.05rem;
+    margin: 0;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
+  header h1 small { color: var(--muted); font-weight: 500; margin-left: 0.4em; }
+  header input[type=text] {
+    flex: 1;
+    min-width: 180px;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 0.85rem;
+  }
+  header label { font-size: 0.78rem; color: var(--muted); white-space: nowrap; }
+  nav {
+    display: flex;
+    gap: 0.25rem;
+    padding: 0.6rem 1.25rem 0;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+  nav button {
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    padding: 0.55rem 0.9rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    white-space: nowrap;
+  }
+  nav button.active { color: var(--accent); border-bottom-color: var(--accent); }
+  main { max-width: 980px; margin: 0 auto; padding: 1.25rem; }
+  section.tab { display: none; }
+  section.tab.active { display: block; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem 1.1rem;
+    margin-bottom: 1rem;
+  }
+  .card h2 { margin: 0 0 0.75rem; font-size: 0.95rem; }
+  .row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.6rem; }
+  .row label { font-size: 0.8rem; color: var(--muted); display: flex; align-items: center; gap: 0.3rem; }
+  input[type=text], input[type=number], textarea {
+    padding: 0.45rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 0.85rem;
+    font-family: inherit;
+  }
+  input[type=text] { flex: 1; min-width: 200px; }
+  textarea { width: 100%; min-height: 4.5em; resize: vertical; font-family: ui-monospace, monospace; }
+  button.action {
+    background: var(--accent);
+    color: var(--accent-ink);
+    border: none;
+    border-radius: 8px;
+    padding: 0.5rem 1rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.action:disabled { opacity: 0.5; cursor: progress; }
+  .hint { font-size: 0.78rem; color: var(--muted); margin: 0.3rem 0 0; }
+  pre.err { color: var(--fail); background: var(--code-bg); padding: 0.6rem 0.8rem; border-radius: 8px; white-space: pre-wrap; font-size: 0.8rem; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+  th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; }
+  .badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.72rem; font-weight: 700; }
+  .badge.ok { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+  .badge.fail { background: color-mix(in srgb, var(--fail) 18%, transparent); color: var(--fail); }
+  .badge.skip { background: color-mix(in srgb, var(--skip) 18%, transparent); color: var(--skip); }
+  .empty { color: var(--muted); font-size: 0.85rem; padding: 0.5rem 0; }
+  code { background: var(--code-bg); padding: 0.1rem 0.35rem; border-radius: 5px; font-size: 0.85em; }
+  #graph-svg { width: 100%; height: 420px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+  #graph-svg text { fill: var(--text); font-size: 10px; }
+  #graph-svg .edge { stroke: var(--muted); stroke-width: 1; opacity: 0.6; }
+  #graph-svg .node circle { fill: var(--accent); stroke: var(--panel); stroke-width: 1.5; }
+  footer { text-align: center; color: var(--muted); font-size: 0.75rem; padding: 1.5rem 1rem 2rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>CKOS <small>Cognitive Kernel OS</small></h1>
+  <label for="session">session dir</label>
+  <input type="text" id="session" placeholder="(none — try-it mode)" autocomplete="off">
+</header>
+<nav id="tabs"></nav>
+<main id="panels"></main>
+<footer>CKOS §902 API gateway — std-only, offline-first, no external requests.</footer>
+
+<script>
+"use strict";
+
+const $ = (sel, el) => (el || document).querySelector(sel);
+const el = (tag, attrs, ...children) => {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "text") n.textContent = v;
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+    else n.setAttribute(k, v);
+  }
+  for (const c of children) if (c) n.append(c);
+  return n;
+};
+
+function sessionValue() {
+  return $("#session").value.trim();
+}
+$("#session").value = localStorage.getItem("ckos.session") || "";
+$("#session").addEventListener("input", () => {
+  localStorage.setItem("ckos.session", sessionValue());
+});
+
+async function api(method, path, params) {
+  const qs = new URLSearchParams(params || {}).toString();
+  const opts = { method };
+  let url = path;
+  if (method === "GET") {
+    url += qs ? "?" + qs : "";
+  } else {
+    opts.headers = { "Content-Type": "application/x-www-form-urlencoded" };
+    opts.body = qs;
+  }
+  const res = await fetch(url, opts);
+  const body = await res.json().catch(() => ({ error: "invalid response" }));
+  if (!res.ok) throw new Error(body.error || ("HTTP " + res.status));
+  return body;
+}
+
+function showError(container, err) {
+  container.innerHTML = "";
+  container.append(el("pre", { class: "err", text: String(err.message || err) }));
+}
+
+function emptyState(container, text) {
+  container.innerHTML = "";
+  container.append(el("div", { class: "empty", text }));
+}
+
+function verdictBadge(v) {
+  const cls = v === "pass" || v === true ? "ok" : v === "skip" ? "skip" : "fail";
+  const label = v === "pass" || v === true ? "ok" : v === "skip" ? "skip" : "fail";
+  return el("span", { class: "badge " + cls, text: label });
+}
+
+// ---------------------------------------------------------------------------
+// Tabs
+// ---------------------------------------------------------------------------
+
+const TABS = [
+  { id: "run", label: "Run" },
+  { id: "search", label: "Search" },
+  { id: "history", label: "History" },
+  { id: "kql", label: "KQL" },
+  { id: "graph", label: "Graph" },
+  { id: "verify", label: "Verify" },
+  { id: "system", label: "System" },
+];
+
+const tabsNav = $("#tabs");
+const panels = $("#panels");
+for (const t of TABS) {
+  const btn = el("button", {
+    text: t.label,
+    onclick: () => selectTab(t.id),
+  });
+  btn.dataset.tab = t.id;
+  tabsNav.append(btn);
+  panels.append(buildPanel(t.id));
+}
+
+function selectTab(id) {
+  for (const b of tabsNav.children) b.classList.toggle("active", b.dataset.tab === id);
+  for (const s of panels.children) s.classList.toggle("active", s.id === "tab-" + id);
+  location.hash = id;
+}
+
+function buildPanel(id) {
+  const section = el("section", { class: "tab", id: "tab-" + id });
+  section.append(BUILDERS[id]());
+  return section;
+}
+
+// ---------------------------------------------------------------------------
+// Run
+// ---------------------------------------------------------------------------
+
+function panelRun() {
+  const card = el("div", { class: "card" });
+  const intent = el("input", { type: "text", placeholder: "e.g. research the Transformer paper" });
+  const out = el("div", { class: "empty", text: "Plan and execute an intent end-to-end." });
+  const go = el("button", {
+    class: "action",
+    text: "Run",
+    onclick: async () => {
+      if (!intent.value.trim()) return;
+      go.disabled = true;
+      emptyState(out, "Running…");
+      try {
+        const data = await api("POST", "/api/run", { intent: intent.value.trim(), session: sessionValue() });
+        renderRun(out, data);
+      } catch (e) {
+        showError(out, e);
+      } finally {
+        go.disabled = false;
+      }
+    },
+  });
+  card.append(
+    el("h2", { text: "Plan + execute a workflow" }),
+    el("div", { class: "row" }, intent, go),
+    el("p", { class: "hint", text: "Without a session dir, results are not persisted (try-it mode)." }),
+  );
+  return el("div", {}, card, out);
+}
+
+function renderRun(out, data) {
+  out.innerHTML = "";
+  if (data.warnings && data.warnings.length) {
+    for (const w of data.warnings) out.append(el("pre", { class: "err", text: w }));
+  }
+  const table = el("table");
+  table.append(
+    el("thead", {}, el("tr", {}, el("th", { text: "capability" }), el("th", { text: "agent/runtime" }), el("th", { text: "output" }), el("th", { text: "state" }))),
+  );
+  const body = el("tbody");
+  for (const r of data.results) {
+    body.append(
+      el("tr", {},
+        el("td", { text: r.capability }),
+        el("td", { text: (r.agent || "—") + " / " + r.runtime }),
+        el("td", { text: r.output }),
+        el("td", {}, verdictBadge(r.verified), document.createTextNode(" " + r.state)),
+      ),
+    );
+  }
+  table.append(body);
+  out.append(
+    el("p", { class: "hint", text: `${data.results.length} step(s) · ${data.audit_records} audit record(s), ${data.audit_errors} error(s) · ${data.total_tokens} token(s)` }),
+    table,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Search
+// ---------------------------------------------------------------------------
+
+function panelSearch() {
+  const card = el("div", { class: "card" });
+  const q = el("input", { type: "text", placeholder: "query" });
+  const synonyms = el("input", { type: "checkbox", id: "s-syn" });
+  const expand = el("input", { type: "checkbox", id: "s-exp" });
+  const diverse = el("input", { type: "checkbox", id: "s-div" });
+  const out = el("div", { class: "empty", text: "Hybrid BM25 + vector + graph search over a session." });
+  const go = el("button", {
+    class: "action",
+    text: "Search",
+    onclick: async () => {
+      if (!sessionValue()) return showError(out, new Error("set a session dir first"));
+      if (!q.value.trim()) return;
+      go.disabled = true;
+      emptyState(out, "Searching…");
+      try {
+        const data = await api("GET", "/api/search", {
+          session: sessionValue(),
+          q: q.value.trim(),
+          synonyms: synonyms.checked ? "1" : "",
+          expand: expand.checked ? "1" : "",
+          diverse: diverse.checked ? "1" : "",
+        });
+        renderSearch(out, data);
+      } catch (e) {
+        showError(out, e);
+      } finally {
+        go.disabled = false;
+      }
+    },
+  });
+  card.append(
+    el("h2", { text: "Search a session" }),
+    el("div", { class: "row" }, q, go),
+    el("div", { class: "row" },
+      el("label", {}, synonyms, document.createTextNode(" synonyms")),
+      el("label", {}, expand, document.createTextNode(" expand (PRF)")),
+      el("label", {}, diverse, document.createTextNode(" diverse (MMR)")),
+    ),
+  );
+  return el("div", {}, card, out);
+}
+
+function renderSearch(out, data) {
+  out.innerHTML = "";
+  if (data.skipped) out.append(el("pre", { class: "err", text: `${data.skipped} unreadable document(s) skipped` }));
+  if (!data.hits.length) return emptyState(out, "No hits.");
+  const table = el("table");
+  table.append(el("thead", {}, el("tr", {}, el("th", { text: "title" }), el("th", { text: "snippet" }), el("th", { text: "score" }), el("th", { text: "source" }))));
+  const body = el("tbody");
+  for (const h of data.hits) {
+    body.append(el("tr", {}, el("td", { text: h.title }), el("td", { text: h.snippet }), el("td", { text: h.score.toFixed(3) }), el("td", { text: h.source })));
+  }
+  table.append(body);
+  out.append(table);
+}
+
+// ---------------------------------------------------------------------------
+// History
+// ---------------------------------------------------------------------------
+
+function panelHistory() {
+  const card = el("div", { class: "card" });
+  const q = el("input", { type: "text", placeholder: "(optional) query — leave blank for raw history" });
+  const k = el("input", { type: "number", value: "5", min: "1", style: "width:5em" });
+  const out = el("div", { class: "empty", text: "Show a session's history, or recall by relevance." });
+  const go = el("button", {
+    class: "action",
+    text: "Load",
+    onclick: async () => {
+      if (!sessionValue()) return showError(out, new Error("set a session dir first"));
+      go.disabled = true;
+      emptyState(out, "Loading…");
+      try {
+        const data = await api("GET", "/api/history", { session: sessionValue(), q: q.value.trim(), k: k.value });
+        renderHistory(out, data);
+      } catch (e) {
+        showError(out, e);
+      } finally {
+        go.disabled = false;
+      }
+    },
+  });
+  card.append(
+    el("h2", { text: "History / recall" }),
+    el("div", { class: "row" }, q, el("label", {}, "k", k), go),
+  );
+  return el("div", {}, card, out);
+}
+
+function renderHistory(out, data) {
+  out.innerHTML = "";
+  if (data.skipped) out.append(el("pre", { class: "err", text: `${data.skipped} unreadable document(s) skipped` }));
+  if (!data.items.length) return emptyState(out, data.recalled ? "No records recalled." : "No execution history.");
+  const table = el("table");
+  table.append(el("thead", {}, el("tr", {}, el("th", { text: "title" }), el("th", { text: "body" }), el("th", { text: "confidence" }))));
+  const body = el("tbody");
+  for (const d of data.items) {
+    body.append(el("tr", {}, el("td", {}, verdictBadge(d.verified), document.createTextNode(" " + d.title)), el("td", { text: d.body }), el("td", { text: d.confidence })));
+  }
+  table.append(body);
+  out.append(table);
+}
+
+// ---------------------------------------------------------------------------
+// KQL
+// ---------------------------------------------------------------------------
+
+function panelKql() {
+  const card = el("div", { class: "card" });
+  const q = el("textarea", { placeholder: 'FIND Concept "Transformer"\nRELATED Algorithm VIA References' });
+  q.value = 'FIND Concept "Transformer"\nRELATED Algorithm';
+  const out = el("div", { class: "empty", text: "Query the demo graph, or a session's persisted graph." });
+  const go = el("button", {
+    class: "action",
+    text: "Run query",
+    onclick: async () => {
+      go.disabled = true;
+      emptyState(out, "Querying…");
+      try {
+        const data = await api("POST", "/api/kql", { query: q.value, session: sessionValue() });
+        renderKql(out, data);
+      } catch (e) {
+        showError(out, e);
+      } finally {
+        go.disabled = false;
+      }
+    },
+  });
+  card.append(
+    el("h2", { text: "Knowledge Query Language (§962)" }),
+    q,
+    el("div", { class: "row", style: "margin-top:0.6rem" }, go),
+    el("p", { class: "hint", text: "No session set → queries a small built-in demo graph." }),
+  );
+  return el("div", {}, card, out);
+}
+
+function nodeMatchTable(title, items) {
+  const wrap = el("div", {});
+  wrap.append(el("h2", { text: title + " (" + items.length + ")", style: "font-size:0.85rem;margin-top:1rem" }));
+  if (!items.length) {
+    wrap.append(el("div", { class: "empty", text: "none" }));
+    return wrap;
+  }
+  const table = el("table");
+  table.append(el("thead", {}, el("tr", {}, el("th", { text: "label" }), el("th", { text: "kind" }), el("th", { text: "confidence" }), el("th", { text: "date" }), el("th", { text: "source" }))));
+  const body = el("tbody");
+  for (const m of items) {
+    body.append(el("tr", {}, el("td", { text: m.label }), el("td", { text: m.kind }), el("td", { text: m.confidence }), el("td", { text: m.date || "—" }), el("td", { text: m.provenance || "—" })));
+  }
+  table.append(body);
+  wrap.append(table);
+  return wrap;
+}
+
+function renderKql(out, data) {
+  out.innerHTML = "";
+  out.append(nodeMatchTable("primary", data.primary), nodeMatchTable("related", data.related));
+}
+
+// ---------------------------------------------------------------------------
+// Graph
+// ---------------------------------------------------------------------------
+
+function panelGraph() {
+  const card = el("div", { class: "card" });
+  const text = el("input", { type: "text", placeholder: "text to extract from (used when no session is set)" });
+  const out = el("div", {});
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("id", "graph-svg");
+  out.append(el("div", { class: "empty", text: "Extract or load a knowledge graph." }));
+  const go = el("button", {
+    class: "action",
+    text: "Load graph",
+    onclick: async () => {
+      go.disabled = true;
+      out.innerHTML = "";
+      emptyState(out, "Loading…");
+      try {
+        const params = sessionValue() ? { session: sessionValue() } : { text: text.value.trim() };
+        if (!sessionValue() && !text.value.trim()) throw new Error("set a session dir, or enter text to extract from");
+        const data = await api("GET", "/api/graph", params);
+        renderGraph(out, data);
+      } catch (e) {
+        showError(out, e);
+      } finally {
+        go.disabled = false;
+      }
+    },
+  });
+  card.append(
+    el("h2", { text: "Knowledge graph" }),
+    el("div", { class: "row" }, text, go),
+  );
+  return el("div", {}, card, out);
+}
+
+function renderGraph(out, data) {
+  out.innerHTML = "";
+  if (!data.nodes.length) return emptyState(out, "Empty graph.");
+  const W = out.clientWidth || 900, H = 420;
+  const nodes = data.nodes.map((n, i) => ({ ...n, x: W / 2 + 80 * Math.cos((2 * Math.PI * i) / data.nodes.length), y: H / 2 + 80 * Math.sin((2 * Math.PI * i) / data.nodes.length) }));
+  const byId = Object.fromEntries(nodes.map((n) => [n.id, n]));
+  const edges = data.edges.filter((e) => byId[e.from] && byId[e.to]);
+
+  // Minimal force-directed layout: repel all pairs, spring along edges,
+  // pull toward center — a handful of iterations is enough for demo-sized
+  // graphs and keeps this dependency-free (no layout library).
+  for (let iter = 0; iter < 200; iter++) {
+    for (const a of nodes) {
+      let fx = (W / 2 - a.x) * 0.002, fy = (H / 2 - a.y) * 0.002;
+      for (const b of nodes) {
+        if (a === b) continue;
+        const dx = a.x - b.x, dy = a.y - b.y;
+        const d2 = Math.max(dx * dx + dy * dy, 1);
+        const f = 900 / d2;
+        fx += (dx / Math.sqrt(d2)) * f;
+        fy += (dy / Math.sqrt(d2)) * f;
+      }
+      a.fx = fx; a.fy = fy;
+    }
+    for (const e of edges) {
+      const a = byId[e.from], b = byId[e.to];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const stretch = (d - 90) * 0.01;
+      a.fx += (dx / d) * stretch; a.fy += (dy / d) * stretch;
+      b.fx -= (dx / d) * stretch; b.fy -= (dy / d) * stretch;
+    }
+    for (const n of nodes) {
+      n.x = Math.min(W - 20, Math.max(20, n.x + n.fx));
+      n.y = Math.min(H - 20, Math.max(20, n.y + n.fy));
+    }
+  }
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("id", "graph-svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  for (const e of edges) {
+    const a = byId[e.from], b = byId[e.to];
+    const line = document.createElementNS(svg.namespaceURI, "line");
+    line.setAttribute("class", "edge");
+    line.setAttribute("x1", a.x); line.setAttribute("y1", a.y);
+    line.setAttribute("x2", b.x); line.setAttribute("y2", b.y);
+    svg.append(line);
+    const mid = document.createElementNS(svg.namespaceURI, "text");
+    mid.setAttribute("x", (a.x + b.x) / 2);
+    mid.setAttribute("y", (a.y + b.y) / 2);
+    mid.setAttribute("opacity", "0.6");
+    mid.textContent = e.kind;
+    svg.append(mid);
+  }
+  for (const n of nodes) {
+    const g = document.createElementNS(svg.namespaceURI, "g");
+    g.setAttribute("class", "node");
+    const r = 5 + Math.min(10, n.confidence / 12);
+    const c = document.createElementNS(svg.namespaceURI, "circle");
+    c.setAttribute("cx", n.x); c.setAttribute("cy", n.y); c.setAttribute("r", r);
+    const t = document.createElementNS(svg.namespaceURI, "text");
+    t.setAttribute("x", n.x + r + 3); t.setAttribute("y", n.y + 3);
+    t.textContent = n.label;
+    const title = document.createElementNS(svg.namespaceURI, "title");
+    title.textContent = `${n.label} [${n.kind}] confidence=${n.confidence}`;
+    g.append(c, t, title);
+    svg.append(g);
+  }
+  out.append(el("p", { class: "hint", text: `${nodes.length} node(s), ${edges.length} edge(s)` }), svg);
+}
+
+// ---------------------------------------------------------------------------
+// Verify
+// ---------------------------------------------------------------------------
+
+function panelVerify() {
+  const card = el("div", { class: "card" });
+  const text = el("textarea", { placeholder: "text to run the §899 verifier checks on" });
+  const out = el("div", { class: "empty", text: "Run the independent quality/safety checks." });
+  const go = el("button", {
+    class: "action",
+    text: "Verify",
+    onclick: async () => {
+      if (!text.value.trim()) return;
+      go.disabled = true;
+      emptyState(out, "Checking…");
+      try {
+        const data = await api("GET", "/api/verify", { text: text.value });
+        renderVerify(out, data);
+      } catch (e) {
+        showError(out, e);
+      } finally {
+        go.disabled = false;
+      }
+    },
+  });
+  card.append(el("h2", { text: "Verifier (§899)" }), text, el("div", { class: "row", style: "margin-top:0.6rem" }, go));
+  return el("div", {}, card, out);
+}
+
+function renderVerify(out, data) {
+  out.innerHTML = "";
+  const table = el("table");
+  table.append(el("thead", {}, el("tr", {}, el("th", { text: "check" }), el("th", { text: "status" }), el("th", { text: "reason" }))));
+  const body = el("tbody");
+  for (const c of data.checks) {
+    body.append(el("tr", {}, el("td", { text: c.name }), el("td", {}, verdictBadge(c.status)), el("td", { text: c.reason || "—" })));
+  }
+  table.append(body);
+  out.append(el("p", { class: "hint", text: data.passed ? "All checks passed." : "One or more checks failed." }), table);
+}
+
+// ---------------------------------------------------------------------------
+// System
+// ---------------------------------------------------------------------------
+
+function panelSystem() {
+  const capOut = el("div", { class: "empty", text: "Loading…" });
+  const rtOut = el("div", { class: "empty", text: "Loading…" });
+  (async () => {
+    try {
+      const caps = await api("GET", "/api/capabilities", {});
+      capOut.innerHTML = "";
+      capOut.append(el("div", {}, ...caps.capabilities.map((c) => el("code", { text: c, style: "margin:0 0.3em 0.3em 0;display:inline-block" }))));
+    } catch (e) { showError(capOut, e); }
+    try {
+      const rts = await api("GET", "/api/runtimes", {});
+      rtOut.innerHTML = "";
+      const table = el("table");
+      table.append(el("thead", {}, el("tr", {}, el("th", { text: "name" }), el("th", { text: "kind" }), el("th", { text: "capabilities" }))));
+      const body = el("tbody");
+      for (const r of rts.runtimes) body.append(el("tr", {}, el("td", { text: r.name }), el("td", { text: r.kind }), el("td", { text: r.capabilities.join(", ") })));
+      table.append(body);
+      rtOut.append(table);
+    } catch (e) { showError(rtOut, e); }
+  })();
+  return el("div", {},
+    el("div", { class: "card" }, el("h2", { text: "Capability vocabulary (§911)" }), capOut),
+    el("div", { class: "card" }, el("h2", { text: "Runtime registry (§900)" }), rtOut),
+  );
+}
+
+const BUILDERS = {
+  run: panelRun,
+  search: panelSearch,
+  history: panelHistory,
+  kql: panelKql,
+  graph: panelGraph,
+  verify: panelVerify,
+  system: panelSystem,
+};
+
+selectTab(TABS.some((t) => t.id === location.hash.slice(1)) ? location.hash.slice(1) : "run");
+</script>
+</body>
+</html>

@@ -109,6 +109,8 @@ COMMANDS:
     capabilities                     List the built-in capability vocabulary
     runtimes                         List the runtime registry table (§900):
                                      backends, locality, capabilities served
+    serve [--host H] [--port N]      Start the §902 API gateway + browser
+                                     dashboard (default 127.0.0.1:8080)
     version                          Print the CKOS version
     help                             Show this help
 ";
@@ -147,6 +149,7 @@ fn main() -> ExitCode {
         Some("tool") => cmd_tool(&args[1..]),
         Some("capabilities") => cmd_capabilities(),
         Some("runtimes") => cmd_runtimes(),
+        Some("serve") => cmd_serve(&args[1..]),
         Some("version") => {
             println!("ckos {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
@@ -1293,4 +1296,44 @@ fn cmd_runtimes() -> ExitCode {
         );
     }
     ExitCode::SUCCESS
+}
+
+fn cmd_serve(rest: &[String]) -> ExitCode {
+    if wants_help(rest) {
+        println!("usage: ckos serve [--host <addr>] [--port <port>]\n  Start the §902 API gateway: a std-only HTTP/JSON server plus an embedded\n  browser dashboard (Run/Search/History/KQL/Graph/Verify/System) over the\n  SDK. Binds to 127.0.0.1 by default — least privilege by default, per the\n  workspace's design principles; pass --host 0.0.0.0 to accept non-local\n  connections (do this only behind a trusted network or reverse proxy: there\n  is no TLS and no authentication in front of the dashboard itself).");
+        return ExitCode::SUCCESS;
+    }
+    let (host, rest) = match take_value_flag(rest, "--host") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let (port, _rest) = match take_value_flag(&rest, "--port") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let host = host.unwrap_or_else(|| "127.0.0.1".to_string());
+    let port: u16 = match port.as_deref().unwrap_or("8080").parse() {
+        Ok(p) => p,
+        Err(_) => {
+            eprintln!("error: --port needs a number 0..=65535");
+            return ExitCode::FAILURE;
+        }
+    };
+    let addr = format!("{host}:{port}");
+    let listener = match ckos_web::bind(&addr) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("error: could not bind {addr}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let bound = listener.local_addr().map(|a| a.to_string()).unwrap_or(addr);
+    println!("ckos serve: listening on http://{bound}  (Ctrl+C to stop)");
+    ckos_web::serve(listener);
 }

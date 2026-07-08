@@ -96,7 +96,12 @@ over the full surface.
   smoke tests on every push/PR, with `-D warnings`. Copy it to
   `.github/workflows/ci.yml` to activate (the branch automation can't push
   workflow files itself). Cross-platform/mobile build matrix is the next step.
-- **API gateway** (REST/gRPC/WebSocket/MCP) over the common Task API — §902.
+- ✅ **API gateway, HTTP/JSON leg** (`web`, §902) — `ckos serve`: a `std`-only
+  REST-style server (no `serde`/`tokio`/framework dependency) over the same
+  `Engine`/`Session`/`Retriever`/KQL surface the CLI uses, plus an embedded
+  browser dashboard (see README's "Web dashboard" section). Local-only by
+  default (binds `127.0.0.1`), no TLS/auth — a reverse proxy adds those for
+  non-local use. gRPC/WebSocket/MCP legs are the next step.
 
 ## v2.8 — Developer platform & ecosystem
 
@@ -107,6 +112,8 @@ The center of gravity shifts from "OS" to "platform developers actually use":
 - **No-code / low-code** authoring.
 - **Workflow Studio** — visual DAG authoring.
 - **Agent Studio** — author, test and publish agents.
-- **Graph Explorer** and **Runtime Monitor** GUIs.
+- **Graph Explorer** and **Runtime Monitor** GUIs — a first, functional cut
+  (graph SVG view, runtime registry table) shipped early as part of the
+  `ckos serve` dashboard (§902); a dedicated standalone app is still ahead.
 
 The aim: third parties can build AI applications on CKOS easily.

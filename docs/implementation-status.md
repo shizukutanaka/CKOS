@@ -13,7 +13,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | § | Topic | Status | Where |
 |---|-------|--------|-------|
 | 889 | System overview | ✅ | `README.md`, `docs/architecture.md` |
-| 890 | Rust workspace | ✅ | `Cargo.toml` (12 crates) |
+| 890 | Rust workspace | ✅ | `Cargo.toml` (13 crates) |
 | 891 | Kernel responsibilities (no inference) | ✅ | `kernel` |
 | 892 | Four-layer scheduler | ✅ | `scheduler::Scheduler` (multi-factor score + priority aging; note aging only matters under continuous arrivals — `run_workflow` drains a batch, where retries are the only mid-loop arrivals) |
 | 893 | Task state machine | ✅ | `kernel::task::TaskState`, driven live by `Engine::execute`; the recovery loop (`Failed → Rollback → Retry → Queued`, bounded by `MAX_TASK_RETRIES`) is driven by `Engine::run_workflow`. `Planning` remains a declared-but-unentered state (execute goes `Queued → Running` directly) |
@@ -25,7 +25,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 899 | Verifier (independent) | ✅ | `verifier` (non-empty, repetition/degeneration, arithmetic, JSON, citation, security-policy) |
 | 900 | Runtime registry | ✅ | `runtime` (trait + registry; the `list`/`RuntimeInfo` table is surfaced by `ckos runtimes`; real engines ⏳) |
 | 901 | Plugin SDK | 🟡 | `plugins` (tool/registry/permissions, `ckos tool`; WASM sandbox ⏳) |
-| 902 | API gateway | 🟡 | `cli` done; REST/gRPC/WebSocket/MCP ⏳ |
+| 902 | API gateway | 🟡 | `cli` (done) + `web` (`ckos serve`: `std`-only HTTP/JSON REST-style API + embedded browser dashboard, no TLS/auth — see README); gRPC/WebSocket/MCP ⏳ |
 | 903 | Audit logging | ✅ | `kernel::audit` — task execution (`Engine::execute`, incl. policy denials) and tool runs (`ckos tool`, allowed *and* denied, trail printed on exit). `.plugin()` field still has no producer |
 | 904 | Telemetry | ✅ | `kernel::telemetry` — latency feeds scheduling via `run_workflow`'s telemetry-scored submission (§913). Hardware `ResourceProbe` is a seam with no consumer yet; real probe ⏳ |
 | 905 | CI/CD | 🟡 | `docs/ci-workflow.yml` (fmt → clippy `-D warnings` → build → test → CLI smoke) — complete and ready, but the automation lacks the `workflows` permission to push `.github/workflows/` (verified: the push was rejected), so a maintainer must copy it to `.github/workflows/ci.yml` once |

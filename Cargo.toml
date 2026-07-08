@@ -16,6 +16,7 @@ members = [
     "workflow",
     "plugins",
     "sdk",
+    "web",
     "cli",
 ]
 
@@ -51,6 +52,7 @@ ckos-policy = { path = "policy" }
 ckos-workflow = { path = "workflow" }
 ckos-plugins = { path = "plugins" }
 ckos-sdk = { path = "sdk" }
+ckos-web = { path = "web" }
 
 [profile.release]
 opt-level = 3

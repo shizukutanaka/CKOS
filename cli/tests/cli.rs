@@ -381,7 +381,9 @@ fn flags_work_in_any_position() {
 
 #[test]
 fn per_command_help_is_shown() {
-    for cmd in ["plan", "run", "graph", "kql", "search", "eval", "tool"] {
+    for cmd in [
+        "plan", "run", "graph", "kql", "search", "eval", "tool", "serve",
+    ] {
         let out = ckos(&[cmd, "--help"]);
         assert!(out.status.success(), "{cmd} --help should succeed");
         assert!(
@@ -582,4 +584,51 @@ fn closed_output_pipe_never_panics() {
             "expected exit 0 or 141, got {code:?}"
         );
     }
+}
+
+#[test]
+fn serve_binds_and_answers_a_real_http_request() {
+    // End-to-end: spawn `ckos serve --port 0` (OS-assigned free port), parse
+    // the bound address it prints, then make a real HTTP request over
+    // TcpStream and assert on the response — proving the §902 gateway
+    // actually accepts connections and serves the dashboard.
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpStream;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ckos"))
+        .args(["serve", "--port", "0"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn ckos serve");
+
+    let stdout = child.stdout.take().expect("child stdout");
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("read listening line");
+    assert!(
+        line.contains("listening on http://"),
+        "expected a listening banner, got: {line}"
+    );
+    let addr = line
+        .split("http://")
+        .nth(1)
+        .and_then(|s| s.split_whitespace().next())
+        .expect("parse bound address")
+        .to_string();
+
+    let mut stream = TcpStream::connect(&addr).expect("connect to ckos serve");
+    stream
+        .write_all(b"GET /api/capabilities HTTP/1.1\r\nHost: x\r\n\r\n")
+        .expect("write request");
+    let mut resp = String::new();
+    stream.read_to_string(&mut resp).expect("read response");
+
+    child.kill().ok();
+    child.wait().ok();
+
+    assert!(resp.starts_with("HTTP/1.1 200 OK"), "got: {resp}");
+    assert!(resp.contains("\"capabilities\":["));
+    assert!(resp.contains("planning"));
 }

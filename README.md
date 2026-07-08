@@ -40,7 +40,8 @@ crates mirror the module layout in §890 of the spec.
 | `workflow`      | §895 | DAG engine with cycle detection and topological scheduling |
 | `plugins`       | §901, §917–§919 | Tool abstraction, tool registry, permission gate |
 | `sdk`           | §907–§910, §921–§922, §927 | Agent manifests, lifecycle, capability registry, execution engine, reflection, sessions, prelude |
-| `cli`           | §902 | `ckos` command-line interface |
+| `web`           | §902 | `std`-only HTTP/JSON API gateway + embedded browser dashboard (`ckos serve`) |
+| `cli`           | §902, §906 | `ckos` command-line interface |
 
 ## Build & test
 
@@ -70,6 +71,7 @@ appear in any position, and `ckos <command> --help` prints per-command usage.
 | `capabilities` | List the built-in capability vocabulary | `ckos capabilities` |
 | `runtimes` | List the runtime registry table (§900): registered backends, execution locality, and the capabilities each serves | `ckos runtimes` |
 | `workflow [--role <role> \| --token <token>] <file>` | Load and execute a workflow definition file; `--token` authenticates via a demo identity provider (§928: `tok-admin-hq`, `tok-admin-restricted`, `tok-guest`), carrying real ABAC attributes | `ckos workflow pipeline.wf` |
+| `serve [--host <addr>] [--port <port>]` | Start the §902 API gateway: a `std`-only HTTP/JSON server plus an embedded single-page dashboard (Run/Search/History/KQL/Graph/Verify/System) over the SDK. Binds to `127.0.0.1` by default | `ckos serve --port 8080` |
 | `version` | Print the CKOS version | `ckos version` |
 
 ### A typical session flow
@@ -108,6 +110,27 @@ ORDER BY Confidence DESC            # ranking (ASC/DESC)
 LIMIT 10                            # cap results
 RETURN Graph + Sources             # shape output (Documents/Graph/Sources)
 ```
+
+### Web dashboard (§902 API gateway)
+
+```sh
+ckos serve --port 8080     # then open http://127.0.0.1:8080
+```
+
+A `std`-only HTTP/JSON server (`web/`, no `tokio`/`axum`/`serde`) fronted by a
+single self-contained HTML page embedded in the binary — no build step, no
+CDN, works fully offline. Panels: Run, Search, History, KQL, Graph (with an
+in-browser force-directed SVG layout), Verify, and System (capabilities +
+runtime registry). Every panel works against a `session` directory you type
+into the header, or in zero-setup "try it" mode against transient state.
+
+**Scope**: a local, single-operator control surface, not an internet-facing
+service — it binds to `127.0.0.1` by default (least privilege by default,
+matching the principles below), has no TLS, and no authentication in front of
+the dashboard itself. Route it through a reverse proxy for anything beyond a
+trusted local/LAN use. Destructive maintenance (`gc`) is deliberately
+CLI-only — a one-click web button for a destructive action needs a
+confirmation flow this gateway doesn't have yet.
 
 ## Design principles
 

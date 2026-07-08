@@ -5,6 +5,35 @@ All notable changes to CKOS are documented here. The format follows
 spec generations (v2.5 core kernel → v2.6 agent mesh → v2.7 knowledge
 platform).
 
+## [Unreleased] — v2.8 groundwork
+
+### Added
+
+- **`web` crate + `ckos serve`** (§902 API gateway, front-loaded from the v2.8
+  roadmap): a `std`-only HTTP/JSON server (own request parser, response
+  writer and `Json` value type — no `tokio`/`axum`/`serde`) exposing
+  `/api/{capabilities,runtimes,plan,run,history,search,kql,graph,verify}`
+  over the same `Engine`/`Session`/`Retriever`/KQL surface the CLI uses.
+  Binds to `127.0.0.1` by default (least privilege by default); every
+  destructive operation (`gc`) stays CLI-only.
+- **Embedded browser dashboard**: a single self-contained HTML/CSS/JS page
+  (no build step, no CDN, `include_str!`-embedded in the binary) with panels
+  for Run, Search, History, KQL, Graph (an in-browser force-directed SVG
+  layout — the v2.8 "Graph Explorer" groundwork), Verify and System (the
+  v2.8 "Runtime Monitor" groundwork). Every panel works in zero-setup
+  "try it" mode or against a named session directory.
+- 14 new tests in `web` (JSON escaping/rendering, percent-decoding, and
+  in-process HTTP round-trips for every route) plus a CLI end-to-end test
+  that spawns `ckos serve --port 0` and makes a real `TcpStream` request
+  against the OS-assigned port.
+
+231 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+`-D warnings` all clean. Manually verified end-to-end with `curl` against
+every route, including a full `run` → `history` → `search` → `graph` cycle
+against a real session directory (atomic-write and corrupt-file hardening
+from 2.7.0 apply automatically, since the web handlers call the same
+`FileStore`/`GraphStore`).
+
 ## [2.7.0]
 
 ### Fixed
