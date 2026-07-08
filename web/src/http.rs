@@ -147,7 +147,15 @@ pub fn parse(stream: &mut TcpStream) -> io::Result<Option<Request>> {
         }
     }
 
-    let content_length = content_length.min(budget);
+    // A declared Content-Length beyond the remaining budget is rejected
+    // outright, never silently truncated: reading only the first `budget`
+    // bytes of a larger body and parsing that as if it were the whole,
+    // legitimate request would corrupt form data without any error — the
+    // same "silent truncation is worse than a clear rejection" rule applied
+    // to persisted embeddings and header fields elsewhere in this workspace.
+    if content_length > budget {
+        return Err(io::Error::other("request too large"));
+    }
     let mut body = vec![0u8; content_length];
     reader.read_exact(&mut body)?;
 
@@ -249,6 +257,12 @@ pub fn handle_connection(mut stream: TcpStream, handler: &(dyn Fn(&Request) -> R
     let request = match parse(&mut stream) {
         Ok(Some(r)) => r,
         Ok(None) => return,
+        Err(e) if e.to_string().contains("too large") => {
+            let _ =
+                Response::json_status(413, Json::object([("error", "request too large".into())]))
+                    .write_to(&mut stream);
+            return;
+        }
         Err(_) => {
             let _ = Response::bad_request("malformed request").write_to(&mut stream);
             return;
@@ -280,5 +294,41 @@ mod tests {
         let m = parse_form("intent=research+X&session=%2Ftmp%2Fs");
         assert_eq!(m.get("intent").map(String::as_str), Some("research X"));
         assert_eq!(m.get("session").map(String::as_str), Some("/tmp/s"));
+    }
+
+    #[test]
+    fn oversized_content_length_is_rejected_not_silently_truncated() {
+        // Regression: a declared Content-Length beyond MAX_REQUEST_BYTES used
+        // to be silently clamped (`content_length.min(budget)`), so the
+        // server would read only the first ~1 MiB of a larger body and parse
+        // that truncated, corrupted fragment as if it were the whole request
+        // — never erroring. It must now be rejected outright (413) before
+        // any body bytes are read.
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            handle_connection(stream, &|_req| Response::json(Json::Bool(true)));
+        });
+
+        let mut stream = TcpStream::connect(addr).unwrap();
+        let oversized = MAX_REQUEST_BYTES + 1;
+        // Send only the headers claiming a huge body — never the body itself.
+        // A correct implementation rejects before attempting to read it, so
+        // the test doesn't need to actually transfer megabytes of data.
+        write!(
+            stream,
+            "POST /api/run HTTP/1.1\r\nHost: x\r\nContent-Length: {oversized}\r\n\r\n"
+        )
+        .unwrap();
+
+        let mut resp = String::new();
+        stream.read_to_string(&mut resp).unwrap();
+        assert!(resp.starts_with("HTTP/1.1 413"), "got: {resp}");
+        assert!(
+            !resp.contains("\"error\":null"),
+            "must carry a real error body"
+        );
     }
 }
