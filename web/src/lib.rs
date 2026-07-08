@@ -19,9 +19,23 @@ pub mod http;
 pub mod json;
 mod routes;
 
-use std::io;
+use json::Json;
+use std::io::{self, Read};
 use std::net::{TcpListener, ToSocketAddrs};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
+
+/// Hard cap on connections handled concurrently. Without one, a connection
+/// flood (a retry storm, a port scanner, even an eager browser) would spawn
+/// an unbounded number of OS threads — the same "bounded input" discipline
+/// already applied to request size ([`http`]) and in-memory retention
+/// (`InMemoryAuditLog`/`InMemoryTelemetry` in `ckos_kernel`) extends to
+/// concurrency here. A connection beyond the cap gets an immediate
+/// `503 Service Unavailable` rather than an unbounded thread spawn or a
+/// silent drop.
+const MAX_CONCURRENT_CONNECTIONS: usize = 64;
 
 /// Bind a listener at `addr` (e.g. `"127.0.0.1:8080"`, or port `0` to let the
 /// OS pick a free port). Split from [`serve`] so callers — including tests —
@@ -32,15 +46,45 @@ pub fn bind(addr: impl ToSocketAddrs) -> io::Result<TcpListener> {
 }
 
 /// Accept connections on `listener` forever, dispatching each to the
-/// dashboard/API routes (§902) on its own thread. Never returns under normal
+/// dashboard/API routes (§902) on its own thread, up to
+/// `MAX_CONCURRENT_CONNECTIONS` at a time. Never returns under normal
 /// operation; an individual connection's I/O error or a route handler panic
 /// is contained to that connection (see [`http::handle_connection`]) and
 /// does not stop the server.
 pub fn serve(listener: TcpListener) -> ! {
+    serve_bounded(listener, MAX_CONCURRENT_CONNECTIONS)
+}
+
+/// [`serve`], with the concurrency cap as a parameter — split out so tests
+/// can exercise the cap deterministically at a small size instead of opening
+/// 64 real connections.
+fn serve_bounded(listener: TcpListener, max_concurrent: usize) -> ! {
+    let active = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {
-        let Ok(stream) = stream else { continue };
+        let Ok(mut stream) = stream else { continue };
+        if active.load(Ordering::Acquire) >= max_concurrent {
+            let _ = http::Response::json_status(
+                503,
+                Json::object([("error", "server busy, try again".into())]),
+            )
+            .write_to(&mut stream);
+            // A well-behaved client (or an eager browser) may have already
+            // written its request before we could respond. If we drop the
+            // socket while that data is still unread, the OS sends RST
+            // instead of a clean close — which can destroy our in-flight
+            // 503 body before the peer ever reads it. A short, bounded
+            // drain (never blocking indefinitely, so a slow/hostile peer
+            // can't hold this fast path open) avoids that.
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
+            let mut discard = [0u8; 1024];
+            while matches!(stream.read(&mut discard), Ok(n) if n > 0) {}
+            continue;
+        }
+        active.fetch_add(1, Ordering::AcqRel);
+        let active = Arc::clone(&active);
         thread::spawn(move || {
             http::handle_connection(stream, &routes::route);
+            active.fetch_sub(1, Ordering::AcqRel);
         });
     }
     unreachable!("TcpListener::incoming() only ends if the listener itself is dropped")
@@ -140,6 +184,30 @@ mod tests {
         assert!(resp.starts_with("HTTP/1.1 200 OK"));
         assert!(resp.contains("\"nodes\":["));
         assert!(resp.contains("Scheduler"));
+    }
+
+    #[test]
+    fn connections_beyond_the_cap_get_503_not_an_unbounded_thread_spawn() {
+        // A cap of 1: hold the first connection open (send nothing, so its
+        // handler thread blocks in the header read) to occupy the single
+        // slot, then a second connection must be rejected immediately with
+        // 503 rather than queued or spawned unboundedly.
+        let listener = bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+        thread::spawn(move || serve_bounded(listener, 1));
+
+        let _held = TcpStream::connect(addr).expect("connect first");
+        // Give the accept loop's spawned thread a moment to actually start
+        // and increment the active counter before the second connection.
+        thread::sleep(std::time::Duration::from_millis(100));
+
+        let mut second = TcpStream::connect(addr).expect("connect second");
+        second
+            .write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+            .unwrap();
+        let mut resp = String::new();
+        second.read_to_string(&mut resp).expect("read");
+        assert!(resp.starts_with("HTTP/1.1 503"), "got: {resp}");
     }
 
     #[test]
