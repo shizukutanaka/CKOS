@@ -25,9 +25,9 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 899 | Verifier (independent) | ✅ | `verifier` (non-empty, repetition/degeneration, arithmetic, JSON, citation, security-policy) |
 | 900 | Runtime registry | ✅ | `runtime` (trait + registry; the `list`/`RuntimeInfo` table is surfaced by `ckos runtimes`; real engines ⏳) |
 | 901 | Plugin SDK | 🟡 | `plugins` (tool/registry/permissions, `ckos tool`; WASM sandbox ⏳) |
-| 902 | API gateway | 🟡 | `cli` (done) + `web` (`ckos serve`: `std`-only HTTP/JSON REST-style API + embedded browser dashboard, no TLS/auth — see README); gRPC/WebSocket/MCP ⏳ |
-| 903 | Audit logging | ✅ | `kernel::audit` — task execution (`Engine::execute`, incl. policy denials) and tool runs (`ckos tool`, allowed *and* denied, trail printed on exit). `.plugin()` field still has no producer |
-| 904 | Telemetry | ✅ | `kernel::telemetry` — latency feeds scheduling via `run_workflow`'s telemetry-scored submission (§913). Hardware `ResourceProbe` is a seam with no consumer yet; real probe ⏳ |
+| 902 | API gateway | 🟡 | `cli` (done) + `web` (`ckos serve`: `std`-only HTTP/JSON REST-style API + embedded browser dashboard, no TLS/auth — see README); a single `Engine` is shared server-lifetime (`routes::AppState`), so its audit/telemetry accumulate across requests and are exposed at `GET /api/status`; gRPC/WebSocket/MCP ⏳ |
+| 903 | Audit logging | ✅ | `kernel::audit` — task execution (`Engine::execute`, incl. policy denials) and tool runs (`ckos tool`, allowed *and* denied, trail printed on exit); `ckos serve`'s `GET /api/status` reports the running total across the server's lifetime. `.plugin()` field still has no producer |
+| 904 | Telemetry | ✅ | `kernel::telemetry` — latency feeds scheduling via `run_workflow`'s telemetry-scored submission (§913); `ckos serve`'s `GET /api/status` reports cumulative tokens/mean latency. Hardware `ResourceProbe` is a seam with no consumer yet; real probe ⏳ |
 | 905 | CI/CD | 🟡 | `docs/ci-workflow.yml` (fmt → clippy `-D warnings` → build → test → CLI smoke) — complete and ready, but the automation lacks the `workflows` permission to push `.github/workflows/` (verified: the push was rejected), so a maintainer must copy it to `.github/workflows/ci.yml` once |
 | 906 | Implementation priority | ✅ | `docs/roadmap.md` |
 
@@ -79,7 +79,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 955 | Data encryption | ⏳ | at-rest/in-transit pending (transport layer) |
 | 956 | Offline-first | ✅ | `FileStore` + std-only build; header fields (title/author/metadata) are backslash-escaped on write so an embedded newline can't shift real headers into the body on reload; writes are atomic (temp + fsync + rename) and one unreadable `.doc` is skipped with a warning instead of blocking the whole session |
 | 957 | Distributed knowledge | ⏳ | sharding/partial-sync pending |
-| 958 | Search cache | 🟡 | `sdk::retrieval::SearchCache` (LRU query→hits cache; SDK-only — the CLI's one-shot processes have no cache to warm, so nothing constructs it outside tests) |
+| 958 | Search cache | ✅ | `sdk::retrieval::SearchCache` (LRU query→hits cache), one per session directory, held in `ckos serve`'s shared `AppState` and warmed across `/api/search` requests (the CLI's one-shot processes still have no cache to warm) — invalidated whenever `/api/run` mutates that session |
 | 959 | Learning pipeline | 🟡 | reflection persistence + auto-reindex + `sdk::eval` (Precision/Recall/MRR/nDCG); full closed loop ⏳ |
 | 960 | Unified knowledge API | 🟡 | `cli` (`search`/`kql`/`history`/`eval`); network API ⏳ |
 | 961 | AI-native filesystem | ⏳ | proposal |

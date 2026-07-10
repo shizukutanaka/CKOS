@@ -303,7 +303,7 @@ function renderRun(out, data) {
   }
   table.append(body);
   out.append(
-    el("p", { class: "hint", text: `${data.results.length} step(s) · ${data.audit_records} audit record(s), ${data.audit_errors} error(s) · ${data.total_tokens} token(s)` }),
+    el("p", { class: "hint", text: `${data.results.length} step(s) this run · ${data.server_audit_records} audit record(s), ${data.server_audit_errors} error(s), ${data.server_total_tokens} token(s) cumulative since server start (see System tab)` }),
     table,
   );
 }
@@ -366,7 +366,10 @@ function renderSearch(out, data) {
     body.append(el("tr", {}, el("td", { text: h.title }), el("td", { text: h.snippet }), el("td", { text: h.score.toFixed(3) }), el("td", { text: h.source })));
   }
   table.append(body);
-  out.append(table);
+  out.append(
+    el("p", { class: "hint", text: data.cached ? "served from the §958 query cache — identical repeat query" : "computed fresh" }),
+    table,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -628,6 +631,29 @@ function renderVerify(out, data) {
 function panelSystem() {
   const capOut = el("div", { class: "empty", text: "Loading…" });
   const rtOut = el("div", { class: "empty", text: "Loading…" });
+  const statusOut = el("div", { class: "empty", text: "Loading…" });
+
+  const loadStatus = async () => {
+    try {
+      const s = await api("GET", "/api/status", {});
+      statusOut.innerHTML = "";
+      const table = el("table");
+      const rows = [
+        ["audit records", s.audit_records],
+        ["audit errors", s.audit_errors],
+        ["total tokens", s.total_tokens],
+        ["mean latency (ms)", s.mean_latency_ms.toFixed(1)],
+        ["cached sessions", s.cached_sessions],
+        ["cached queries", s.cached_queries],
+      ];
+      const body = el("tbody");
+      for (const [label, value] of rows) body.append(el("tr", {}, el("td", { text: label }), el("td", { text: String(value) })));
+      table.append(body);
+      statusOut.append(table);
+    } catch (e) { showError(statusOut, e); }
+  };
+  loadStatus();
+
   (async () => {
     try {
       const caps = await api("GET", "/api/capabilities", {});
@@ -645,7 +671,13 @@ function panelSystem() {
       rtOut.append(table);
     } catch (e) { showError(rtOut, e); }
   })();
+
   return el("div", {},
+    el("div", { class: "card" },
+      el("h2", { text: "Server status (§903/§904/§958, cumulative since start)" }),
+      statusOut,
+      el("div", { class: "row", style: "margin-top:0.6rem" }, el("button", { class: "action", text: "Refresh", onclick: loadStatus })),
+    ),
     el("div", { class: "card" }, el("h2", { text: "Capability vocabulary (§911)" }), capOut),
     el("div", { class: "card" }, el("h2", { text: "Runtime registry (§900)" }), rtOut),
   );

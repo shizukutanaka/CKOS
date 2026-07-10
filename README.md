@@ -120,9 +120,19 @@ ckos serve --port 8080     # then open http://127.0.0.1:8080
 A `std`-only HTTP/JSON server (`web/`, no `tokio`/`axum`/`serde`) fronted by a
 single self-contained HTML page embedded in the binary — no build step, no
 CDN, works fully offline. Panels: Run, Search, History, KQL, Graph (with an
-in-browser force-directed SVG layout), Verify, and System (capabilities +
-runtime registry). Every panel works against a `session` directory you type
-into the header, or in zero-setup "try it" mode against transient state.
+in-browser force-directed SVG layout), Verify, and System (capabilities,
+runtime registry, and cumulative server status). Every panel works against a
+`session` directory you type into the header, or in zero-setup "try it" mode
+against transient state.
+
+Unlike the one-shot CLI, `ckos serve` is a long-lived process, so it shares
+one `Engine` across every request: audit records (§903) and telemetry (§904)
+accumulate for the server's whole lifetime and are visible at
+`GET /api/status` (and the System tab). `GET /api/search` also gets a real
+per-session query cache (§958 `SearchCache`) — a repeat query against the
+same session is served from memory instead of re-running retrieval, and is
+invalidated automatically the moment `/api/run` adds anything new to that
+session.
 
 **Scope**: a local, single-operator control surface, not an internet-facing
 service — it binds to `127.0.0.1` by default (least privilege by default,

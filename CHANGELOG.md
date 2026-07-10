@@ -26,13 +26,29 @@ platform).
   in-process HTTP round-trips for every route) plus a CLI end-to-end test
   that spawns `ckos serve --port 0` and makes a real `TcpStream` request
   against the OS-assigned port.
+- **Bounded concurrency**: `ckos serve` caps connections handled at once
+  (default 64); beyond the cap, a connection gets an immediate
+  `503 Service Unavailable` instead of an unbounded thread spawn.
+- **No silent request truncation**: a declared `Content-Length` beyond the
+  per-request size cap is now rejected outright (`413`) rather than clamped
+  and parsed as a corrupted, truncated body.
+- **Shared server-lifetime state (`routes::AppState`)**: `ckos serve` now
+  holds one `Engine` for its whole process lifetime instead of building a
+  fresh one per `/api/run` call, so its audit trail (§903) and telemetry
+  (§904) finally accumulate across requests — exposed at the new
+  `GET /api/status` endpoint and the dashboard's System tab. `/api/search`
+  also gets `sdk::retrieval::SearchCache` (§958) wired up for the first time
+  anywhere in the workspace: one LRU cache per session directory, hit on an
+  identical repeat query and invalidated the moment `/api/run` adds anything
+  new to that session.
 
-231 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+235 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening
 from 2.7.0 apply automatically, since the web handlers call the same
-`FileStore`/`GraphStore`).
+`FileStore`/`GraphStore`), and a `run` → `search` → `search` → `run` → `search`
+sequence proving the cache hits on repeat and invalidates after a mutation.
 
 ## [2.7.0]
 

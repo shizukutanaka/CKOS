@@ -59,6 +59,11 @@ pub fn serve(listener: TcpListener) -> ! {
 /// can exercise the cap deterministically at a small size instead of opening
 /// 64 real connections.
 fn serve_bounded(listener: TcpListener, max_concurrent: usize) -> ! {
+    // Built once and shared for the server's whole lifetime — see
+    // `routes::AppState`'s doc for why (the engine's audit/telemetry and the
+    // per-session search cache need to persist across requests, not reset on
+    // every connection).
+    let state = Arc::new(routes::AppState::new());
     let active = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
@@ -82,8 +87,10 @@ fn serve_bounded(listener: TcpListener, max_concurrent: usize) -> ! {
         }
         active.fetch_add(1, Ordering::AcqRel);
         let active = Arc::clone(&active);
+        let state = Arc::clone(&state);
         thread::spawn(move || {
-            http::handle_connection(stream, &routes::route);
+            let handler = move |req: &http::Request| routes::route(&state, req);
+            http::handle_connection(stream, &handler);
             active.fetch_sub(1, Ordering::AcqRel);
         });
     }
@@ -101,6 +108,13 @@ mod tests {
         let addr = listener.local_addr().expect("local_addr");
         thread::spawn(move || serve(listener));
         addr
+    }
+
+    /// Monotonic counter for unique temp-directory names across tests
+    /// (which `cargo test` may run concurrently in the same process).
+    fn addr_seq() -> usize {
+        static SEQ: AtomicUsize = AtomicUsize::new(0);
+        SEQ.fetch_add(1, Ordering::SeqCst)
     }
 
     fn raw_request(addr: std::net::SocketAddr, request: &str) -> String {
@@ -155,6 +169,96 @@ mod tests {
         assert!(resp.starts_with("HTTP/1.1 200 OK"));
         assert!(resp.contains("\"results\":["));
         assert!(resp.contains("\"verified\":true"));
+    }
+
+    #[test]
+    fn audit_and_telemetry_accumulate_across_requests_via_shared_engine() {
+        // Regression: /api/run used to build a brand-new Engine per request,
+        // so its audit/telemetry were discarded the instant the response was
+        // written — a long-lived `ckos serve` process had no way to observe
+        // its own cumulative activity. Two runs against the same server must
+        // now both be reflected in GET /api/status.
+        let addr = start_test_server();
+        let run = |intent: &str| {
+            let body = format!("intent={intent}");
+            let req = format!(
+                "POST /api/run HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            raw_request(addr, &req)
+        };
+        assert!(run("say+hello").starts_with("HTTP/1.1 200 OK"));
+        assert!(run("say+goodbye").starts_with("HTTP/1.1 200 OK"));
+
+        let status = raw_request(addr, "GET /api/status HTTP/1.1\r\nHost: x\r\n\r\n");
+        assert!(status.starts_with("HTTP/1.1 200 OK"));
+        let body = status.rsplit("\r\n\r\n").next().unwrap();
+        let records: usize = body
+            .split("\"audit_records\":")
+            .nth(1)
+            .and_then(|s| s.split(',').next())
+            .and_then(|s| s.trim().parse().ok())
+            .expect("audit_records field");
+        assert!(
+            records >= 2,
+            "expected at least 2 accumulated audit records from 2 runs, got {records}: {body}"
+        );
+    }
+
+    #[test]
+    fn search_cache_hits_on_repeat_query_and_invalidates_after_run() {
+        struct TempDir(std::path::PathBuf);
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "ckos-web-cache-{}-{}",
+            std::process::id(),
+            addr_seq()
+        ));
+        let _guard = TempDir(dir.clone());
+        let dir_str = dir.to_str().unwrap();
+
+        let addr = start_test_server();
+        let run = |dir: &str| {
+            let body = format!("intent=study+the+Transformer+paper&session={dir}");
+            let req = format!(
+                "POST /api/run HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            raw_request(addr, &req)
+        };
+        let search = |dir: &str| {
+            raw_request(
+                addr,
+                &format!("GET /api/search?session={dir}&q=Transformer HTTP/1.1\r\nHost: x\r\n\r\n"),
+            )
+        };
+
+        assert!(run(dir_str).starts_with("HTTP/1.1 200 OK"));
+
+        let first = search(dir_str);
+        assert!(first.starts_with("HTTP/1.1 200 OK"), "got: {first}");
+        assert!(first.contains("\"cached\":false"), "got: {first}");
+
+        let second = search(dir_str);
+        assert!(
+            second.contains("\"cached\":true"),
+            "identical repeat query must hit the cache: {second}"
+        );
+
+        // A new run touches this session (new document + graph nodes) —
+        // the stale cache entry must not survive it.
+        assert!(run(dir_str).starts_with("HTTP/1.1 200 OK"));
+        let third = search(dir_str);
+        assert!(
+            third.contains("\"cached\":false"),
+            "a run against the session must invalidate its search cache: {third}"
+        );
     }
 
     #[test]

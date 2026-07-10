@@ -12,41 +12,87 @@
 use crate::http::{Request, Response};
 use crate::json::Json;
 use ckos_sdk::prelude::*;
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Mutex;
 
 const GRAPH_FILE: &str = "graph.kg";
 
+/// Per-session query cache capacity (§958). Modest: this bounds memory the
+/// same way `InMemoryAuditLog`/`InMemoryTelemetry` bound their retention —
+/// a demo/local-operator gateway doesn't need thousands of distinct cached
+/// queries per session.
+const CACHE_CAPACITY_PER_SESSION: usize = 32;
+
+/// State shared across every connection for the server's lifetime (built
+/// once in [`crate::serve`], reused per request — see that module's doc for
+/// why this is safe without extra locking around `Engine` itself).
+///
+/// Before this existed, every `/api/run` request built a brand-new `Engine`,
+/// so its audit trail (§903) and telemetry (§904) were discarded the instant
+/// the response was written — a long-lived `ckos serve` process had no way
+/// to observe its own cumulative activity. And `/api/search` never cached
+/// anything (§958's `SearchCache` had no caller anywhere), so identical
+/// repeat queries against the same session always re-ran the full retrieval
+/// pipeline — pointless for a process that, unlike the one-shot CLI, is
+/// expected to serve the same session repeatedly.
+pub struct AppState {
+    engine: Engine,
+    /// One LRU cache per session directory, keyed by session path.
+    caches: Mutex<HashMap<String, SearchCache>>,
+}
+
+impl AppState {
+    /// Build the shared engine (the same demo capability/runtime/verifier
+    /// pool every request used to rebuild from scratch) and an empty cache
+    /// table.
+    pub fn new() -> Self {
+        let mut runtimes = RuntimeRegistry::new();
+        let mut agents = CapabilityRegistry::new();
+        for cap in Capability::builtin() {
+            runtimes.register(Box::new(EchoRuntime::new(vec![cap.clone()])));
+            agents.register(AgentManifest::new(format!("{cap}-agent"), cap));
+        }
+        let verifier = Verifier::new()
+            .with_check(Box::new(NonEmptyCheck))
+            .with_check(Box::new(CitationCheck));
+        AppState {
+            engine: Engine::new(runtimes, agents, verifier),
+            caches: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Lock the cache table, recovering from poisoning — one panicking
+    /// request must not turn every later cache lookup/insert into a panic
+    /// too (the same rule applied to `InMemoryAuditLog`/`InMemoryTelemetry`
+    /// in `ckos_kernel`).
+    fn caches(&self) -> std::sync::MutexGuard<'_, HashMap<String, SearchCache>> {
+        self.caches.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Dispatch a parsed request to the matching handler, or a JSON 404.
-pub fn route(req: &Request) -> Response {
+pub fn route(state: &AppState, req: &Request) -> Response {
     match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/") => Response::html(crate::dashboard::PAGE),
         ("GET", "/api/capabilities") => capabilities(),
         ("GET", "/api/runtimes") => runtimes(),
+        ("GET", "/api/status") => status(state),
         ("GET", "/api/plan") => plan(req),
-        ("POST", "/api/run") => run(req),
+        ("POST", "/api/run") => run(state, req),
         ("GET", "/api/history") => history(req),
-        ("GET", "/api/search") => search(req),
+        ("GET", "/api/search") => search(state, req),
         ("POST", "/api/kql") => kql(req),
         ("GET", "/api/graph") => graph(req),
         ("GET", "/api/verify") => verify(req),
         _ => Response::not_found(),
     }
-}
-
-/// The capability + runtime pool every handler assembles a fresh `Engine`
-/// from — mirrors `cli::demo_capabilities`/`demo_tools`: a fully offline echo
-/// runtime and a demo agent per built-in capability (§911).
-fn demo_engine() -> Engine {
-    let mut runtimes = RuntimeRegistry::new();
-    let mut agents = CapabilityRegistry::new();
-    for cap in Capability::builtin() {
-        runtimes.register(Box::new(EchoRuntime::new(vec![cap.clone()])));
-        agents.register(AgentManifest::new(format!("{cap}-agent"), cap));
-    }
-    let verifier = Verifier::new()
-        .with_check(Box::new(NonEmptyCheck))
-        .with_check(Box::new(CitationCheck));
-    Engine::new(runtimes, agents, verifier)
 }
 
 fn capabilities() -> Response {
@@ -81,6 +127,41 @@ fn runtimes() -> Response {
     Response::json(Json::object([("runtimes", Json::Array(infos))]))
 }
 
+/// Cumulative server-lifetime activity: the shared engine's audit log and
+/// telemetry (§903/§904), plus how many sessions currently have a warm
+/// search cache (§958) and how many queries are cached in total. This is
+/// the "Runtime Monitor" groundwork the v2.8 roadmap calls for — a
+/// long-lived `ckos serve` process finally has something to observe beyond
+/// a single request/response.
+fn status(state: &AppState) -> Response {
+    let (cached_sessions, cached_queries) = {
+        let caches = state.caches();
+        (
+            caches.len(),
+            caches.values().map(SearchCache::len).sum::<usize>(),
+        )
+    };
+    Response::json(Json::object([
+        ("audit_records", state.engine.audit().len().into()),
+        ("audit_errors", state.engine.audit().error_count().into()),
+        (
+            "total_tokens",
+            state.engine.telemetry().total_tokens().into(),
+        ),
+        (
+            "mean_latency_ms",
+            state
+                .engine
+                .telemetry()
+                .mean_latency_ms()
+                .unwrap_or(0.0)
+                .into(),
+        ),
+        ("cached_sessions", cached_sessions.into()),
+        ("cached_queries", cached_queries.into()),
+    ]))
+}
+
 fn plan(req: &Request) -> Response {
     let intent = req.param_or_empty("intent").trim();
     if intent.is_empty() {
@@ -110,7 +191,7 @@ fn plan(req: &Request) -> Response {
     ]))
 }
 
-fn run(req: &Request) -> Response {
+fn run(state: &AppState, req: &Request) -> Response {
     let intent = req.param_or_empty("intent").trim();
     if intent.is_empty() {
         return Response::bad_request("missing `intent` parameter");
@@ -118,7 +199,10 @@ fn run(req: &Request) -> Response {
     let session_dir = req.param("session").filter(|s| !s.is_empty());
 
     let dag = HeuristicPlanner::new().plan(intent);
-    let engine = demo_engine();
+    // The shared, server-lifetime engine (see AppState's doc) — its audit
+    // log and telemetry accumulate across every /api/run call, not just
+    // this one; `GET /api/status` reports the running totals.
+    let engine = &state.engine;
     let results = match engine.run_workflow(&dag) {
         Ok(r) => r,
         Err(e) => {
@@ -128,6 +212,12 @@ fn run(req: &Request) -> Response {
 
     let mut warnings: Vec<Json> = Vec::new();
     if let Some(dir) = session_dir {
+        // This run is about to add documents and/or graph nodes to `dir`;
+        // any cached search results for it are now stale (§958 cache —
+        // see `search`'s cache_key doc). Evict before mutating, not after,
+        // so a search racing this request never observes a half-updated
+        // cache entry.
+        state.caches().remove(dir);
         match FileStore::open(dir) {
             Ok(store) => {
                 if store.skipped() > 0 {
@@ -184,9 +274,17 @@ fn run(req: &Request) -> Response {
     Response::json(Json::object([
         ("intent", intent.into()),
         ("results", Json::Array(results_json)),
-        ("audit_records", engine.audit().len().into()),
-        ("audit_errors", engine.audit().error_count().into()),
-        ("total_tokens", engine.telemetry().total_tokens().into()),
+        // Cumulative since the server started (the engine is shared across
+        // every /api/run call — see AppState), not just this request; the
+        // key names spell that out so a caller doesn't mistake it for a
+        // per-call count. GET /api/status reports the same totals without
+        // needing to run anything.
+        ("server_audit_records", engine.audit().len().into()),
+        ("server_audit_errors", engine.audit().error_count().into()),
+        (
+            "server_total_tokens",
+            engine.telemetry().total_tokens().into(),
+        ),
         ("warnings", Json::Array(warnings)),
     ]))
 }
@@ -248,14 +346,34 @@ fn history(req: &Request) -> Response {
     ]))
 }
 
-fn search(req: &Request) -> Response {
+fn search(state: &AppState, req: &Request) -> Response {
     let Some(dir) = req.param("session").filter(|s| !s.is_empty()) else {
         return Response::bad_request("missing `session` parameter");
     };
-    let query = req.param_or_empty("q").trim();
-    if query.is_empty() {
+    let raw_query = req.param_or_empty("q").trim();
+    if raw_query.is_empty() {
         return Response::bad_request("missing `q` parameter");
     }
+    let synonyms = req.flag("synonyms");
+    let expand = req.flag("expand");
+    let diverse = req.flag("diverse");
+    let k: usize = req.param("k").and_then(|v| v.parse().ok()).unwrap_or(10);
+    let lambda: f32 = req
+        .param("lambda")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.7);
+    // Every parameter that can change the result set feeds the cache key
+    // (using \u{1}, which can't appear in a query typed into the dashboard,
+    // as an unambiguous separator), so two requests differing only in a flag
+    // never share a cached answer. Invalidated by `run` — see its call to
+    // `invalidate_cache` — whenever that session's documents/graph change.
+    let cache_key =
+        format!("{synonyms}\u{1}{expand}\u{1}{diverse}\u{1}{k}\u{1}{lambda}\u{1}{raw_query}");
+
+    if let Some(hits) = state.caches().get_mut(dir).and_then(|c| c.get(&cache_key)) {
+        return search_response(&hits, 0, true);
+    }
+
     let store = match open_session(dir) {
         Ok(s) => s,
         Err(resp) => return resp,
@@ -268,26 +386,31 @@ fn search(req: &Request) -> Response {
         }
     };
     let embedder = HashingEmbedder::default();
-    let query = if req.flag("synonyms") {
-        expand_query_with_synonyms(query, &SynonymTable::builtin(), 4)
+    let query = if synonyms {
+        expand_query_with_synonyms(raw_query, &SynonymTable::builtin(), 4)
     } else {
-        query.to_string()
+        raw_query.to_string()
     };
     let retriever = Retriever::with_embedder(&store, &graph, &embedder);
-    let k = req.param("k").and_then(|v| v.parse().ok()).unwrap_or(10);
-    let mut hits = if req.flag("expand") {
+    let mut hits = if expand {
         retriever.search_expanded(&query, k, 3, 4)
     } else {
         retriever.search(&query, k)
     };
-    if req.flag("diverse") {
-        let lambda: f32 = req
-            .param("lambda")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0.7);
+    if diverse {
         hits = mmr_rerank(&hits, lambda, k);
     }
 
+    state
+        .caches()
+        .entry(dir.to_string())
+        .or_insert_with(|| SearchCache::new(CACHE_CAPACITY_PER_SESSION))
+        .put(cache_key, hits.clone());
+
+    search_response(&hits, skipped, false)
+}
+
+fn search_response(hits: &[Hit], skipped: usize, cached: bool) -> Response {
     let items: Vec<Json> = hits
         .iter()
         .map(|h| {
@@ -301,6 +424,7 @@ fn search(req: &Request) -> Response {
         .collect();
     Response::json(Json::object([
         ("skipped", skipped.into()),
+        ("cached", cached.into()),
         ("hits", Json::Array(items)),
     ]))
 }

@@ -86,6 +86,12 @@ impl From<f32> for Json {
     }
 }
 
+impl From<f64> for Json {
+    fn from(n: f64) -> Json {
+        Json::Number(n)
+    }
+}
+
 impl<T: Into<Json>> From<Option<T>> for Json {
     fn from(v: Option<T>) -> Json {
         match v {
