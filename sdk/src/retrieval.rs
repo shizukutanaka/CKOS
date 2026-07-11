@@ -1,12 +1,13 @@
 //! Retrieval — the unified query layer (§949–§952).
 //!
 //! [`plan_retrieval`] turns a question into a [`RetrievalStrategy`] (§949), then
-//! [`Retriever::search`] runs hybrid search (§950): **BM25** keyword ranking over
-//! the document store, vector-similarity search, and label search over the
-//! knowledge graph with multi-hop expansion (§951–§952). The three ranked lists
-//! are then combined with Reciprocal Rank Fusion (`1/(k+rank)` summed across
-//! sources) — rank-based, so the different score scales of BM25, cosine and
-//! graph matching don't distort the result and corroborated items rise.
+//! [`Retriever::search`] runs hybrid search (§950): **BM25+** keyword ranking
+//! over the document store (BM25 with the Lv & Zhai 2011 δ lower-bound, so long
+//! documents aren't over-penalized), vector-similarity search, and label search
+//! over the knowledge graph with multi-hop expansion (§951–§952). The three
+//! ranked lists are then combined with Reciprocal Rank Fusion (`1/(k+rank)`
+//! summed across sources) — rank-based, so the different score scales of BM25+,
+//! cosine and graph matching don't distort the result and corroborated items rise.
 //!
 //! Scores fold in each item's confidence (§948), so low-confidence knowledge
 //! ranks below high-confidence knowledge for the same textual match.
@@ -147,6 +148,14 @@ fn count_matches(haystack: &str, term: &str) -> usize {
 /// BM25 saturation parameters (standard defaults).
 const BM25_K1: f32 = 1.5;
 const BM25_B: f32 = 0.75;
+/// BM25+ lower-bound on the normalized term frequency (Lv & Zhai, CIKM 2011,
+/// "Lower-Bounding Term Frequency Normalization"). Plain BM25 over-penalizes
+/// long documents: as document length grows, a matched term's contribution
+/// can shrink below that of a shorter document that doesn't even contain the
+/// term. Adding a constant floor `δ` to every *matched* term's normalized TF
+/// guarantees a document containing the term always outscores one that lacks
+/// it, regardless of length. δ = 1.0 is the paper's recommended value.
+const BM25_DELTA: f32 = 1.0;
 /// Title terms count for more than body terms (field boost).
 const TITLE_BOOST: f32 = 2.0;
 
@@ -164,10 +173,15 @@ const VECTOR_THRESHOLD: f32 = 0.2;
 /// top ranks so lower ranks still contribute (Cormack et al.; used by
 /// Elasticsearch/LangChain).
 const RRF_K: f32 = 60.0;
-/// Per-hop score decay for graph traversal hits: a hop-N neighbour scores
-/// `HOP_DECAY^N` of the direct match, so a 2-hop hit is weaker than a 1-hop hit
-/// rather than receiving the same flat penalty.
-const HOP_DECAY: f32 = 0.4;
+/// Iterations for the retrieval-time Personalized PageRank pass over the graph
+/// (§951–§952 multi-hop expansion). ~30 converges for the small graphs CKOS
+/// builds; HippoRAG uses the same power-iteration approach.
+const PPR_ITERATIONS: usize = 30;
+/// Graph-hop hits are scaled so the strongest sits just under the weakest
+/// direct label match — a directly-named node is always worth at least as much
+/// as one merely reached by graph association, while hops rank among
+/// themselves by Personalized-PageRank mass.
+const HOP_CEILING: f32 = 0.9;
 
 /// Sort a source's hits by descending score (its rank order for fusion).
 fn ranked(mut hits: Vec<Hit>) -> Vec<Hit> {
@@ -374,11 +388,13 @@ impl<'a> Retriever<'a> {
         mmr_rerank(&pool, lambda, limit)
     }
 
-    /// Keyword search over the document store using **BM25** ranking — terms that
-    /// are rare across the corpus weigh more (IDF), term frequency saturates, and
-    /// long documents are length-normalized. Title hits get a field boost and the
-    /// score scales by document confidence (§948). BM25 is the standard lexical
-    /// half of hybrid search (§950).
+    /// Keyword search over the document store using **BM25+** ranking — terms
+    /// that are rare across the corpus weigh more (IDF), term frequency
+    /// saturates, and long documents are length-normalized with the Lv & Zhai
+    /// [`BM25_DELTA`] lower-bound so length normalization can't drop a matched
+    /// term's contribution below an unmatched document's. Title hits get a
+    /// field boost and the score scales by document confidence (§948). BM25+
+    /// is the standard lexical half of hybrid search (§950).
     fn keyword_hits(&self, terms: &[String]) -> Vec<Hit> {
         let docs = self.store.search(&Query::default()).unwrap_or_default();
         if docs.is_empty() || terms.is_empty() {
@@ -418,7 +434,10 @@ impl<'a> Retriever<'a> {
                     continue;
                 }
                 let denom = tf_eff + BM25_K1 * (1.0 - BM25_B + BM25_B * dl / avgdl);
-                score += idf * (tf_eff * (BM25_K1 + 1.0)) / denom;
+                // BM25+: the δ floor is added to the *matched* term's
+                // normalized TF, so a document containing the term always
+                // scores strictly above one that doesn't, independent of length.
+                score += idf * ((tf_eff * (BM25_K1 + 1.0)) / denom + BM25_DELTA);
             }
             if score > 0.0 {
                 score *= doc.confidence as f32 / 100.0;
@@ -455,8 +474,13 @@ impl<'a> Retriever<'a> {
     }
 
     /// Label search over the graph plus multi-hop expansion (§951–§952). Direct
-    /// matches are boosted by PageRank centrality so influential nodes outrank
-    /// peripheral ones (the Graph-RAG node-importance signal, §951).
+    /// matches are boosted by global PageRank centrality so influential nodes
+    /// outrank peripheral ones (the Graph-RAG node-importance signal, §951);
+    /// the expansion is a **Personalized PageRank** pass seeded on the matched
+    /// nodes (HippoRAG, §952), so associated nodes rank by how strongly the
+    /// query's entities actually flow to them — a node corroborated by several
+    /// short paths outranks one reached by a single long path, which a fixed
+    /// per-hop decay could not express.
     fn graph_hits(&self, terms: &[String], max_hops: usize) -> Vec<Hit> {
         let pr = self.graph.pagerank(0.85, 20);
         let max_pr = pr
@@ -465,30 +489,58 @@ impl<'a> Retriever<'a> {
             .fold(0.0_f32, f32::max)
             .max(f32::EPSILON);
         let mut hits = Vec::new();
+        let mut seeds: Vec<ckos_kernel::NodeId> = Vec::new();
+        let mut min_direct = f32::INFINITY;
         for node in self.graph.nodes() {
             let label = node.label.to_lowercase();
             let matches: usize = terms.iter().map(|t| count_matches(&label, t)).sum();
             if matches == 0 {
                 continue;
             }
+            seeds.push(node.id.clone());
             // Centrality in 0..1; boost direct matches up to 2x for the hub.
             let centrality = pr.get(&node.id).copied().unwrap_or(0.0) / max_pr;
             let base = matches as f32 * (node.confidence as f32 / 100.0) * 3.0 * (1.0 + centrality);
+            min_direct = min_direct.min(base);
             hits.push(Hit {
                 title: node.label.clone(),
                 snippet: format!("{:?}", node.kind),
                 score: base,
                 source: HitSource::Graph,
             });
-            // Expand: neighbours reachable within max_hops, score geometrically
-            // decayed by actual hop distance (a 2-hop neighbour scores lower than
-            // a 1-hop one, not the same).
-            if max_hops > 1 {
-                for (neighbor, hops) in self.graph.traverse_with_hops(&node.id, max_hops) {
+        }
+
+        // Expand via Personalized PageRank seeded on the matched nodes (§952).
+        if max_hops > 1 && !seeds.is_empty() {
+            let seed_set: std::collections::HashSet<&ckos_kernel::NodeId> = seeds.iter().collect();
+            let ppr = self
+                .graph
+                .personalized_pagerank(&seeds, 0.85, PPR_ITERATIONS);
+            // Rank non-seed nodes by the query mass that reached them.
+            let max_mass = ppr
+                .iter()
+                .filter(|(id, _)| !seed_set.contains(id))
+                .map(|(_, m)| *m)
+                .fold(0.0_f32, f32::max);
+            if max_mass > f32::EPSILON {
+                // Keep hops just below the weakest direct match.
+                let ceiling = if min_direct.is_finite() {
+                    min_direct * HOP_CEILING
+                } else {
+                    HOP_CEILING
+                };
+                for node in self.graph.nodes() {
+                    if seed_set.contains(&node.id) {
+                        continue;
+                    }
+                    let mass = ppr.get(&node.id).copied().unwrap_or(0.0);
+                    if mass <= f32::EPSILON {
+                        continue; // unreachable from the query's entities
+                    }
                     hits.push(Hit {
-                        title: neighbor.label.clone(),
-                        snippet: format!("{:?} (via {})", neighbor.kind, node.label),
-                        score: base * HOP_DECAY.powi(hops as i32),
+                        title: node.label.clone(),
+                        snippet: format!("{:?} (graph-related)", node.kind),
+                        score: (mass / max_mass) * ceiling,
                         source: HitSource::GraphHop,
                     });
                 }
@@ -642,6 +694,47 @@ mod tests {
     }
 
     #[test]
+    fn bm25plus_floor_keeps_long_documents_with_rare_terms_competitive() {
+        // The scenario BM25+ (Lv & Zhai 2011) fixes: a long document that
+        // contains a *rare* query term should not be beaten by a short
+        // document that only contains a *common* one. Under plain BM25 the
+        // rare term's contribution in the long doc is crushed by length
+        // normalization (it → 0 as length grows); the δ floor keeps it at
+        // least `idf(rare)·δ`, and since the rare term has high IDF, the long
+        // doc wins.
+        let mut store = InMemoryStore::new();
+        // Make "common" a low-IDF term by putting it in several docs.
+        for i in 0..6 {
+            store
+                .write(Document::new("note", format!("filler{i}"), "common"))
+                .unwrap();
+        }
+        // SHORT doc: only the common (low-IDF) term.
+        store
+            .write(Document::new("note", "short", "common"))
+            .unwrap();
+        // LONG doc: the rare (high-IDF) term once, buried in 200 unique
+        // filler words that are not query terms — maximal length penalty.
+        let filler: String = (0..200).map(|i| format!("w{i} ")).collect();
+        store
+            .write(Document::new("note", "long", format!("rare {filler}")))
+            .unwrap();
+
+        let graph = KnowledgeGraph::new();
+        let r = Retriever::new(&store, &graph);
+        let hits = r.search("common rare", 10);
+        let score = |t: &str| hits.iter().find(|h| h.title == t).map(|h| h.score);
+        let (long, short) = (score("long"), score("short"));
+        assert!(long.is_some() && short.is_some(), "both docs should hit");
+        assert!(
+            long.unwrap() > short.unwrap(),
+            "long doc with rare term ({:?}) should beat short doc with common term ({:?})",
+            long,
+            short,
+        );
+    }
+
+    #[test]
     fn expand_query_adds_feedback_terms() {
         let feedback = vec![
             "the scheduler dispatches tasks".to_string(),
@@ -726,6 +819,44 @@ mod tests {
         let core_pos = hits.iter().position(|h| h.title == "Core node").unwrap();
         let leaf_pos = hits.iter().position(|h| h.title == "Leaf node").unwrap();
         assert!(core_pos < leaf_pos, "central node should rank first");
+    }
+
+    #[test]
+    fn graph_expansion_ranks_multipath_neighbours_higher() {
+        // HippoRAG-style Personalized-PageRank expansion: the query matches
+        // "Seed". Two non-matching neighbours are the same hop distance from
+        // it, but "Corroborated" is reached by two paths (Seed→A→Corroborated,
+        // Seed→B→Corroborated) while "Lonely" is reached by one
+        // (Seed→C→Lonely). The two-path node must rank higher — the property a
+        // flat per-hop decay (the old behaviour) could not express.
+        let store = InMemoryStore::new();
+        let mut graph = KnowledgeGraph::new();
+        let seed = graph.add_node(NodeKind::Concept, "Seed", 100);
+        let a = graph.add_node(NodeKind::Concept, "A", 100);
+        let b = graph.add_node(NodeKind::Concept, "B", 100);
+        let c = graph.add_node(NodeKind::Concept, "C", 100);
+        let corro = graph.add_node(NodeKind::Concept, "Corroborated", 100);
+        let lonely = graph.add_node(NodeKind::Concept, "Lonely", 100);
+        graph.connect(&seed, &a, EdgeKind::References);
+        graph.connect(&seed, &b, EdgeKind::References);
+        graph.connect(&seed, &c, EdgeKind::References);
+        graph.connect(&a, &corro, EdgeKind::References);
+        graph.connect(&b, &corro, EdgeKind::References);
+        graph.connect(&c, &lonely, EdgeKind::References);
+
+        // "related to" phrasing selects max_hops=2 in plan_retrieval, enabling
+        // the graph expansion path.
+        let hits = Retriever::new(&store, &graph).search("what is related to Seed", 20);
+        let pos = |t: &str| hits.iter().position(|h| h.title == t);
+        let (corro_pos, lonely_pos) = (pos("Corroborated"), pos("Lonely"));
+        assert!(
+            corro_pos.is_some() && lonely_pos.is_some(),
+            "both expansion neighbours should surface: {hits:?}"
+        );
+        assert!(
+            corro_pos < lonely_pos,
+            "the two-path neighbour must outrank the one-path neighbour"
+        );
     }
 
     #[test]

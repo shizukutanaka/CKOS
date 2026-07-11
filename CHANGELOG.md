@@ -7,6 +7,24 @@ platform).
 
 ## [Unreleased] — v2.8 groundwork
 
+### Improved (from recent IR/Graph-RAG literature)
+
+- **BM25+ keyword ranking** (§950): `retrieval::keyword_hits` now adds the
+  Lv & Zhai (CIKM 2011) δ lower-bound to each matched term's normalized TF,
+  so BM25's over-penalization of long documents can no longer drop a matched
+  term's contribution below an unmatched document's. δ = 1.0 (the paper's
+  recommended value); regression test covers the long-rare-term-beats-
+  short-common-term case the correction targets.
+- **Personalized-PageRank graph expansion** (§951/§952): the retriever's
+  multi-hop graph expansion is now a HippoRAG-style Personalized PageRank
+  pass (`graph::personalized_pagerank`, arXiv:2405.14831 / 2502.14802)
+  seeded on the query's matched nodes, replacing a fixed per-hop geometric
+  decay. Associated nodes rank by how much query mass actually flows to them,
+  so a node corroborated by several short paths outranks one reached by a
+  single long path — with a deterministic diamond-graph test proving exactly
+  that. `graph::pagerank` was refactored onto a shared `pagerank_core`
+  (uniform teleport = classic PageRank, verified behaviour-preserving).
+
 ### Added
 
 - **`web` crate + `ckos serve`** (§902 API gateway, front-loaded from the v2.8

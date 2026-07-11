@@ -71,9 +71,9 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 947 | Provenance engine | ✅ | `graph::Node::provenance`; extraction stamps source (`extract_concepts_with_provenance`); KQL `RETURN Sources` |
 | 948 | Confidence score | ✅ | `Node::confidence`, `Document::confidence` |
 | 949 | Retrieval planner | ✅ | `retrieval::plan_retrieval` + `search_diverse`/`mmr_rerank` (MMR) + `expand_query`/`search_expanded` (PRF) + `sdk::synonyms::SynonymTable`/`search_synonyms` (a priori domain-term expansion; mitigates the §944 lexical-only gap) |
-| 950 | Hybrid search | ✅ | `retrieval::Retriever` (BM25 keyword + vector + graph, Reciprocal Rank Fusion) |
-| 951 | Graph reasoning | ✅ | retrieval graph hits + `graph::traverse`/`neighbors_via` (typed-relation hop) + `pagerank`/`central_nodes` (node importance); KQL `RELATED … VIA <edge-kind>` reasons over relation types |
-| 952 | Multi-hop planner | ✅ | `graph::traverse`/`traverse_with_hops` + retriever hop expansion (score decays geometrically per hop) |
+| 950 | Hybrid search | ✅ | `retrieval::Retriever` (BM25+ keyword [Lv & Zhai 2011 δ lower-bound] + vector + graph, Reciprocal Rank Fusion) |
+| 951 | Graph reasoning | ✅ | retrieval graph hits + `graph::traverse`/`neighbors_via` (typed-relation hop) + `pagerank`/`personalized_pagerank`/`central_nodes` (node importance); KQL `RELATED … VIA <edge-kind>` reasons over relation types |
+| 952 | Multi-hop planner | ✅ | retriever graph expansion is a **Personalized PageRank** pass seeded on the query's matched nodes (HippoRAG, arXiv:2405.14831/2502.14802) — associated nodes rank by query-mass flow, so multi-path corroboration outranks single long paths; `graph::traverse`/`traverse_with_hops` remain for distance-annotated walks |
 | 953 | Memory consolidation | ✅ | `memory::consolidate` (sleep-phase pass compressing oversized docs), reachable via `ckos gc --consolidate N`, which runs before the document/graph GC passes; also driving the §940 compression ladder it calls into |
 | 954 | Garbage collection | ✅ | `ckos gc`: `memory::collect` (documents; expiry via `--now <date>`) + `graph::KnowledgeGraph::remove_orphans` sweeping the session's persisted graph |
 | 955 | Data encryption | ⏳ | at-rest/in-transit pending (transport layer) |

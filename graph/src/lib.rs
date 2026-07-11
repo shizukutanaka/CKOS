@@ -355,15 +355,74 @@ impl KnowledgeGraph {
         if n == 0 {
             return HashMap::new();
         }
+        // Uniform teleport = classic PageRank.
+        let uniform = 1.0 / n as f32;
+        let teleport: HashMap<NodeId, f32> =
+            self.nodes.keys().map(|id| (id.clone(), uniform)).collect();
+        self.pagerank_core(&teleport, damping, iterations)
+    }
+
+    /// Personalized PageRank (Haveliwala 2002), the retrieval-time ranking at
+    /// the heart of HippoRAG (arXiv:2405.14831 / 2502.14802): instead of
+    /// teleporting uniformly, restart mass flows back only to the query
+    /// `seeds`, so probability concentrates in their multi-hop neighbourhood.
+    /// A node reachable from the seeds by several short paths accumulates more
+    /// mass than one reachable by a single long path — capturing multi-hop
+    /// relevance and path multiplicity that a fixed per-hop decay cannot.
+    ///
+    /// Seeds not present in the graph are ignored; if none remain, returns an
+    /// empty map (a clear "nothing to personalize on" signal for callers).
+    pub fn personalized_pagerank(
+        &self,
+        seeds: &[NodeId],
+        damping: f32,
+        iterations: usize,
+    ) -> HashMap<NodeId, f32> {
+        let present: Vec<&NodeId> = seeds
+            .iter()
+            .filter(|id| self.nodes.contains_key(id))
+            .collect();
+        if present.is_empty() {
+            return HashMap::new();
+        }
+        let share = 1.0 / present.len() as f32;
+        let mut teleport: HashMap<NodeId, f32> =
+            self.nodes.keys().map(|id| (id.clone(), 0.0)).collect();
+        for id in present {
+            teleport.insert(id.clone(), share);
+        }
+        self.pagerank_core(&teleport, damping, iterations)
+    }
+
+    /// Power-iteration core shared by [`pagerank`](Self::pagerank) and
+    /// [`personalized_pagerank`](Self::personalized_pagerank). `teleport` is
+    /// the restart distribution (must sum to ~1 over the graph's nodes):
+    /// uniform yields classic PageRank, seed-concentrated yields the
+    /// personalized variant. Restart mass *and* dangling-node mass both flow
+    /// back along `teleport`, so total rank is conserved either way.
+    fn pagerank_core(
+        &self,
+        teleport: &HashMap<NodeId, f32>,
+        damping: f32,
+        iterations: usize,
+    ) -> HashMap<NodeId, f32> {
+        let n = self.nodes.len();
+        if n == 0 {
+            return HashMap::new();
+        }
         let d = damping.clamp(0.0, 1.0);
-        let base = (1.0 - d) / n as f32;
-        let init = 1.0 / n as f32;
+        let tp = |id: &NodeId| teleport.get(id).copied().unwrap_or(0.0);
+        // Start from the teleport distribution (converges regardless, but this
+        // needs no warm-up iterations for the personalized case).
         let mut rank: HashMap<NodeId, f32> =
-            self.nodes.keys().map(|id| (id.clone(), init)).collect();
+            self.nodes.keys().map(|id| (id.clone(), tp(id))).collect();
 
         for _ in 0..iterations {
-            let mut next: HashMap<NodeId, f32> =
-                self.nodes.keys().map(|id| (id.clone(), base)).collect();
+            let mut next: HashMap<NodeId, f32> = self
+                .nodes
+                .keys()
+                .map(|id| (id.clone(), (1.0 - d) * tp(id)))
+                .collect();
             let mut dangling = 0.0f32;
             for id in self.nodes.keys() {
                 let r = rank[id];
@@ -379,10 +438,10 @@ impl KnowledgeGraph {
                     }
                 }
             }
-            // Spread dangling mass uniformly so total rank is conserved.
-            let spread = d * dangling / n as f32;
-            for v in next.values_mut() {
-                *v += spread;
+            // Dangling mass teleports along the same distribution, so total
+            // rank is conserved for both uniform and personalized teleport.
+            for (id, slot) in next.iter_mut() {
+                *slot += d * dangling * tp(id);
             }
             rank = next;
         }
@@ -492,6 +551,89 @@ mod tests {
         // central_nodes surfaces the hub first.
         let top = g.central_nodes(1);
         assert_eq!(top[0].0.label, "Hub");
+    }
+
+    #[test]
+    fn personalized_pagerank_matches_uniform_when_seeded_on_all_nodes() {
+        // Seeding PPR uniformly on every node is exactly classic PageRank —
+        // proves pagerank_core is behaviour-preserving.
+        let mut g = KnowledgeGraph::new();
+        let hub = g.add_node(NodeKind::Concept, "Hub", 50);
+        let mut all = vec![hub.clone()];
+        for leaf in ["L1", "L2", "L3"] {
+            let l = g.add_node(NodeKind::Concept, leaf, 50);
+            g.connect(&l, &hub, EdgeKind::References);
+            all.push(l);
+        }
+        let uniform = g.pagerank(0.85, 30);
+        let ppr = g.personalized_pagerank(&all, 0.85, 30);
+        for (id, u) in &uniform {
+            assert!(
+                (ppr[id] - u).abs() < 1e-5,
+                "uniform-seeded PPR must equal plain PageRank"
+            );
+        }
+    }
+
+    #[test]
+    fn personalized_pagerank_concentrates_mass_near_seeds() {
+        // Two disjoint chains: A→B→C and X→Y→Z. Seeding only A must give the
+        // A-chain far more mass than the untouched X-chain — the property a
+        // fixed per-hop decay can't express (it would score C and Z equally
+        // by distance alone).
+        let mut g = KnowledgeGraph::new();
+        let a = g.add_node(NodeKind::Concept, "A", 50);
+        let b = g.add_node(NodeKind::Concept, "B", 50);
+        let c = g.add_node(NodeKind::Concept, "C", 50);
+        let x = g.add_node(NodeKind::Concept, "X", 50);
+        let y = g.add_node(NodeKind::Concept, "Y", 50);
+        let z = g.add_node(NodeKind::Concept, "Z", 50);
+        g.connect(&a, &b, EdgeKind::References);
+        g.connect(&b, &c, EdgeKind::References);
+        g.connect(&x, &y, EdgeKind::References);
+        g.connect(&y, &z, EdgeKind::References);
+
+        let ppr = g.personalized_pagerank(std::slice::from_ref(&a), 0.85, 40);
+        // A's own chain dominates the unrelated chain.
+        assert!(ppr[&b] > ppr[&y], "seed neighbour B must beat unrelated Y");
+        assert!(ppr[&c] > ppr[&z], "seed's 2-hop C must beat unrelated Z");
+        assert!(ppr[&a] > ppr[&x], "seed A must beat unrelated X");
+
+        // Unknown/empty seeds → empty map (clear contract).
+        assert!(g.personalized_pagerank(&[], 0.85, 10).is_empty());
+        assert!(g
+            .personalized_pagerank(&[NodeId::from_raw("ghost")], 0.85, 10)
+            .is_empty());
+    }
+
+    #[test]
+    fn personalized_pagerank_aggregates_path_multiplicity() {
+        // Diamond: S reaches D by two 2-hop paths (S→A→D, S→B→D); S reaches
+        // E by a single 2-hop path (S→C→E). D and E are the same hop distance,
+        // but D is corroborated by two paths and must score higher — the
+        // multi-path aggregation HippoRAG's PPR gives us and a per-hop
+        // geometric decay cannot.
+        let mut g = KnowledgeGraph::new();
+        let s = g.add_node(NodeKind::Concept, "S", 50);
+        let a = g.add_node(NodeKind::Concept, "A", 50);
+        let b = g.add_node(NodeKind::Concept, "B", 50);
+        let cc = g.add_node(NodeKind::Concept, "C", 50);
+        let d = g.add_node(NodeKind::Concept, "D", 50);
+        let e = g.add_node(NodeKind::Concept, "E", 50);
+        g.connect(&s, &a, EdgeKind::References);
+        g.connect(&s, &b, EdgeKind::References);
+        g.connect(&s, &cc, EdgeKind::References);
+        g.connect(&a, &d, EdgeKind::References);
+        g.connect(&b, &d, EdgeKind::References);
+        g.connect(&cc, &e, EdgeKind::References);
+
+        let ppr = g.personalized_pagerank(&[s], 0.85, 50);
+        assert!(
+            ppr[&d] > ppr[&e],
+            "two-path node D ({}) must beat one-path node E ({})",
+            ppr[&d],
+            ppr[&e]
+        );
     }
 
     #[test]

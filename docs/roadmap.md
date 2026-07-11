@@ -115,5 +115,10 @@ The center of gravity shifts from "OS" to "platform developers actually use":
 - **Graph Explorer** and **Runtime Monitor** GUIs — a first, functional cut
   (graph SVG view, runtime registry table) shipped early as part of the
   `ckos serve` dashboard (§902); a dedicated standalone app is still ahead.
+- **Zettelkasten-style evolving agent memory** (A-MEM, arXiv:2502.12110) —
+  atomic memory notes with dynamically-evolving links over the session/graph
+  layer (§896/§927). A research candidate: it would need a note-structure
+  redesign, so it is noted here rather than retrofitted onto the current
+  document/graph model.
 
 The aim: third parties can build AI applications on CKOS easily.
