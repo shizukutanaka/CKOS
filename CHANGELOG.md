@@ -57,6 +57,17 @@ platform).
   now pruned the moment it ages out, bounding memory by the window instead of
   by uptime. Diagnostic `tracked_nonces()` added so the bound is directly
   testable, not just inferred.
+- **`knowledge_bus::Reindexer` duplicated documents on re-index**: its own doc
+  comment promised that re-indexing an already-indexed graph node "replaces
+  its document rather than duplicating it," but `Document::new` mints a fresh
+  id on every call and nothing looked up the prior one — reproduced directly:
+  reinforcing then re-indexing the same node (an ordinary, repeated
+  occurrence) left two `graph_node` documents with identical `node_id`
+  metadata in the store. Beyond unbounded growth, this silently inflated that
+  node's own hybrid-search score, since `retrieval::fuse_rrf` merges
+  same-titled hits *across* source lists but not duplicate-titled entries
+  *within* one source's own list. Now reuses the existing document's id for
+  that node, if one is stored, so re-indexing genuinely replaces it.
 
 ### Added
 
@@ -93,7 +104,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-245 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+246 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening

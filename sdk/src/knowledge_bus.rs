@@ -10,7 +10,7 @@
 use ckos_graph::{EdgeKind, ExtractReport, KnowledgeGraph, NodeKind};
 use ckos_kernel::event::{Event, EventBus, InMemoryEventBus};
 use ckos_kernel::NodeId;
-use ckos_memory::{Document, Embedder, Storage};
+use ckos_memory::{Document, Embedder, Query, Storage};
 use std::sync::{Arc, Mutex};
 
 /// A graph paired with an event bus: mutations emit `GraphChanged` (§923).
@@ -145,6 +145,24 @@ impl<'a> Reindexer<'a> {
                 continue; // node was deleted before re-indexing
             };
             let mut doc = Document::new("graph_node", node.label.clone(), node.label.clone());
+            // `Document::new` always mints a fresh id; reuse the existing
+            // `graph_node` document's id for this node, if one is already
+            // stored, so writing actually replaces it in place. Without this,
+            // every reinforcement-then-reindex of the same node (a normal,
+            // repeated occurrence — see `KnowledgeBus::ingest_text`) piles up
+            // another duplicate document instead of updating the one that's
+            // there, silently breaking this doc comment's promise.
+            if let Ok(existing) = store.search(&Query {
+                doc_type: Some("graph_node".to_string()),
+                ..Default::default()
+            }) {
+                if let Some(prev) = existing
+                    .into_iter()
+                    .find(|d| d.metadata.get("node_id").map(String::as_str) == Some(id.as_str()))
+                {
+                    doc.id = prev.id;
+                }
+            }
             doc.confidence = node.confidence;
             doc.embedding = Some(self.embedder.embed(&node.label));
             doc.metadata.insert("node_id".to_string(), id.to_string());
@@ -230,6 +248,34 @@ mod tests {
         kb.add_node(NodeKind::Person, "Vaswani", 90);
         assert_eq!(q1.len(), 1);
         assert_eq!(q2.len(), 1);
+    }
+
+    #[test]
+    fn reindexing_the_same_node_again_replaces_its_document_not_duplicates_it() {
+        let mut kb = KnowledgeBus::new();
+        let queue = kb.subscribe_reindex();
+        let id = kb.add_node(NodeKind::Concept, "Transformer", 90);
+
+        let embedder = HashingEmbedder::new(64);
+        let mut store = InMemoryStore::new();
+        Reindexer::new(kb.graph(), &embedder).process(&queue, &mut store);
+
+        // Queue the same node for re-indexing again (e.g. its confidence
+        // changed after being reinforced) instead of a brand-new one.
+        queue.push(id.clone());
+        Reindexer::new(kb.graph(), &embedder).process(&queue, &mut store);
+
+        let docs = store
+            .search(&Query {
+                doc_type: Some("graph_node".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            docs.len(),
+            1,
+            "re-indexing the same node must replace its document, not duplicate it: {docs:?}"
+        );
     }
 
     #[test]
