@@ -41,6 +41,14 @@ platform).
   open/close counts but a `]` closing a `{` — passed as balanced. It now
   tracks a stack of the closing delimiter each opener expects, catching the
   bracket-type mismatch a depth counter can't see.
+- **`memory::summarize` (and therefore `compress_document`/`consolidate`/
+  `ckos gc --consolidate`) panicked on CJK text**: it cut the truncated window
+  at a byte index returned by `str::rfind`, but `。` (the CJK full stop the
+  function explicitly lists as a sentence terminator) is 3 bytes wide, so a
+  cut landing on it sliced a string mid-character and panicked. Reproduced
+  directly (not just under `cargo test`) before fixing; now indexes in chars
+  throughout, so a `。`-terminated sentence cuts as cleanly as a `.`-terminated
+  one instead of crashing the process.
 
 ### Added
 
@@ -77,7 +85,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-243 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+244 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening

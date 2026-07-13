@@ -127,17 +127,23 @@ pub fn collect(store: &mut dyn Storage, policy: &GcPolicy, now: Option<&str>) ->
 /// boundary, appending an ellipsis when truncated (§940).
 pub fn summarize(text: &str, max_chars: usize) -> String {
     let trimmed = text.trim();
-    if trimmed.chars().count() <= max_chars {
+    let chars: Vec<char> = trimmed.chars().collect();
+    if chars.len() <= max_chars {
         return trimmed.to_string();
     }
-    let head: String = trimmed.chars().take(max_chars).collect();
-    // Prefer the last sentence terminator within the window.
+    let head = &chars[..max_chars];
+    // Prefer the last sentence terminator within the window. Indexed in
+    // chars, not bytes: `。` (U+3002, the CJK full stop this deliberately
+    // supports) is 3 bytes wide, so a byte-index cut through the middle of
+    // it would panic on the non-char-boundary slice below.
     let cut = head
-        .rfind(['.', '!', '?', '。'])
+        .iter()
+        .rposition(|c| matches!(c, '.' | '!' | '?' | '。'))
         .map(|i| i + 1)
         .filter(|&i| i >= max_chars / 2)
         .unwrap_or(head.len());
-    let mut out = head[..cut].trim_end().to_string();
+    let collected: String = head[..cut].iter().collect();
+    let mut out = collected.trim_end().to_string();
     out.push('…');
     out
 }
@@ -264,6 +270,17 @@ mod tests {
         assert!(s.starts_with("First sentence here."));
         // Short text is returned unchanged.
         assert_eq!(summarize("short", 30), "short");
+    }
+
+    #[test]
+    fn summarize_does_not_panic_on_a_cjk_full_stop() {
+        // `。` (U+3002) is 3 bytes in UTF-8; a byte-index cut computed from
+        // `str::rfind` lands mid-character and panics on the slice below it.
+        // Indexing in chars throughout avoids that entirely.
+        let text = "这是一个句子。这是另一个句子用来填充长度直到超过上限的字数。";
+        let s = summarize(text, 8);
+        assert!(s.ends_with('…'));
+        assert!(text.starts_with(s.trim_end_matches('…')));
     }
 
     #[test]
