@@ -123,7 +123,7 @@ impl Check for NonEmptyCheck {
     }
 }
 
-/// A shallow JSON well-formedness check (balanced braces/brackets, no parser
+/// A shallow JSON well-formedness check (matched braces/brackets, no parser
 /// dependency) standing in for full schema conformance (§899).
 pub struct JsonBalanceCheck;
 
@@ -136,7 +136,11 @@ impl Check for JsonBalanceCheck {
         if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
             return Verdict::Skip; // not JSON-shaped
         }
-        let mut depth = 0i32;
+        // Stack of the closing delimiter each open bracket expects, so a
+        // closer must match the *type* of its opener — not just balance the
+        // aggregate count (`{"a": [1}]` and `[{]}` have equal open/close
+        // counts but mismatched types, and are not valid JSON).
+        let mut expected: Vec<char> = Vec::new();
         let mut in_string = false;
         let mut escaped = false;
         for ch in trimmed.chars() {
@@ -151,17 +155,17 @@ impl Check for JsonBalanceCheck {
             }
             match ch {
                 '"' => in_string = true,
-                '{' | '[' => depth += 1,
-                '}' | ']' => {
-                    depth -= 1;
-                    if depth < 0 {
-                        return Verdict::Fail("unbalanced closing delimiter".into());
-                    }
-                }
+                '{' => expected.push('}'),
+                '[' => expected.push(']'),
+                '}' | ']' => match expected.pop() {
+                    Some(want) if want == ch => {}
+                    Some(_) => return Verdict::Fail("mismatched closing delimiter".into()),
+                    None => return Verdict::Fail("unbalanced closing delimiter".into()),
+                },
                 _ => {}
             }
         }
-        if depth == 0 {
+        if expected.is_empty() {
             Verdict::Pass
         } else {
             Verdict::Fail("unbalanced delimiters".into())
@@ -502,6 +506,21 @@ mod tests {
         assert_eq!(report.failures()[0].0, "json_balance");
         // Non-JSON input is skipped, not failed.
         assert!(v.verify("plain text").passed());
+    }
+
+    #[test]
+    fn json_balance_rejects_mismatched_delimiter_types() {
+        // Equal open/close counts with the wrong closer type are not valid
+        // JSON — a bracket-counting check that only tracks aggregate depth
+        // would miss both of these.
+        let v = Verifier::new().with_check(Box::new(JsonBalanceCheck));
+        assert!(!v.verify(r#"{"a": [1}]"#).passed(), "']' closes '{{'");
+        assert!(
+            !v.verify("[{]}").passed(),
+            "']' closes '{{', '}}' closes '['"
+        );
+        // A correctly nested, mixed-type structure still passes.
+        assert!(v.verify(r#"{"a": [1, {"b": 2}]}"#).passed());
     }
 
     #[test]

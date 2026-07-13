@@ -25,6 +25,23 @@ platform).
   that. `graph::pagerank` was refactored onto a shared `pagerank_core`
   (uniform teleport = classic PageRank, verified behaviour-preserving).
 
+### Fixed
+
+- **CLI flags now consume every occurrence, last value wins**: `take_flag`/
+  `take_value_flag` used to stop at the first occurrence of a flag; a repeated
+  flag (`ckos history <dir> --k 3 --k 1 <query>`) leaked the later occurrence
+  into the positional args, silently corrupting the query text or, for a
+  repeated `--flag <dir>` pair, the session directory itself. Every command
+  built on these helpers (`plan`/`run`/`search`/`eval`/`gc`/`tool`/`workflow`/
+  `graph`/`serve`/`kql`/`history`) is affected; a repeated boolean flag is now
+  idempotent and a repeated value flag takes its last occurrence, the usual
+  CLI convention.
+- **`JsonBalanceCheck` rejects mismatched delimiter types**: the check tracked
+  a single aggregate depth counter, so `{"a": [1}]` and `[{]}` — equal
+  open/close counts but a `]` closing a `{` — passed as balanced. It now
+  tracks a stack of the closing delimiter each opener expects, catching the
+  bracket-type mismatch a depth counter can't see.
+
 ### Added
 
 - **`web` crate + `ckos serve`** (§902 API gateway, front-loaded from the v2.8
@@ -60,7 +77,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-235 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+243 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening
