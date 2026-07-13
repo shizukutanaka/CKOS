@@ -380,6 +380,60 @@ fn flags_work_in_any_position() {
 }
 
 #[test]
+fn repeated_boolean_flag_is_idempotent_not_leaked_into_positionals() {
+    // take_flag used to consume only the first occurrence of a flag; a second
+    // "--dot" would fall through into the positional args and get joined into
+    // the intent text itself, corrupting it. A repeated flag must behave
+    // exactly like a single one.
+    let once = ckos(&["plan", "--dot", "research X"]);
+    let twice = ckos(&["plan", "--dot", "--dot", "research X"]);
+    assert!(twice.status.success());
+    assert_eq!(stdout(&twice), stdout(&once));
+    assert!(!stdout(&twice).contains("--dot"));
+}
+
+#[test]
+fn repeated_value_flag_last_occurrence_wins() {
+    // take_value_flag used to consume only the first occurrence of a flag; a
+    // second "--k 1" would fall through into the positional args, becoming
+    // part of the search query instead of overriding k. The last occurrence
+    // should win, the usual CLI convention.
+    struct TempDir(PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("ckos-repeated-flag-{}-{n}", std::process::id()));
+    let _guard = TempDir(dir.clone());
+
+    for intent in ["the quokka eats bamboo", "the platypus swims upriver"] {
+        let run = ckos(&["run", "--session", dir.to_str().unwrap(), intent]);
+        assert!(run.status.success());
+    }
+
+    let out = ckos(&[
+        "history",
+        dir.to_str().unwrap(),
+        "--k",
+        "3",
+        "--k",
+        "1",
+        "quokka",
+    ]);
+    assert!(out.status.success());
+    let s = stdout(&out);
+    assert!(s.contains("recalled"), "expected a recall, got: {s}");
+    assert_eq!(
+        s.matches("] ").count(),
+        1,
+        "expected the last --k (1) to win, got: {s}"
+    );
+}
+
+#[test]
 fn per_command_help_is_shown() {
     for cmd in [
         "plan", "run", "graph", "kql", "search", "eval", "tool", "serve",

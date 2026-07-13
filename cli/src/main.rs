@@ -11,14 +11,16 @@ use std::process::ExitCode;
 /// Filename under a session directory holding the persisted knowledge graph.
 const GRAPH_FILE: &str = "graph.kg";
 
-/// Remove the first occurrence of a boolean flag `name` from `args`, returning
-/// whether it was present and the remaining positional args. Lets flags appear
-/// in any position, consistently across commands.
+/// Remove every occurrence of a boolean flag `name` from `args`, returning
+/// whether it was present at least once and the remaining positional args.
+/// Lets flags appear in any position (or repeated), consistently across
+/// commands — a repeated flag is idempotent rather than leaking a stray
+/// `name` token into the positional args of every command built on this.
 fn take_flag(args: &[String], name: &str) -> (bool, Vec<String>) {
     let mut present = false;
     let mut rest = Vec::with_capacity(args.len());
     for a in args {
-        if !present && a == name {
+        if a == name {
             present = true;
         } else {
             rest.push(a.clone());
@@ -27,9 +29,10 @@ fn take_flag(args: &[String], name: &str) -> (bool, Vec<String>) {
     (present, rest)
 }
 
-/// Remove the first `--flag <value>` pair from `args`, returning the value (if
-/// the flag was present) and the remaining positional args. Errors if the flag
-/// appears with no following value.
+/// Remove every `--flag <value>` pair from `args`, returning the last value
+/// (if the flag was present at least once, last occurrence wins — the usual
+/// CLI convention) and the remaining positional args. Errors if any
+/// occurrence of the flag has no following value.
 fn take_value_flag(
     args: &[String],
     name: &str,
@@ -38,7 +41,7 @@ fn take_value_flag(
     let mut rest = Vec::with_capacity(args.len());
     let mut i = 0;
     while i < args.len() {
-        if value.is_none() && args[i] == name {
+        if args[i] == name {
             match args.get(i + 1) {
                 Some(v) => {
                     value = Some(v.clone());
