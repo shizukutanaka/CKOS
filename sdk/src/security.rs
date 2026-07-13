@@ -5,7 +5,9 @@
 //! signature over the canonical message bytes. A [`ReplayGuard`] verifies the
 //! signature, rejects messages outside a freshness window, and rejects repeated
 //! nonces — covering the "message signing", "replay attack" and (via the audit
-//! log) "audit" items of §930.
+//! log) "audit" items of §930. Seen nonces are pruned once their timestamp
+//! ages out of the freshness window, so a long-running guard's memory stays
+//! bounded by the window rather than growing for the process lifetime.
 //!
 //! The signing primitive here is a keyed hash built from the dependency-free
 //! FNV-1a used elsewhere; it demonstrates the protocol but is **not**
@@ -15,7 +17,6 @@
 
 use crate::messaging::Message;
 use ckos_kernel::audit::content_hash;
-use std::collections::HashSet;
 
 /// Keyed signature over `data`. Deterministic; not cryptographically strong.
 pub fn sign(key: u64, data: &str) -> u64 {
@@ -99,11 +100,13 @@ pub enum SecurityError {
     Replayed,
 }
 
-/// Verifies envelopes against a shared key, a freshness window and seen nonces.
+/// Verifies envelopes against a shared key, a freshness window and seen
+/// nonces (nonce -> the timestamp it was sealed with, so aged-out entries can
+/// be pruned; see [`verify`](Self::verify)).
 pub struct ReplayGuard {
     key: u64,
     window_ms: u64,
-    seen: HashSet<u64>,
+    seen: std::collections::HashMap<u64, u64>,
 }
 
 impl ReplayGuard {
@@ -112,8 +115,15 @@ impl ReplayGuard {
         ReplayGuard {
             key,
             window_ms,
-            seen: HashSet::new(),
+            seen: std::collections::HashMap::new(),
         }
+    }
+
+    /// Nonces currently tracked for replay detection — a diagnostic seam
+    /// proving [`verify`](Self::verify) actually bounds this, not an API a
+    /// caller should branch on.
+    pub fn tracked_nonces(&self) -> usize {
+        self.seen.len()
     }
 
     /// Verify an envelope at time `now_ms`. On success the nonce is consumed so
@@ -129,9 +139,18 @@ impl ReplayGuard {
         if now_ms.abs_diff(envelope.timestamp_ms) > self.window_ms {
             return Err(SecurityError::Expired);
         }
-        if !self.seen.insert(envelope.nonce) {
+        // Drop nonces that have aged out of the freshness window: a replay
+        // carrying one of their timestamps would fail the `Expired` check
+        // above before ever reaching the nonce lookup, so remembering them
+        // any longer only grows unboundedly for no correctness benefit
+        // (assumes `now_ms` is non-decreasing across calls, the normal
+        // wall-clock case this guards against).
+        let window_ms = self.window_ms;
+        self.seen.retain(|_, ts| now_ms.abs_diff(*ts) <= window_ms);
+        if self.seen.contains_key(&envelope.nonce) {
             return Err(SecurityError::Replayed);
         }
+        self.seen.insert(envelope.nonce, envelope.timestamp_ms);
         Ok(())
     }
 }
@@ -179,5 +198,27 @@ mod tests {
         let env = signer.seal(msg(), 4, 10_000);
         // 2s later, window is 1s → expired.
         assert_eq!(guard.verify(&env, 12_001), Err(SecurityError::Expired));
+    }
+
+    #[test]
+    fn aged_out_nonces_are_pruned_not_retained_forever() {
+        // Before this fix, `seen` was a HashSet that never shrank — a
+        // long-running guard's memory grew for the process lifetime. A nonce
+        // whose timestamp has aged past the freshness window can never again
+        // affect a verdict (a replay carrying it would hit `Expired` first),
+        // so it must be evicted, keeping memory bounded by the window.
+        let signer = Signer::new(5);
+        let mut guard = ReplayGuard::new(5, 1000);
+        for n in 0..5 {
+            let env = signer.seal(msg(), n, 10_000);
+            assert_eq!(guard.verify(&env, 10_000), Ok(()));
+        }
+        assert_eq!(guard.tracked_nonces(), 5);
+
+        // Far enough past the window that all five have aged out; a sixth,
+        // fresh nonce triggers the prune inside verify().
+        let fresh = signer.seal(msg(), 99, 50_000);
+        assert_eq!(guard.verify(&fresh, 50_000), Ok(()));
+        assert_eq!(guard.tracked_nonces(), 1, "stale nonces should be pruned");
     }
 }

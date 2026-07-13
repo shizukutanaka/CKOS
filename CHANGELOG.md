@@ -49,6 +49,14 @@ platform).
   directly (not just under `cargo test`) before fixing; now indexes in chars
   throughout, so a `。`-terminated sentence cuts as cleanly as a `.`-terminated
   one instead of crashing the process.
+- **`security::ReplayGuard` tracked every seen nonce forever**: `seen` was a
+  `HashSet` with no eviction, so a long-running guard's memory grew for the
+  whole process lifetime (§930). A nonce whose timestamp has aged past the
+  freshness window can never again change a verdict — a replay carrying it
+  fails the `Expired` check before the nonce lookup is even reached — so it's
+  now pruned the moment it ages out, bounding memory by the window instead of
+  by uptime. Diagnostic `tracked_nonces()` added so the bound is directly
+  testable, not just inferred.
 
 ### Added
 
@@ -85,7 +93,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-244 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+245 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening
