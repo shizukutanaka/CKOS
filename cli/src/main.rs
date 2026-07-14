@@ -867,7 +867,21 @@ fn cmd_graph(rest: &[String]) -> ExitCode {
         }
     };
 
-    let mut graph = KnowledgeGraph::new();
+    // For a session, load any graph already persisted for it first so this
+    // extraction accumulates into it — matching `ckos run --session`'s
+    // behavior (see its own comment: "accumulating into any graph already
+    // saved so `ckos search` gains graph context"). Without this, a plain
+    // `ckos graph --session <dir>` silently overwrote graph.kg with a
+    // from-scratch extraction over only the session's *documents*, which
+    // discards any concepts `ckos run --session` had already added from
+    // intents/outputs never themselves persisted as documents.
+    let mut graph = match session_dir {
+        Some(dir) => GraphStore::load(Path::new(dir).join(GRAPH_FILE)).unwrap_or_else(|e| {
+            eprintln!("warning: could not load existing graph ({e}); starting fresh");
+            KnowledgeGraph::new()
+        }),
+        None => KnowledgeGraph::new(),
+    };
     // Tag concepts from a session build with a documents provenance (§947);
     // inline text has no durable source.
     let report = match session_dir {

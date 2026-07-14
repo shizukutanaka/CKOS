@@ -81,6 +81,19 @@ platform).
   fixing (both a single-task workflow and a two-step dependency chain, the
   latter proving a dependent task incorrectly dispatched). Now returns an
   error from that arm too, mirroring the runtime-error path exactly.
+- **`ckos graph --session <dir>` silently destroyed the session's persisted
+  graph instead of accumulating into it**: unlike `ckos run --session`
+  (which explicitly loads any existing `graph.kg` before extracting, "so
+  `ckos search` gains graph context"), `cmd_graph`'s session branch always
+  started from an empty graph, sourced text only from the session's stored
+  *documents*, and unconditionally overwrote `graph.kg`. Since `ckos run
+  --session` extracts concepts from the intent text and step outputs — text
+  that is never itself saved as a document — running `ckos graph --session`
+  afterward (an ordinary, documented workflow) wiped out everything the
+  prior runs had added, with no warning. Reproduced directly (two `ckos run
+  --session` calls each contributing a distinct concept, then confirming
+  `ckos graph --session` dropped one of them) before fixing; it now loads
+  any existing graph first and extracts into it, matching `run`'s behavior.
 
 ### Added
 
@@ -117,7 +130,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-248 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+249 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening

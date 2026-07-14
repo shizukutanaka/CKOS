@@ -197,6 +197,50 @@ fn graph_persists_to_session_and_search_uses_it() {
 }
 
 #[test]
+fn graph_session_accumulates_instead_of_overwriting_the_persisted_graph() {
+    // `ckos graph --session` used to always start from a fresh, empty graph
+    // and unconditionally overwrite graph.kg — silently destroying any
+    // concepts `ckos run --session` had already accumulated from intents/
+    // outputs that are never themselves persisted as session documents.
+    struct TempDir(PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::SeqCst);
+    let dir =
+        std::env::temp_dir().join(format!("ckos-graph-accumulate-{}-{n}", std::process::id()));
+    let _guard = TempDir(dir.clone());
+
+    // Two runs, each contributing a distinct concept to the session's graph
+    // purely from intent text that is never itself stored as a document.
+    for intent in [
+        "research Transformer Attention",
+        "learn about Vaswani Attention",
+    ] {
+        let run = ckos(&["run", "--session", dir.to_str().unwrap(), intent]);
+        assert!(run.status.success());
+    }
+    let before = std::fs::read_to_string(dir.join("graph.kg")).unwrap();
+    assert!(before.contains("Transformer Attention"));
+    assert!(before.contains("Vaswani Attention"));
+
+    // A plain `ckos graph --session <dir>` (the CLI's documented way to
+    // (re)build a session's graph) must accumulate, not replace: both
+    // concepts from the two runs above must still be present afterward.
+    let g = ckos(&["graph", "--session", dir.to_str().unwrap()]);
+    assert!(g.status.success());
+    let after = std::fs::read_to_string(dir.join("graph.kg")).unwrap();
+    assert!(
+        after.contains("Transformer Attention"),
+        "graph --session must not drop concepts from earlier runs: {after}"
+    );
+    assert!(after.contains("Vaswani Attention"));
+}
+
+#[test]
 fn eval_reports_correct_precision_and_recall() {
     struct TempDir(PathBuf);
     impl Drop for TempDir {
