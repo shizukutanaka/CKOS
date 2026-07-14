@@ -94,6 +94,17 @@ platform).
   --session` calls each contributing a distinct concept, then confirming
   `ckos graph --session` dropped one of them) before fixing; it now loads
   any existing graph first and extracts into it, matching `run`'s behavior.
+- **`GraphStore::save` wrote node/edge kind tokens unsanitized**: every other
+  free-form field it writes (id, date, provenance, label) is passed through
+  `sanitize()` to strip tab/newline before being placed in the tab-separated
+  file, but `NodeKind`/`EdgeKind`'s `Other(String)` variant — freely
+  constructible by any caller, e.g. extraction code building a kind from free
+  text — was written raw. A tab embedded in a custom kind shifted every later
+  field on reload: confidence silently became 0, the real confidence was
+  misread as the date, and the real provenance/label ran together. Reproduced
+  directly before fixing (`NodeKind::Other("foo\tbar")` came back with
+  `confidence: 0`, a bogus `date`, and a mangled label); the kind token is now
+  sanitized like every other field.
 
 ### Added
 
@@ -130,7 +141,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-249 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+250 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening

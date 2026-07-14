@@ -46,7 +46,7 @@ impl GraphStore {
             out.push_str(&format!(
                 "N\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 sanitize(n.id.as_str()),
-                n.kind.as_token(),
+                sanitize(&n.kind.as_token()),
                 n.confidence,
                 sanitize(n.date.as_deref().unwrap_or("")),
                 sanitize(n.provenance.as_deref().unwrap_or("")),
@@ -67,7 +67,7 @@ impl GraphStore {
                 "E\t{}\t{}\t{}\n",
                 sanitize(e.from.as_str()),
                 sanitize(e.to.as_str()),
-                e.kind.as_token(),
+                sanitize(&e.kind.as_token()),
             ));
         }
         // Atomic replace: write a sibling temp file, flush it, then rename
@@ -242,6 +242,32 @@ mod tests {
         };
         lines.sort_unstable();
         assert_eq!(lines, sorted);
+    }
+
+    #[test]
+    fn a_custom_kind_token_containing_a_tab_does_not_corrupt_the_file() {
+        // NodeKind::Other/EdgeKind::Other are freely constructible by any
+        // caller (e.g. extraction building a kind from free text); every
+        // other free-form field written by save() is sanitized, but the kind
+        // token wasn't, so a tab inside it shifted every later field on load.
+        let mut g = KnowledgeGraph::new();
+        let a = g.add_node(NodeKind::Other("foo\tbar".into()), "Widget", 77);
+        g.set_provenance(&a, "src1");
+        let b = g.add_node(NodeKind::Concept, "Other", 50);
+        g.connect(&a, &b, EdgeKind::Other("rel\tkind".into()));
+
+        let path = temp("tab-in-kind");
+        GraphStore::save(&path.0, &g).unwrap();
+        let loaded = GraphStore::load(&path.0).unwrap();
+
+        let node = loaded.node(&a).unwrap();
+        assert_eq!(node.label, "Widget");
+        assert_eq!(node.confidence, 77);
+        assert_eq!(node.provenance.as_deref(), Some("src1"));
+        assert_eq!(node.kind, NodeKind::Other("foo bar".into()));
+
+        let edge = loaded.edges().find(|e| e.from == a).unwrap();
+        assert_eq!(edge.kind, EdgeKind::Other("rel kind".into()));
     }
 
     #[test]
