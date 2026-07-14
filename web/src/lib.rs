@@ -262,6 +262,94 @@ mod tests {
     }
 
     #[test]
+    fn a_search_racing_a_concurrent_run_never_resurrects_stale_cache_data() {
+        // Regression: search()'s cache-check, compute, and cache-write used
+        // to be three separate lock acquisitions. If a `run` invalidated and
+        // mutated a session *while* a concurrent `search` was already past
+        // its own cache-miss check (already computing from the pre-run
+        // state), that search's now-stale result got written into the cache
+        // *after* the invalidation — resurrecting exactly the data `run`'s
+        // invalidation was meant to discard. `test_stall_before_cache_write`
+        // (compiled only in test builds) makes this race deterministic
+        // instead of timing-dependent.
+        struct TempDir(std::path::PathBuf);
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "ckos-web-race-{}-{}",
+            std::process::id(),
+            addr_seq()
+        ));
+        let _guard = TempDir(dir.clone());
+        let dir_str = dir.to_str().unwrap().to_string();
+
+        let addr = start_test_server();
+        let run = move |dir: &str, intent: &str| {
+            let body = format!("intent={intent}&session={dir}");
+            let req = format!(
+                "POST /api/run HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            raw_request(addr, &req)
+        };
+        let search = move |dir: &str, stall: bool| {
+            let flag = if stall {
+                "&test_stall_before_cache_write=1"
+            } else {
+                ""
+            };
+            raw_request(
+                addr,
+                &format!(
+                    "GET /api/search?session={dir}&q=Transformer{flag} HTTP/1.1\r\nHost: x\r\n\r\n"
+                ),
+            )
+        };
+
+        assert!(
+            run(&dir_str, "study+the+Transformer+paper").starts_with("HTTP/1.1 200 OK"),
+            "seed run failed"
+        );
+
+        // A stalled search: it computes its (pre-second-run) hits, then
+        // sleeps 300ms before deciding whether to cache them.
+        let stalled_dir = dir_str.clone();
+        let stalled = thread::spawn(move || search(&stalled_dir, true));
+
+        // Give the stalled search time to pass its own cache-miss check and
+        // finish computing — well inside the 300ms stall window.
+        thread::sleep(Duration::from_millis(50));
+
+        // A second, concurrent run mutates the same session — this must
+        // invalidate the cache such that the stalled search's now-stale
+        // result, written after this point, is never cached.
+        assert!(
+            run(&dir_str, "learn+about+Vaswani+Attention").starts_with("HTTP/1.1 200 OK"),
+            "concurrent run failed"
+        );
+
+        let stalled_resp = stalled.join().expect("stalled search thread panicked");
+        assert!(stalled_resp.starts_with("HTTP/1.1 200 OK"));
+        assert!(
+            stalled_resp.contains("\"cached\":false"),
+            "the stalled search itself computed fresh (uncached) results: {stalled_resp}"
+        );
+
+        // A third, plain search must not find a cached entry — if the race
+        // still existed, the stalled search's write (after the concurrent
+        // run's invalidation) would have resurrected a stale entry here.
+        let third = search(&dir_str, false);
+        assert!(
+            third.contains("\"cached\":false"),
+            "the invalidated-mid-computation search must not have cached a stale result: {third}"
+        );
+    }
+
+    #[test]
     fn unknown_route_is_404() {
         let addr = start_test_server();
         let resp = raw_request(addr, "GET /nope HTTP/1.1\r\nHost: x\r\n\r\n");

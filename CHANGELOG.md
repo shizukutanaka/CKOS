@@ -105,6 +105,19 @@ platform).
   directly before fixing (`NodeKind::Other("foo\tbar")` came back with
   `confidence: 0`, a bogus `date`, and a mangled label); the kind token is now
   sanitized like every other field.
+- **`ckos serve`'s `/api/search` cache could resurrect data a concurrent
+  `/api/run` had just invalidated**: the cache-miss check, the retrieval
+  computation, and the cache write were three separate lock acquisitions. A
+  `run` racing in between — invalidating the cache, then mutating the
+  session — could finish entirely while a `search` that started earlier was
+  still computing from the pre-run state; that search's now-stale result was
+  then written into the cache *after* the invalidation, undetected (still
+  reporting itself as freshly computed). Reproduced deterministically with a
+  test-only stall hook (compiled out of the real binary) before fixing.
+  `AppState` now tracks a mutation generation per session directory, bumped
+  by every invalidation; a search only writes to the cache if the generation
+  is unchanged from when it started, so a session mutated mid-computation
+  simply isn't cached rather than being cached wrong.
 
 ### Added
 
@@ -141,7 +154,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-250 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+251 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening

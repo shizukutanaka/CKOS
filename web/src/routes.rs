@@ -40,6 +40,15 @@ pub struct AppState {
     engine: Engine,
     /// One LRU cache per session directory, keyed by session path.
     caches: Mutex<HashMap<String, SearchCache>>,
+    /// A mutation counter per session directory, bumped whenever `run`
+    /// invalidates that session's cache (see [`Self::invalidate_cache`]).
+    /// `search` captures the generation before it starts computing and only
+    /// writes its result into the cache if the generation is still the same
+    /// when it finishes — closing a TOCTOU race where `run` invalidates and
+    /// mutates a session *while* a concurrent `search` is already past its
+    /// own cache-miss check, which would otherwise let that search's
+    /// now-stale result resurrect the entry `run` had just invalidated.
+    generations: Mutex<HashMap<String, u64>>,
 }
 
 impl AppState {
@@ -59,6 +68,7 @@ impl AppState {
         AppState {
             engine: Engine::new(runtimes, agents, verifier),
             caches: Mutex::new(HashMap::new()),
+            generations: Mutex::new(HashMap::new()),
         }
     }
 
@@ -68,6 +78,25 @@ impl AppState {
     /// in `ckos_kernel`).
     fn caches(&self) -> std::sync::MutexGuard<'_, HashMap<String, SearchCache>> {
         self.caches.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn generations(&self) -> std::sync::MutexGuard<'_, HashMap<String, u64>> {
+        self.generations.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Current mutation generation for a session directory (0 if it has
+    /// never been invalidated).
+    fn generation(&self, dir: &str) -> u64 {
+        self.generations().get(dir).copied().unwrap_or(0)
+    }
+
+    /// Evict a session's cached searches and bump its generation, so any
+    /// search already past its own cache-miss check for this session knows,
+    /// when it later checks, not to write its (possibly now stale) result
+    /// back in (see the field doc on `generations`).
+    fn invalidate_cache(&self, dir: &str) {
+        self.caches().remove(dir);
+        *self.generations().entry(dir.to_string()).or_insert(0) += 1;
     }
 }
 
@@ -216,8 +245,10 @@ fn run(state: &AppState, req: &Request) -> Response {
         // any cached search results for it are now stale (§958 cache —
         // see `search`'s cache_key doc). Evict before mutating, not after,
         // so a search racing this request never observes a half-updated
-        // cache entry.
-        state.caches().remove(dir);
+        // cache entry; bumping the generation here (not just evicting) also
+        // stops a search that started even earlier from writing a stale
+        // result back in after this point (see `AppState::generations`).
+        state.invalidate_cache(dir);
         match FileStore::open(dir) {
             Ok(store) => {
                 if store.skipped() > 0 {
@@ -370,6 +401,9 @@ fn search(state: &AppState, req: &Request) -> Response {
     let cache_key =
         format!("{synonyms}\u{1}{expand}\u{1}{diverse}\u{1}{k}\u{1}{lambda}\u{1}{raw_query}");
 
+    // Captured before the cache-miss check so it covers the entire window
+    // this computation takes — see `AppState::generations`.
+    let gen_before = state.generation(dir);
     if let Some(hits) = state.caches().get_mut(dir).and_then(|c| c.get(&cache_key)) {
         return search_response(&hits, 0, true);
     }
@@ -401,11 +435,24 @@ fn search(state: &AppState, req: &Request) -> Response {
         hits = mmr_rerank(&hits, lambda, k);
     }
 
-    state
-        .caches()
-        .entry(dir.to_string())
-        .or_insert_with(|| SearchCache::new(CACHE_CAPACITY_PER_SESSION))
-        .put(cache_key, hits.clone());
+    // Test-only fault injection (compiled out of the real binary entirely):
+    // lets a test hold this search open across a concurrent `run` so the
+    // invalidation race below is deterministic instead of timing-dependent.
+    #[cfg(test)]
+    if req.flag("test_stall_before_cache_write") {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+
+    // Only cache if nothing invalidated this session while we were computing
+    // — otherwise this result may already be stale, and writing it now would
+    // resurrect exactly what `run`'s invalidation was meant to discard.
+    if state.generation(dir) == gen_before {
+        state
+            .caches()
+            .entry(dir.to_string())
+            .or_insert_with(|| SearchCache::new(CACHE_CAPACITY_PER_SESSION))
+            .put(cache_key, hits.clone());
+    }
 
     search_response(&hits, skipped, false)
 }
