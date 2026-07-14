@@ -118,6 +118,21 @@ platform).
   by every invalidation; a search only writes to the cache if the generation
   is unchanged from when it started, so a session mutated mid-computation
   simply isn't cached rather than being cached wrong.
+- **KQL `RELATED` had two correctness bugs**, both in `execute()`'s neighbour
+  loop: (1) results were deduplicated by the *rendered* `NodeMatch` value
+  (label/kind/confidence/date/provenance), not by node identity, so two
+  distinct nodes sharing all of those (e.g. two different "Config"/"Utils"
+  concepts with no date or provenance set — a realistic knowledge-graph
+  shape) silently collapsed into one, dropping a genuine result; (2)
+  `RELATED <kind> VIA <edge>` and plain `RELATED <kind>` disagreed on whether
+  a node's own self-loop counts as "related to itself" — the VIA path
+  (`graph::neighbors_via`) included it, the non-VIA path (`graph::traverse`)
+  excluded it only as an incidental side effect of how it seeds its BFS
+  visited-set, not a deliberate choice — so toggling `VIA` alone changed the
+  result set for a graph shape (`connect` allows `from == to`) the module
+  never claims to treat specially. Both reproduced directly before fixing;
+  dedup is now by node id, and a self-loop is now excluded explicitly and
+  consistently regardless of which underlying primitive is used.
 
 ### Added
 
@@ -154,7 +169,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-251 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+253 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening

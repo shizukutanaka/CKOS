@@ -633,6 +633,11 @@ pub fn execute(query: &KqlQuery, graph: &KnowledgeGraph) -> KqlResult {
         .collect();
 
     let mut related = Vec::new();
+    // Dedup by node identity, not by the rendered NodeMatch value — two
+    // distinct nodes can share label/kind/confidence/date/provenance (e.g.
+    // two different "Config" or "README" concepts with neither a date nor
+    // provenance set), and deduping by value would silently drop one.
+    let mut related_ids: std::collections::HashSet<_> = std::collections::HashSet::new();
     if let Some(related_kind) = &query.related {
         // A `VIA <edge-kind>` qualifier restricts the hop to one relation type
         // (§941 typed edges); otherwise every outgoing edge is followed.
@@ -645,14 +650,21 @@ pub fn execute(query: &KqlQuery, graph: &KnowledgeGraph) -> KqlResult {
                 None => graph.traverse(&n.id, 1),
             };
             for neighbor in neighbors {
+                // A self-loop edge is not "related to itself" — excluded
+                // explicitly so `VIA <edge-kind>` (graph::neighbors_via) and
+                // plain `RELATED` (graph::traverse, which excludes the start
+                // node as an incidental side effect of seeding its BFS
+                // `visited` set with it) agree, instead of only one of the
+                // two underlying primitives happening to exclude it.
+                if neighbor.id == n.id {
+                    continue;
+                }
                 if (any_kind || kind_token(&neighbor.kind).eq_ignore_ascii_case(related_kind))
                     && passes_filters(neighbor, &query.filters)
                     && passes_temporal(neighbor, query)
+                    && related_ids.insert(neighbor.id.clone())
                 {
-                    let m = to_match(neighbor);
-                    if !related.contains(&m) {
-                        related.push(m);
-                    }
+                    related.push(to_match(neighbor));
                 }
             }
         }
@@ -745,6 +757,58 @@ mod tests {
         );
         assert_eq!(star.related.len(), 1);
         assert_eq!(star.related[0].label, "Scheduler");
+    }
+
+    #[test]
+    fn related_dedups_by_node_identity_not_by_rendered_value() {
+        // Two distinct nodes that happen to share label/kind/confidence (no
+        // date/provenance to tell them apart) — a real, plausible knowledge-
+        // graph situation (e.g. two different "Utils" or "Config" concepts).
+        // Deduping RELATED results by the rendered NodeMatch value collapses
+        // them into one, silently dropping a genuinely distinct node.
+        let mut g = KnowledgeGraph::new();
+        let root = g.add_node(NodeKind::Concept, "Root", 90);
+        let u1 = g.add_node(NodeKind::Concept, "Utils", 80);
+        let u2 = g.add_node(NodeKind::Concept, "Utils", 80);
+        assert_ne!(u1, u2, "the two Utils nodes must be genuinely distinct");
+        g.connect(&root, &u1, EdgeKind::References);
+        g.connect(&root, &u2, EdgeKind::References);
+
+        let result = execute(&parse("FIND Concept \"Root\" RELATED Concept").unwrap(), &g);
+        assert_eq!(
+            result.related.len(),
+            2,
+            "both distinct Utils nodes must survive, got {:?}",
+            result.related
+        );
+    }
+
+    #[test]
+    fn related_via_and_plain_related_agree_on_self_loops() {
+        // `RELATED <kind> VIA <edge>` (graph::neighbors_via) and plain
+        // `RELATED <kind>` (graph::traverse, which excludes the start node by
+        // seeding its BFS `visited` set with it) used to disagree on whether
+        // a node's own self-loop counts as "related to itself": neighbors_via
+        // has no such exclusion, so only the VIA path returned the query
+        // subject as its own result. Self-loops are a legal graph shape
+        // (`connect` has no from == to guard), so both paths must behave the
+        // same way for one.
+        let mut g = KnowledgeGraph::new();
+        let a = g.add_node(NodeKind::Concept, "Self", 90);
+        g.connect(&a, &a, EdgeKind::DependsOn);
+
+        let no_via = execute(&parse("FIND Concept \"Self\" RELATED Concept").unwrap(), &g);
+        let via = execute(
+            &parse("FIND Concept \"Self\" RELATED Concept VIA DependsOn").unwrap(),
+            &g,
+        );
+        assert_eq!(
+            no_via.related.len(),
+            via.related.len(),
+            "VIA and non-VIA must agree on a self-loop: no_via={:?} via={:?}",
+            no_via.related,
+            via.related
+        );
     }
 
     #[test]
