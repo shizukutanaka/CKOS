@@ -335,11 +335,21 @@ impl Engine {
             match self.execute(&mut task) {
                 Ok(result) => {
                     // Verification failure is retryable; once the budget is
-                    // spent the failed result is reported as-is.
-                    if result.state == TaskState::Failed
-                        && self.requeue(&mut scheduler, &mut task)?
-                    {
-                        continue;
+                    // spent, propagate it instead of reporting the Failed
+                    // result as if the workflow finished normally — mirrors
+                    // the Err(e) arm below. Without this, a permanently
+                    // failed task's id still reached `mark_completed`,
+                    // incorrectly unblocking any dependent that requires it
+                    // Completed, and WorkflowCompleted still fired for a
+                    // workflow that never actually finished.
+                    if result.state == TaskState::Failed {
+                        if self.requeue(&mut scheduler, &mut task)? {
+                            continue;
+                        }
+                        return Err(KernelError::other(format!(
+                            "task {} ({}) exhausted its retry budget after failing verification",
+                            result.task, result.capability
+                        )));
                     }
                     scheduler.mark_completed(task.id.clone());
                     results.push(result);
@@ -730,6 +740,87 @@ mod tests {
         // 1 initial attempt + MAX_TASK_RETRIES retries, each audited — the
         // loop is bounded, not infinite.
         assert_eq!(engine.audit().error_count(), 1 + MAX_TASK_RETRIES as usize);
+    }
+
+    /// A check that always fails, so a task's output can never pass
+    /// verification no matter how many times it's retried — the
+    /// verification-failure counterpart to `FlakyRuntime`'s runtime-error
+    /// exhaustion above.
+    struct AlwaysFailCheck;
+    impl ckos_verifier::Check for AlwaysFailCheck {
+        fn name(&self) -> &str {
+            "always_fail"
+        }
+        fn evaluate(&self, _output: &str) -> ckos_verifier::Verdict {
+            ckos_verifier::Verdict::Fail("never passes".into())
+        }
+    }
+
+    #[test]
+    fn exhausted_verification_failure_is_propagated_not_reported_as_completed() {
+        // A runtime that always succeeds, paired with a verifier that never
+        // passes: retries exhaust via the Ok(result)/verification-failure
+        // arm, not the Err(e)/runtime-error arm `deterministic_failure_...`
+        // above already covers. Before the fix, this arm silently fell
+        // through to `mark_completed` + `results.push`, indistinguishable
+        // from genuine success.
+        let mut runtimes = RuntimeRegistry::new();
+        runtimes.register(Box::new(EchoRuntime::new(vec![Capability::Reasoning])));
+        let engine = Engine::new(
+            runtimes,
+            CapabilityRegistry::new(),
+            Verifier::new().with_check(Box::new(AlwaysFailCheck)),
+        );
+
+        let completed = Arc::new(AtomicUsize::new(0));
+        let c = Arc::clone(&completed);
+        engine.bus().subscribe(Arc::new(move |e: &Event| {
+            if matches!(e, Event::WorkflowCompleted(_)) {
+                c.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+
+        let dag = HeuristicPlanner::new().plan("say hello");
+        let err = engine.run_workflow(&dag).unwrap_err();
+        assert!(err.to_string().contains("exhausted its retry budget"));
+        // A workflow that never actually finished must never publish
+        // WorkflowCompleted.
+        assert_eq!(completed.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_task_that_exhausts_verification_never_unblocks_its_dependents() {
+        // Two-step chain b <- a, both served by an always-succeeding runtime
+        // but an always-failing verifier: `a` exhausts its retry budget, and
+        // `b` (which depends on `a` reaching a genuine Completed state) must
+        // never dispatch. Before the fix, `mark_completed` ran for `a`
+        // regardless of its real Failed state, so `b` ran anyway.
+        let mut runtimes = RuntimeRegistry::new();
+        runtimes.register(Box::new(EchoRuntime::new(vec![
+            Capability::Reasoning,
+            Capability::Coding,
+        ])));
+        let engine = Engine::new(
+            runtimes,
+            CapabilityRegistry::new(),
+            Verifier::new().with_check(Box::new(AlwaysFailCheck)),
+        );
+
+        let mut dag = Dag::new("chain");
+        let a = dag.add_step(Task::new("a", Capability::Reasoning), &[]);
+        dag.add_step(Task::new("b", Capability::Coding), &[a]);
+
+        let err = engine.run_workflow(&dag).unwrap_err();
+        assert!(err.to_string().contains("exhausted its retry budget"));
+        // `b` must never have been dispatched: `run_workflow` returns before
+        // the dispatch loop can reach it, so the audit log — one record per
+        // execute() attempt — must contain only `a`'s exhausted attempts
+        // (1 initial + MAX_TASK_RETRIES retries), never one for `b`.
+        assert_eq!(
+            engine.audit().snapshot().len(),
+            1 + MAX_TASK_RETRIES as usize,
+            "only `a`'s attempts should be audited; `b` must never dispatch"
+        );
     }
 
     #[test]

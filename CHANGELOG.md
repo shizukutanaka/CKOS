@@ -68,6 +68,19 @@ platform).
   same-titled hits *across* source lists but not duplicate-titled entries
   *within* one source's own list. Now reuses the existing document's id for
   that node, if one is stored, so re-indexing genuinely replaces it.
+- **`Engine::run_workflow` reported a permanently-failed task as if the
+  workflow had succeeded**: once a task's output kept failing *verification*
+  across every retry, the dispatch loop's `Ok(result)` arm fell through to
+  `scheduler.mark_completed` and pushed the `Failed` result exactly like a
+  genuine success — unlike the parallel `Err(e)` arm (a runtime error
+  exhausting retries), which already propagated an error correctly. This
+  silently unblocked any dependent task gated on that task reaching a real
+  `Completed` state, and still published `WorkflowCompleted` for a workflow
+  that never actually finished — contradicting the function's own doc
+  comment. Reproduced directly with an always-failing verifier check before
+  fixing (both a single-task workflow and a two-step dependency chain, the
+  latter proving a dependent task incorrectly dispatched). Now returns an
+  error from that arm too, mirroring the runtime-error path exactly.
 
 ### Added
 
@@ -104,7 +117,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-246 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+248 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening
