@@ -1041,6 +1041,10 @@ fn cmd_gc(rest: &[String]) -> ExitCode {
 }
 
 fn cmd_verify(rest: &[String]) -> ExitCode {
+    if wants_help(rest) {
+        println!("usage: ckos verify <text…>\n  Run the built-in §899 check set (non-empty, repetition, arithmetic, JSON balance, citations, security policy) against text.");
+        return ExitCode::SUCCESS;
+    }
     if rest.is_empty() {
         eprintln!("error: `verify` needs text, e.g. `ckos verify 'see [1]'`");
         return ExitCode::FAILURE;

@@ -133,6 +133,10 @@ platform).
   never claims to treat specially. Both reproduced directly before fixing;
   dedup is now by node id, and a self-loop is now excluded explicitly and
   consistently regardless of which underlying primitive is used.
+- **`ckos verify -h`/`--help` ran the verifier over the literal text "-h"**:
+  every other subcommand checks `wants_help` first; `cmd_verify` was the one
+  handler that didn't, so `-h`/`--help` were treated as ordinary input to
+  verify (both trivially pass every check) instead of printing usage.
 
 ### Added
 

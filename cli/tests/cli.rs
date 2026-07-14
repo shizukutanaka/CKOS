@@ -480,7 +480,7 @@ fn repeated_value_flag_last_occurrence_wins() {
 #[test]
 fn per_command_help_is_shown() {
     for cmd in [
-        "plan", "run", "graph", "kql", "search", "eval", "tool", "serve",
+        "plan", "run", "graph", "kql", "search", "eval", "tool", "serve", "verify",
     ] {
         let out = ckos(&[cmd, "--help"]);
         assert!(out.status.success(), "{cmd} --help should succeed");
