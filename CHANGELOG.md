@@ -137,6 +137,17 @@ platform).
   every other subcommand checks `wants_help` first; `cmd_verify` was the one
   handler that didn't, so `-h`/`--help` were treated as ordinary input to
   verify (both trivially pass every check) instead of printing usage.
+- **`FileStore` corrupted two classes of metadata key on reload**, both in the
+  `key: value` header codec (`Document.metadata` is a public map, and the
+  module documents round-trip safety for "every `meta.*` key"): (1) a key
+  containing the `": "` delimiter (e.g. `"ratio: a:b"`) made `deserialize`'s
+  `split_once(": ")` cut inside the key, truncating it and prepending its tail
+  to the value — keys now escape `:` as `\c`, leaving no bare colon in the
+  on-disk key; (2) a key that itself begins with `meta.` (stored on disk as
+  `meta.meta.x`) was decoded with `trim_start_matches("meta.")`, which strips
+  the prefix *repeatedly* and yielded `x` instead of `meta.x` — now
+  `strip_prefix`, which removes exactly one. Both reproduced directly before
+  fixing; value escaping (and human-readable colons in values) is unchanged.
 
 ### Added
 
@@ -173,7 +184,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-253 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+255 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening

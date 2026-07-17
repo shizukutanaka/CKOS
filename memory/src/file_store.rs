@@ -22,8 +22,12 @@
 //! (§937) is not guaranteed to be newline-free, and an unescaped title or
 //! metadata value containing a blank line would otherwise be split at the
 //! wrong point, silently shifting real headers (confidence, embedding, other
-//! metadata) into the body on the next load. The **body** itself is never
-//! escaped: it always follows the first unescaped blank line, unambiguously.
+//! metadata) into the body on the next load. Metadata **keys** additionally
+//! escape `:` (as `\c`), so a key containing the `": "` header delimiter
+//! round-trips instead of being mis-split; the `meta.` prefix is likewise
+//! stripped exactly once on read, so a key that itself begins with `meta.`
+//! survives. The **body** itself is never escaped: it always follows the first
+//! unescaped blank line, unambiguously.
 //!
 //! The store keeps an in-memory index and writes through to disk, so reads and
 //! searches stay fast while every mutation is durable.
@@ -184,9 +188,34 @@ fn escape_header(value: &str) -> String {
     out
 }
 
-/// Reverse [`escape_header`]. An unrecognised escape (a lone trailing
-/// backslash, or `\` followed by anything else) is kept literally rather than
-/// dropped, so still-valid-looking-but-foreign content never vanishes.
+/// Escape a metadata **key** for the left side of a `key: value` header line.
+/// Beyond what [`escape_header`] does, this also escapes `:` (as `\c`), so a
+/// key containing the `": "` delimiter — legal in the public
+/// `Document.metadata` map — can't make [`deserialize`]'s `split_once(": ")`
+/// cut inside the key and shift its tail into the value. `\c` leaves no bare
+/// colon in the on-disk key at all, so the first `": "` on the line is always
+/// the real delimiter. Values keep bare colons (readable, and unambiguous
+/// since everything after the first delimiter is the value).
+fn escape_meta_key(key: &str) -> String {
+    let mut out = String::with_capacity(key.len());
+    for c in key.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            ':' => out.push_str("\\c"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Reverse [`escape_header`] / [`escape_meta_key`]. An unrecognised escape (a
+/// lone trailing backslash, or `\` followed by anything else) is kept literally
+/// rather than dropped, so still-valid-looking-but-foreign content never
+/// vanishes. `\c` (colon, only ever produced for keys) decodes back to `:`;
+/// a bare `\c` never appears in a value on disk, since a literal backslash in a
+/// value is written doubled (`\\`), so this rule can't corrupt a value.
 fn unescape_header(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     let mut chars = value.chars();
@@ -198,6 +227,7 @@ fn unescape_header(value: &str) -> String {
         match chars.next() {
             Some('n') => out.push('\n'),
             Some('r') => out.push('\r'),
+            Some('c') => out.push(':'),
             Some('\\') => out.push('\\'),
             Some(other) => {
                 out.push('\\');
@@ -228,7 +258,7 @@ fn serialize(doc: &Document) -> String {
         s.push_str(&format!("embedding: {}\n", joined.join(",")));
     }
     for (k, v) in &doc.metadata {
-        s.push_str(&header_line(&format!("meta.{}", escape_header(k)), v));
+        s.push_str(&header_line(&format!("meta.{}", escape_meta_key(k)), v));
     }
     s.push('\n'); // header/body separator
     s.push_str(&doc.body);
@@ -267,11 +297,17 @@ fn deserialize(id: DocumentId, content: &str) -> Document {
                     .collect();
                 doc.embedding = parsed.ok();
             }
-            k if k.starts_with("meta.") => {
-                let meta_key = unescape_header(k.trim_start_matches("meta."));
-                doc.metadata.insert(meta_key, unescape_header(value));
+            k => {
+                // `strip_prefix` removes exactly one `meta.`, unlike
+                // `trim_start_matches`, which strips it repeatedly and would
+                // mangle a key that itself starts with `meta.` (e.g. the
+                // on-disk `meta.meta.x` must decode to key `meta.x`, not `x`).
+                if let Some(raw_key) = k.strip_prefix("meta.") {
+                    doc.metadata
+                        .insert(unescape_header(raw_key), unescape_header(value));
+                }
+                // Any other unknown header is ignored (forward compatibility).
             }
-            _ => {}
         }
     }
     doc
@@ -419,6 +455,55 @@ mod tests {
     }
 
     #[test]
+    fn metadata_key_containing_the_delimiter_round_trips() {
+        // A metadata key containing ": " (the header delimiter) must survive a
+        // write/reload cycle. `Document.metadata` is a public `HashMap<String,
+        // String>`, and the module doc promises round-trip safety for "every
+        // meta.* key" — but a bare ": " inside the key used to make
+        // `deserialize`'s `split_once(": ")` cut in the wrong place, truncating
+        // the key and prepending its tail to the value.
+        let tmp = TempDir::new();
+        let mut store = FileStore::open(&tmp.0).unwrap();
+        let mut doc = Document::new("note", "t", "body");
+        doc.metadata.insert("ratio: a:b".into(), "v1".into());
+        let id = doc.id.clone();
+        store.write(doc).unwrap();
+
+        let reopened = FileStore::open(&tmp.0).unwrap();
+        let got = reopened.read(&id).unwrap().unwrap();
+        assert_eq!(
+            got.metadata.get("ratio: a:b").map(String::as_str),
+            Some("v1"),
+            "metadata key with an embedded delimiter must round-trip: {:?}",
+            got.metadata
+        );
+    }
+
+    #[test]
+    fn metadata_key_starting_with_the_meta_prefix_round_trips() {
+        // On disk a metadata key `k` is stored as `meta.<k>`, so a key that
+        // itself starts with `meta.` lands as `meta.meta.x`. The parser used
+        // `trim_start_matches("meta.")`, which strips the prefix *repeatedly*
+        // and decoded that back to `x` instead of `meta.x`. `strip_prefix`
+        // removes exactly one.
+        let tmp = TempDir::new();
+        let mut store = FileStore::open(&tmp.0).unwrap();
+        let mut doc = Document::new("note", "t", "body");
+        doc.metadata.insert("meta.x".into(), "v1".into());
+        let id = doc.id.clone();
+        store.write(doc).unwrap();
+
+        let reopened = FileStore::open(&tmp.0).unwrap();
+        let got = reopened.read(&id).unwrap().unwrap();
+        assert_eq!(
+            got.metadata.get("meta.x").map(String::as_str),
+            Some("v1"),
+            "a metadata key starting with `meta.` must round-trip: {:?}",
+            got.metadata
+        );
+    }
+
+    #[test]
     fn writes_are_atomic_and_leave_no_temp_residue() {
         let tmp = TempDir::new();
         let mut store = FileStore::open(&tmp.0).unwrap();
@@ -489,6 +574,11 @@ mod tests {
             "new\nline",
             "carriage\rreturn",
             "mixed\\\n\r weird \\n \\\\ end",
+            // A colon is left bare in values (readable, unambiguous) and must
+            // still round-trip; a literal backslash-c must survive the new
+            // `\c` unescape rule, since the backslash is written doubled.
+            "ratio 3:1",
+            "literal \\c sequence",
         ] {
             assert_eq!(unescape_header(&escape_header(s)), s, "round-trip: {s:?}");
         }
