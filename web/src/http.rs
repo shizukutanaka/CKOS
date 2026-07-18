@@ -113,11 +113,23 @@ pub fn parse(stream: &mut TcpStream) -> io::Result<Option<Request>> {
     let mut budget = MAX_REQUEST_BYTES;
 
     let mut request_line = String::new();
-    let n = reader.read_line(&mut request_line)?;
+    // Cap the read at the remaining budget: `read_line` on its own buffers an
+    // entire line before returning, so a single line with no terminator would
+    // exhaust memory *before* any size check. Bounding each read makes the
+    // documented per-request cap actually cover the request line and headers,
+    // not just the body.
+    let n = (&mut reader)
+        .take(budget as u64)
+        .read_line(&mut request_line)?;
     if n == 0 {
         return Ok(None);
     }
-    budget = budget.saturating_sub(n);
+    if !request_line.ends_with('\n') {
+        // Reached the cap without a line terminator → over budget ("too
+        // large" maps to a 413 in handle_connection).
+        return Err(io::Error::other("request line too large"));
+    }
+    budget -= n;
 
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or("").to_string();
@@ -127,14 +139,20 @@ pub fn parse(stream: &mut TcpStream) -> io::Result<Option<Request>> {
 
     let mut content_length = 0usize;
     loop {
+        if budget == 0 {
+            // Headers consumed the whole budget without the terminating blank
+            // line — reject rather than read further unbounded.
+            return Err(io::Error::other("request headers too large"));
+        }
         let mut line = String::new();
-        let n = reader.read_line(&mut line)?;
+        let n = (&mut reader).take(budget as u64).read_line(&mut line)?;
         if n == 0 {
             break; // client closed mid-headers
         }
-        budget = budget.saturating_sub(n);
-        if budget == 0 {
-            return Err(io::Error::other("request too large"));
+        budget -= n;
+        if !line.ends_with('\n') {
+            // Hit the cap mid-line → over budget (413).
+            return Err(io::Error::other("request headers too large"));
         }
         let line = line.trim_end();
         if line.is_empty() {
@@ -329,6 +347,47 @@ mod tests {
         assert!(
             !resp.contains("\"error\":null"),
             "must carry a real error body"
+        );
+    }
+
+    #[test]
+    fn an_unterminated_oversized_line_is_bounded_and_rejected() {
+        // Regression: `read_line` buffers a whole line before returning, so a
+        // single line with no terminator used to allocate unbounded memory
+        // before any size check — defeating the per-request cap the module doc
+        // promises covers the request line and headers. Each line read is now
+        // capped at the remaining budget. Targeting the *request line* also
+        // proves the behavior change: the old code buffered it in full and
+        // then handled a garbage request (a 404), whereas the cap now rejects
+        // it outright as 413 the moment `budget` bytes arrive without a
+        // terminator — no need to even close the connection.
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            handle_connection(stream, &|_req| Response::json(Json::Bool(true)));
+        });
+
+        let mut stream = TcpStream::connect(addr).unwrap();
+        // An unterminated request line larger than the cap (no CRLF at all).
+        let chunk = "A".repeat(64 * 1024);
+        let mut sent = 0usize;
+        while sent < MAX_REQUEST_BYTES + 64 * 1024 {
+            // Once the server hits its cap it responds and closes, so a peer
+            // write may fail partway — exactly the bounded behavior we want.
+            if stream.write_all(chunk.as_bytes()).is_err() {
+                break;
+            }
+            sent += chunk.len();
+        }
+        let _ = stream.flush();
+
+        let mut resp = String::new();
+        let _ = stream.read_to_string(&mut resp);
+        assert!(
+            resp.starts_with("HTTP/1.1 413"),
+            "an oversized unterminated request line must be rejected as 413, got: {resp:?}"
         );
     }
 }

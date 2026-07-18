@@ -157,6 +157,16 @@ platform).
   helpers the keyword path uses), so `"art"` no longer matches `"Bart"` while
   every genuine whole-token match still lands. Reproduced directly before
   fixing; the now-unused substring helper was removed.
+- **`ckos serve`'s request-size cap didn't bound the request line or headers**
+  (§902): `http::parse` read the request line and each header with
+  `read_line`, which buffers a whole line before returning — so a single line
+  with no terminator allocated unbounded memory *before* any size check, even
+  though the module documents the per-request cap as a memory-exhaustion
+  guard covering "request line + headers + body". Each line read is now capped
+  at the remaining budget (`take(budget)`), and a line that hits the cap
+  without a terminator is rejected as `413`. Reproduced with a test that
+  hangs to the read timeout under the old code (unbounded buffering) and is
+  rejected immediately under the fix.
 
 ### Added
 
@@ -193,7 +203,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-256 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+257 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening
