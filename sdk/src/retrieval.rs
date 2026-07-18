@@ -141,10 +141,6 @@ pub fn expand_query(query: &str, feedback: &[String], max_terms: usize) -> Strin
     }
 }
 
-fn count_matches(haystack: &str, term: &str) -> usize {
-    haystack.matches(term).count()
-}
-
 /// BM25 saturation parameters (standard defaults).
 const BM25_K1: f32 = 1.5;
 const BM25_B: f32 = 0.75;
@@ -492,8 +488,12 @@ impl<'a> Retriever<'a> {
         let mut seeds: Vec<ckos_kernel::NodeId> = Vec::new();
         let mut min_direct = f32::INFINITY;
         for node in self.graph.nodes() {
-            let label = node.label.to_lowercase();
-            let matches: usize = terms.iter().map(|t| count_matches(&label, t)).sum();
+            // Match query terms against whole label tokens, exactly like
+            // `keyword_hits` matches document tokens — not as bare substrings,
+            // which would let "art" match "Bart" or short terms match almost
+            // anything, fusing false hits into the results.
+            let label_tokens = tokens(&node.label);
+            let matches: usize = terms.iter().map(|t| tf(&label_tokens, t)).sum();
             if matches == 0 {
                 continue;
             }
@@ -819,6 +819,29 @@ mod tests {
         let core_pos = hits.iter().position(|h| h.title == "Core node").unwrap();
         let leaf_pos = hits.iter().position(|h| h.title == "Leaf node").unwrap();
         assert!(core_pos < leaf_pos, "central node should rank first");
+    }
+
+    #[test]
+    fn graph_label_match_is_token_exact_not_a_substring() {
+        // A query term must match a node label token-for-token, like keyword
+        // search does — not as a bare substring. Otherwise "art" spuriously
+        // matches the unrelated node "Bart" (and short terms like "in"/"os"
+        // match almost everything), producing false graph hits fused into the
+        // results.
+        let store = InMemoryStore::new();
+        let mut graph = KnowledgeGraph::new();
+        graph.add_node(NodeKind::Person, "Bart", 100);
+        let r = Retriever::new(&store, &graph);
+
+        assert!(
+            !r.search("art", 10).iter().any(|h| h.title == "Bart"),
+            "query 'art' must not match unrelated node 'Bart' via substring"
+        );
+        // The exact token still matches, so genuine graph hits are unaffected.
+        assert!(
+            r.search("Bart", 10).iter().any(|h| h.title == "Bart"),
+            "an exact-token query must still match its node"
+        );
     }
 
     #[test]

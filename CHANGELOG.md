@@ -148,6 +148,15 @@ platform).
   the prefix *repeatedly* and yielded `x` instead of `meta.x` — now
   `strip_prefix`, which removes exactly one. Both reproduced directly before
   fixing; value escaping (and human-readable colons in values) is unchanged.
+- **Graph search matched query terms as bare substrings of node labels**
+  (§951): `retrieval::graph_hits` scored a node whenever a query term appeared
+  anywhere inside its label, so `"art"` matched an unrelated node `"Bart"` and
+  short terms like `"in"`/`"os"` matched almost everything — false graph hits
+  then fused into the results, inconsistent with `keyword_hits`, which matches
+  whole tokens. Graph label matching is now token-exact (same `tokens`/`tf`
+  helpers the keyword path uses), so `"art"` no longer matches `"Bart"` while
+  every genuine whole-token match still lands. Reproduced directly before
+  fixing; the now-unused substring helper was removed.
 
 ### Added
 
@@ -184,7 +193,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-255 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+256 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening
