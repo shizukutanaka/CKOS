@@ -292,6 +292,19 @@ fn skip_spaces(bytes: &[u8], mut i: usize) -> usize {
     i
 }
 
+/// Whether the byte after skipping spaces from `i` is an arithmetic operator
+/// immediately followed (spaces allowed) by a digit — i.e. an expression
+/// continues here. Used to detect fragments of a larger expression that must
+/// not be judged in isolation.
+fn continues_with_operator(bytes: &[u8], i: usize) -> bool {
+    let j = skip_spaces(bytes, i);
+    if !matches!(bytes.get(j), Some(b'+' | b'-' | b'*' | b'/')) {
+        return false;
+    }
+    let k = skip_spaces(bytes, j + 1);
+    bytes.get(k).is_some_and(u8::is_ascii_digit)
+}
+
 /// Try to match an `A op B = C` equation at byte offset `i`. Returns
 /// `(correct, rendered)` or `None` if no (evaluable) equation starts here.
 fn match_equation(bytes: &[u8], i: usize) -> Option<(bool, String)> {
@@ -313,7 +326,14 @@ fn match_equation(bytes: &[u8], i: usize) -> Option<(bool, String)> {
     } else {
         (false, i)
     };
-    let (c_abs, _) = parse_operand(bytes, i)?;
+    let (c_abs, c_end) = parse_operand(bytes, i)?;
+    // The result itself continues into another operator+operand (e.g.
+    // `= 5 - 1`): the equation isn't `A op B = C` in isolation, so it can't
+    // be judged whole — skip it rather than risk a false positive. A prose
+    // hyphen (`= 5 - obviously`) has no following digit and still evaluates.
+    if continues_with_operator(bytes, c_end) {
+        return None;
+    }
     let c = if neg { -c_abs } else { c_abs };
     let expected = match op {
         b'+' => a.checked_add(b)?,
@@ -336,7 +356,20 @@ impl Check for ArithmeticCheck {
         while i < bytes.len() {
             // Only attempt at a digit that begins a token (not mid-identifier).
             let boundary = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
-            if bytes[i].is_ascii_digit() && boundary {
+            // …and not one that is really the right-hand term of a larger
+            // expression: a digit preceded (spaces allowed) by an arithmetic
+            // operator is a fragment. Evaluating it alone produces false
+            // positives — a unary-minus operand (`-5 + 3 = -2`) read as
+            // `5 + 3 = -2`, or a precedence term (`1 + 2 * 3 = 7`) read as
+            // `2 * 3 = 7` — so it is not an equation start.
+            let fragment = {
+                let mut j = i;
+                while j > 0 && matches!(bytes[j - 1], b' ' | b'\t') {
+                    j -= 1;
+                }
+                j > 0 && matches!(bytes[j - 1], b'+' | b'-' | b'*' | b'/')
+            };
+            if bytes[i].is_ascii_digit() && boundary && !fragment {
                 if let Some((correct, rendered)) = match_equation(bytes, i) {
                     found = true;
                     if !correct {
@@ -589,6 +622,29 @@ mod tests {
         assert!(v.verify("Released on 2024-01-01, version 2.5.").passed());
         // Non-exact division is ignored, not failed.
         assert!(v.verify("7 / 2 = 3").passed());
+    }
+
+    #[test]
+    fn fragments_of_larger_expressions_do_not_cause_false_positives() {
+        // Regression: an operand that is really a term of a larger expression
+        // used to be evaluated as its own equation and reject correct output:
+        // - negative first operand: "-5 + 3 = -2" was read as "5 + 3 = -2";
+        // - operator precedence: "1 + 2 * 3 = 7" (correct) — the fragment
+        //   "2 * 3 = 7" was evaluated alone and failed;
+        // - the result continuing into another expression: "2 + 2 = 5 - 1"
+        //   (= 4, correct) had its result read as the bare 5.
+        // Same principle as the grouped-number rule: an equation the checker
+        // can't judge whole is skipped, not failed.
+        let v = Verifier::new().with_check(Box::new(ArithmeticCheck));
+        assert!(v.verify("-5 + 3 = -2").passed(), "negative first operand");
+        assert!(v.verify("1 + 2 * 3 = 7").passed(), "operator precedence");
+        assert!(v.verify("2 + 2 = 5 - 1").passed(), "result continues");
+        // Detection power is preserved: a prose hyphen after the result is not
+        // a continuing expression, so a genuinely wrong equation still fails.
+        assert!(
+            !v.verify("2 + 2 = 5 - obviously wrong").passed(),
+            "a prose hyphen must not disable detection"
+        );
     }
 
     #[test]

@@ -167,8 +167,27 @@ platform).
   without a terminator is rejected as `413`. Reproduced with a test that
   hangs to the read timeout under the old code (unbounded buffering) and is
   rejected immediately under the fix.
+- **`ArithmeticCheck` rejected correct output containing sub-expressions**
+  (§899): `match_equation` evaluated any `A op B = C` it found, even when the
+  operand was really a term of a larger expression — so `-5 + 3 = -2` was
+  misread as `5 + 3 = -2` (unary minus ignored), `1 + 2 * 3 = 7` was rejected
+  via the fragment `2 * 3 = 7` (precedence), and `2 + 2 = 5 - 1` was rejected
+  by reading the result as the bare `5`. All three are correct output. A digit
+  preceded by an arithmetic operator is no longer treated as an equation
+  start, and a result that continues into another operator+operand makes the
+  equation non-evaluable — the same "skip what can't be judged whole rather
+  than raise a false positive" rule as the grouped-number fix. A prose hyphen
+  after the result (`= 5 - obviously wrong`) still evaluates, so detection of
+  genuinely wrong equations is unchanged. Reproduced before fixing.
 
 ### Added
+
+- **`docs/agent-handbook.md`**: a self-contained working handbook for an AI
+  coding agent continuing development — the audit → reproduce → fix →
+  regression-test → full-gates discipline and standing principles; the
+  audited-clean module list; the fixed bug *classes* with commit refs;
+  deliberately-parked gaps with the condition for lifting each; and
+  priority-ordered improvement proposals (with measured anti-proposals).
 
 - **`web` crate + `ckos serve`** (§902 API gateway, front-loaded from the v2.8
   roadmap): a `std`-only HTTP/JSON server (own request parser, response
@@ -203,7 +222,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-257 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+258 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening
