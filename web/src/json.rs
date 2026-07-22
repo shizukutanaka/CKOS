@@ -17,6 +17,8 @@ pub enum Json {
     Bool(bool),
     /// Rendered with `{}` formatting (integral floats print without a
     /// trailing `.0`, matching what a browser's `JSON.parse` round-trips).
+    /// A non-finite value (`NaN`/`±∞`, which RFC 8259 cannot represent)
+    /// renders as `null` so the output is always valid JSON.
     Number(f64),
     /// A JSON string, escaped on render.
     String(String),
@@ -126,7 +128,13 @@ impl fmt::Display for Json {
             Json::Null => write!(f, "null"),
             Json::Bool(b) => write!(f, "{b}"),
             Json::Number(n) => {
-                if n.fract() == 0.0 && n.abs() < 1e15 {
+                if !n.is_finite() {
+                    // RFC 8259 has no NaN/Infinity, and f64's `Display` would
+                    // emit the bare literals `NaN`/`inf`/`-inf` — invalid JSON
+                    // that `JSON.parse` rejects, breaking the whole response.
+                    // Emit `null` so the output stays parseable.
+                    write!(f, "null")
+                } else if n.fract() == 0.0 && n.abs() < 1e15 {
                     write!(f, "{}", *n as i64)
                 } else {
                     write!(f, "{n}")
@@ -177,6 +185,19 @@ mod tests {
     fn integral_numbers_render_without_a_trailing_dot_zero() {
         assert_eq!(Json::Number(100.0).to_string(), "100");
         assert_eq!(Json::Number(0.125).to_string(), "0.125");
+    }
+
+    #[test]
+    fn non_finite_numbers_render_as_null_not_invalid_json() {
+        // f64's Display emits "NaN"/"inf"/"-inf", none of which JSON.parse
+        // accepts — a single such value would make the whole response
+        // unparseable. The serializer must keep the output valid JSON.
+        assert_eq!(Json::Number(f64::NAN).to_string(), "null");
+        assert_eq!(Json::Number(f64::INFINITY).to_string(), "null");
+        assert_eq!(Json::Number(f64::NEG_INFINITY).to_string(), "null");
+        // Finite values are unaffected.
+        assert_eq!(Json::Number(42.0).to_string(), "42");
+        assert_eq!(Json::Number(-0.5).to_string(), "-0.5");
     }
 
     #[test]

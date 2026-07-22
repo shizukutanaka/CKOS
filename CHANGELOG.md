@@ -179,6 +179,15 @@ platform).
   than raise a false positive" rule as the grouped-number fix. A prose hyphen
   after the result (`= 5 - obviously wrong`) still evaluates, so detection of
   genuinely wrong equations is unchanged. Reproduced before fixing.
+- **`web::json` serialized non-finite numbers as invalid JSON** (§902): a
+  `Json::Number` holding `NaN`/`±∞` rendered via `f64`'s `Display` as the bare
+  literals `NaN`/`inf`/`-inf`, none of which `JSON.parse` accepts — a single
+  such value would make an entire API response unparseable, violating the
+  serializer's documented RFC 8259 contract. Non-finite numbers now render as
+  `null`; finite values are unchanged. (No current route produces a non-finite
+  number — search scores are finite and a `NaN` cosine is filtered before it
+  becomes a hit — but the serializer is a reusable primitive and must never
+  emit invalid JSON.)
 
 ### Added
 
@@ -222,7 +231,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-258 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+259 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening
