@@ -5,7 +5,7 @@ this repository. Written so it can be followed without any prior session
 context. Every claim below carries a `file:line`-level pointer or a commit
 reference so you can verify it instead of trusting it.
 
-State when written: 257 workspace tests passing; `cargo fmt --all --check`,
+State when written: 264 workspace tests passing; `cargo fmt --all --check`,
 `RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets`,
 `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` all clean.
 13 std-only crates, zero external dependencies.
@@ -109,6 +109,9 @@ should grep for elsewhere before assuming a module is clean:
 | KQL RELATED value-dedup + VIA self-loop divergence (`d119df8`) | dedup by rendered value instead of identity; two primitives with silently different edge semantics |
 | `FileStore` metadata keys with `": "` or `meta.` prefix (`d9a51c9`) | delimiter legal inside the field it delimits; `trim_start_matches` where `strip_prefix` is meant |
 | Graph label substring matching, HTTP unbounded `read_line` (`0a17f17`, `5fd552d`) | substring vs token matching inconsistency; size cap not covering the read that precedes the check |
+| `ArithmeticCheck` judged fragments of larger expressions (`30eb86c`) | a sub-term evaluated as if it were the whole expression |
+| `web::json` emitted `NaN`/`inf` (`2c531b1`) | serializer contract broken by a value the type allows but the format forbids |
+| Message signing forgeable without the key (this generation) | *linear* keyed hash — a key-only term that cancels between two outputs |
 
 ---
 
@@ -131,6 +134,10 @@ meeting the stated condition (that would be label-moving, §1):
 - **`AgentState` lifecycle is not driven by the engine** — discovery honors
   it, but nothing suspends/terminates agents automatically. Lift when a
   consumer (e.g. circuit breaker on repeated failure) justifies transitions.
+- **Nonces are caller-supplied, not generated**: `Signer::seal` takes the
+  nonce; nothing in-tree produces cryptographically random ones (std has no
+  CSPRNG). A deployment must supply them. Lift = an optional feature reading
+  the OS entropy source.
 - **`HashingEmbedder` is lexical, not semantic** — measured: a true paraphrase
   scored no higher than unrelated text (`memory/src/embedding.rs` module doc).
   `sdk/src/synonyms.rs` is the documented partial mitigation. Lift = real
@@ -147,27 +154,12 @@ meeting the stated condition (that would be label-moving, §1):
 
 ## 5. Improvement proposals — priority-ordered, with evidence
 
-### P1 — verified bug, ready to fix (do this first)
+### P1 — no known unfixed defect
 
-**`ArithmeticCheck` false positives on fragments of larger expressions**
-(`verifier/src/lib.rs`, `match_equation` + the scan loop in
-`impl Check for ArithmeticCheck`). Verified by close reading; not yet fixed:
-
-- `-5 + 3 = -2` (correct): the scanner starts at the digit `5` (the preceding
-  `-` is a token boundary), `parse_operand` ignores the unary minus, and the
-  text is judged as `5 + 3 = -2` → **Fail on correct output**.
-- `1 + 2 * 3 = 7` (correct under precedence): the fragment `2 * 3 = 7` is
-  evaluated alone → **Fail on correct output**.
-- Dual false negative: `2 + 3 * 4 = 12` (wrong) passes because the fragment
-  `3 * 4 = 12` happens to be true.
-
-Fix sketch (mirrors the existing grouped-number fragment rule at
-`parse_operand`): (a) in the scan loop, do not attempt `match_equation` at a
-digit whose preceding non-space byte is one of `+ - * /`; (b) after parsing
-the result, if it is followed (spaces allowed) by an operator and then a
-digit, return `None` (expression continues). Add tests: the three inputs
-above must pass; `2 + 2 = 5 - obviously wrong` must still fail (prose hyphen
-must not disable detection); all existing arithmetic tests unchanged.
+Every verified defect found so far is fixed (§3). The `ArithmeticCheck`
+fragment false positive that previously sat here was fixed in `30eb86c`.
+Start from §1's audit loop on a module not yet listed in §2 rather than
+re-reading audited-clean code.
 
 ### P2 — high value, moderate size
 
@@ -186,9 +178,6 @@ must not disable detection); all existing arithmetic tests unchanged.
 
 - **OIDC/LDAP `IdentityProvider`** (`policy/src/identity.rs`): real token
   verification behind the existing trait; network + crypto ⇒ feature-gated.
-- **HMAC-SHA256 for `sdk::security::sign`**: the doc already declares the
-  FNV-based demo signature non-cryptographic; SHA-256 can be implemented
-  std-only (vendored, well-tested) without breaking the dependency rule.
 - **A-MEM-style evolving memory notes** (arXiv:2502.12110, noted in
   `docs/roadmap.md` v2.8): requires a note-structure redesign; research
   candidate, not a retrofit.

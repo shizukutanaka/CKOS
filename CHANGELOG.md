@@ -189,7 +189,28 @@ platform).
   becomes a hit — but the serializer is a reusable primitive and must never
   emit invalid JSON.)
 
+- **Message signing was forgeable without the key** (§930): `security::sign`
+  computed `FNV(data).rotate_left(17) ^ K`, where `K` depended only on the
+  key — so `K` cancelled in the XOR of any two signatures. An attacker who
+  observed a **single** signed envelope could compute the valid signature for
+  **any** message of their choosing, with no key recovery and no brute force
+  (`forged = observed_sig ^ FNV(observed).rot17 ^ FNV(target).rot17`). The
+  module documented the primitive as "not cryptographically strong", which
+  understates a total break: it gave no protection against exactly the
+  tampering adversary §930 names. Signing is now **HMAC-SHA256** over a new
+  dependency-free `sdk::crypto` (SHA-256 per FIPS 180-4, HMAC per RFC 2104,
+  both checked against the published FIPS/RFC 4231 test vectors), envelopes
+  carry a full 32-byte tag, and verification compares in constant time so a
+  wrong tag leaks nothing through timing. `Signer`/`ReplayGuard` also gained
+  `with_key_bytes` for arbitrary-length key material, since a `u64` secret is
+  only 64 bits of entropy however strong the MAC is. The forgery was
+  reproduced directly before fixing and is now a regression test.
+
 ### Added
+
+- **`sdk::crypto`** — dependency-free SHA-256 (FIPS 180-4), HMAC-SHA256
+  (RFC 2104) and a constant-time comparison, verified against the published
+  standard test vectors. Backs §930 message signing.
 
 - **`docs/agent-handbook.md`**: a self-contained working handbook for an AI
   coding agent continuing development — the audit → reproduce → fix →
@@ -231,7 +252,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-259 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+264 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening
