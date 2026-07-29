@@ -18,6 +18,7 @@
 //! ```
 
 pub mod agent;
+pub mod crypto;
 pub mod engine;
 pub mod eval;
 pub mod knowledge_bus;

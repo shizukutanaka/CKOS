@@ -9,19 +9,31 @@
 //! ages out of the freshness window, so a long-running guard's memory stays
 //! bounded by the window rather than growing for the process lifetime.
 //!
-//! The signing primitive here is a keyed hash built from the dependency-free
-//! FNV-1a used elsewhere; it demonstrates the protocol but is **not**
-//! cryptographically strong. A production deployment swaps [`sign`] for
-//! HMAC-SHA256 and pairs it with the mTLS / certificate-rotation transport the
-//! spec lists (those are transport concerns, layered below this module).
+//! The signing primitive is **HMAC-SHA256** ([`crate::crypto`], RFC 2104 over
+//! FIPS 180-4), so a signature is unforgeable without the key. It replaces an
+//! earlier keyed FNV-1a construction that was not merely "weak" but linear:
+//! because that scheme XOR-mixed a key-only constant into a hash of the data,
+//! the constant cancelled between any two signatures, letting an attacker who
+//! observed **one** signed envelope compute a valid signature for **any**
+//! message without ever learning the key. Signatures are compared in constant
+//! time ([`crate::crypto::ct_eq`]) so a wrong tag leaks nothing through timing.
+//!
+//! Transport security (mTLS, certificate rotation) is layered below this
+//! module and remains a deployment concern.
 
+use crate::crypto::{ct_eq, hmac_sha256};
 use crate::messaging::Message;
-use ckos_kernel::audit::content_hash;
 
-/// Keyed signature over `data`. Deterministic; not cryptographically strong.
-pub fn sign(key: u64, data: &str) -> u64 {
-    let base = content_hash(data);
-    base.rotate_left(17) ^ key.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ content_hash(&key.to_string())
+/// The width of a signature in bytes (a full HMAC-SHA256 tag).
+pub const SIGNATURE_LEN: usize = 32;
+
+/// HMAC-SHA256 signature over `data` under arbitrary-length key material.
+///
+/// Prefer this over the `u64` convenience keys when you control the key
+/// material: a 64-bit shared secret has only 64 bits of entropy regardless of
+/// how strong the MAC is.
+pub fn sign(key: &[u8], data: &str) -> [u8; SIGNATURE_LEN] {
+    hmac_sha256(key, data.as_bytes())
 }
 
 /// Canonical, signable encoding of a message plus its nonce and timestamp.
@@ -60,26 +72,32 @@ pub struct SignedEnvelope {
     pub nonce: u64,
     /// Sealing time in milliseconds since the Unix epoch.
     pub timestamp_ms: u64,
-    /// Keyed digest over the message, nonce and timestamp.
-    pub signature: u64,
+    /// HMAC-SHA256 tag over the message, nonce and timestamp.
+    pub signature: [u8; SIGNATURE_LEN],
 }
 
 /// Seals messages with a shared key.
 pub struct Signer {
-    key: u64,
+    key: Vec<u8>,
 }
 
 impl Signer {
-    /// Create a signer with the shared key.
+    /// Create a signer from a `u64` shared key (its big-endian bytes).
     pub fn new(key: u64) -> Self {
-        Signer { key }
+        Signer::with_key_bytes(key.to_be_bytes())
+    }
+
+    /// Create a signer from arbitrary-length key material — the form to use
+    /// for real deployments, where a 64-bit secret is too little entropy.
+    pub fn with_key_bytes(key: impl Into<Vec<u8>>) -> Self {
+        Signer { key: key.into() }
     }
 
     /// Seal a message. Callers must supply a unique `nonce` and the current
     /// `timestamp_ms`; in production the nonce should be cryptographically
     /// random.
     pub fn seal(&self, message: Message, nonce: u64, timestamp_ms: u64) -> SignedEnvelope {
-        let signature = sign(self.key, &canonical(&message, nonce, timestamp_ms));
+        let signature = sign(&self.key, &canonical(&message, nonce, timestamp_ms));
         SignedEnvelope {
             message,
             nonce,
@@ -104,16 +122,23 @@ pub enum SecurityError {
 /// nonces (nonce -> the timestamp it was sealed with, so aged-out entries can
 /// be pruned; see [`verify`](Self::verify)).
 pub struct ReplayGuard {
-    key: u64,
+    key: Vec<u8>,
     window_ms: u64,
     seen: std::collections::HashMap<u64, u64>,
 }
 
 impl ReplayGuard {
-    /// Create a guard with the shared key and freshness window in milliseconds.
+    /// Create a guard from a `u64` shared key (its big-endian bytes) and a
+    /// freshness window in milliseconds.
     pub fn new(key: u64, window_ms: u64) -> Self {
+        ReplayGuard::with_key_bytes(key.to_be_bytes(), window_ms)
+    }
+
+    /// Create a guard from arbitrary-length key material — the counterpart to
+    /// [`Signer::with_key_bytes`].
+    pub fn with_key_bytes(key: impl Into<Vec<u8>>, window_ms: u64) -> Self {
         ReplayGuard {
-            key,
+            key: key.into(),
             window_ms,
             seen: std::collections::HashMap::new(),
         }
@@ -130,10 +155,12 @@ impl ReplayGuard {
     /// the same envelope cannot be accepted twice (§930 replay protection).
     pub fn verify(&mut self, envelope: &SignedEnvelope, now_ms: u64) -> Result<(), SecurityError> {
         let expected = sign(
-            self.key,
+            &self.key,
             &canonical(&envelope.message, envelope.nonce, envelope.timestamp_ms),
         );
-        if expected != envelope.signature {
+        // Constant-time: an `==` here would return on the first differing byte,
+        // leaking through timing how much of a forged tag was correct.
+        if !ct_eq(&expected, &envelope.signature) {
             return Err(SecurityError::BadSignature);
         }
         if now_ms.abs_diff(envelope.timestamp_ms) > self.window_ms {
@@ -198,6 +225,66 @@ mod tests {
         let env = signer.seal(msg(), 4, 10_000);
         // 2s later, window is 1s → expired.
         assert_eq!(guard.verify(&env, 12_001), Err(SecurityError::Expired));
+    }
+
+    #[test]
+    fn observing_one_signature_does_not_let_an_attacker_forge_another() {
+        // Regression for a total break of the old keyed-FNV primitive. It
+        // computed `sign(key, d) = FNV(d).rot17 ^ K`, where `K` depended only
+        // on the key — so `K` cancelled in the XOR of any two signatures and
+        // an attacker who saw ONE envelope could compute the valid signature
+        // for ANY other message, with no key and no brute force:
+        //     forged = observed_sig ^ FNV(observed).rot17 ^ FNV(target).rot17
+        // HMAC-SHA256 is not linear this way, so the same derivation now
+        // yields a tag the guard rejects.
+        fn fnv(data: &str) -> u64 {
+            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+            for b in data.bytes() {
+                h ^= b as u64;
+                h = h.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            h
+        }
+
+        let secret = 0xDEAD_BEEF_1234_5678u64;
+        let signer = Signer::new(secret);
+        let mut guard = ReplayGuard::new(secret, 10_000);
+
+        let honest = signer.seal(msg().with_body("transfer 10"), 1, 10_000);
+        assert_eq!(guard.verify(&honest, 10_000), Ok(()));
+
+        // The attacker knows only the observed envelope — never `secret`.
+        let mut forged = honest.clone();
+        forged.message.payload.body = "transfer 1000000".into();
+        forged.nonce = 2;
+        let observed_canon = canonical(&honest.message, honest.nonce, honest.timestamp_ms);
+        let target_canon = canonical(&forged.message, forged.nonce, forged.timestamp_ms);
+        let delta = (fnv(&observed_canon).rotate_left(17) ^ fnv(&target_canon).rotate_left(17))
+            .to_be_bytes();
+        for (i, b) in delta.iter().enumerate() {
+            forged.signature[i] ^= b;
+        }
+
+        assert_eq!(
+            guard.verify(&forged, 10_000),
+            Err(SecurityError::BadSignature),
+            "a signature must not be derivable from another signature"
+        );
+    }
+
+    #[test]
+    fn arbitrary_length_key_material_round_trips() {
+        // A 64-bit shared secret is only 64 bits of entropy however strong the
+        // MAC is; real deployments pass full key material instead.
+        let key = b"a much longer shared secret than sixty-four bits of entropy";
+        let signer = Signer::with_key_bytes(&key[..]);
+        let mut guard = ReplayGuard::with_key_bytes(&key[..], 1000);
+        let env = signer.seal(msg(), 11, 10_000);
+        assert_eq!(guard.verify(&env, 10_000), Ok(()));
+
+        // A different key rejects the same envelope.
+        let mut other = ReplayGuard::with_key_bytes(&b"different key material"[..], 1000);
+        assert_eq!(other.verify(&env, 10_000), Err(SecurityError::BadSignature));
     }
 
     #[test]
