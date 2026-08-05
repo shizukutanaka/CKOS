@@ -19,7 +19,8 @@ pub enum GcReason {
     Expired,
     /// Confidence is below the policy threshold.
     LowConfidence,
-    /// An identical (type, title, body) document was already kept.
+    /// Another copy with the same (type, title, body) was kept — the one with
+    /// the highest confidence (ties broken by id, so the choice is stable).
     Duplicate,
     /// The embedding is empty, wrong-dimension, all-zero, or non-finite.
     BrokenEmbedding,
@@ -31,7 +32,8 @@ pub enum GcReason {
 pub struct GcPolicy {
     /// Remove documents with confidence strictly below this (0 disables).
     pub min_confidence: u8,
-    /// Remove later exact duplicates of (doc_type, title, body).
+    /// For each group of documents sharing (doc_type, title, body), keep the
+    /// highest-confidence copy and remove the rest.
     pub drop_duplicates: bool,
     /// Remove documents whose stored embedding is broken.
     pub drop_broken_embeddings: bool,
@@ -110,8 +112,24 @@ fn removal_reason(
 
 /// Run garbage collection over a store (§954). `now` is the current ISO date
 /// used for expiry checks; pass `None` to skip expiry regardless of policy.
+///
+/// Deterministic: duplicates are resolved in a fixed order (see below), so two
+/// runs over equivalent stores remove the same documents.
 pub fn collect(store: &mut dyn Storage, policy: &GcPolicy, now: Option<&str>) -> Result<GcReport> {
-    let docs = store.search(&Query::default())?;
+    let mut docs = store.search(&Query::default())?;
+    // Backends return documents in unspecified order — both `InMemoryStore`
+    // and `FileStore` iterate a `HashMap` — while duplicate detection keeps
+    // whichever copy it sees *first*. Without an explicit order, which
+    // duplicate survives varies from run to run, so gc could silently discard
+    // the higher-confidence copy (and a different document each time, since
+    // copies sharing (type, title, body) can still differ in id, confidence,
+    // metadata and embedding). Sort so the best copy is the one kept, with id
+    // as a stable tie-break.
+    docs.sort_by(|a, b| {
+        b.confidence
+            .cmp(&a.confidence)
+            .then_with(|| a.id.cmp(&b.id))
+    });
     let mut seen = HashSet::new();
     let mut report = GcReport::default();
     for doc in &docs {
@@ -213,6 +231,44 @@ pub fn consolidate(store: &mut dyn Storage, max_chars: usize) -> Result<usize> {
 mod tests {
     use super::*;
     use crate::InMemoryStore;
+
+    #[test]
+    fn duplicate_survivor_is_deterministic_and_the_best_copy() {
+        // Regression: `collect` consumed the backend's `search` order, but both
+        // in-tree backends iterate a `HashMap`, so *which* copy survived varied
+        // between runs — silently discarding a different document each time,
+        // including the higher-confidence one. Copies sharing (type, title,
+        // body) can still differ in id, confidence, metadata and embedding, so
+        // this is real data loss, not a no-op choice. Repeated over fresh
+        // stores (each with its own hash seed) and with both insertion orders,
+        // the highest-confidence copy must always be the survivor.
+        for flip in [false, true] {
+            for _ in 0..50 {
+                let mut store = InMemoryStore::new();
+                let mut low = Document::new("note", "same", "same body");
+                low.confidence = 10;
+                let mut high = Document::new("note", "same", "same body");
+                high.confidence = 100;
+                if flip {
+                    store.write(high).unwrap();
+                    store.write(low).unwrap();
+                } else {
+                    store.write(low).unwrap();
+                    store.write(high).unwrap();
+                }
+
+                let report = collect(&mut store, &GcPolicy::default(), None).unwrap();
+                assert_eq!(report.count(), 1);
+                assert_eq!(report.removed[0].1, GcReason::Duplicate);
+                let left = store.search(&Query::default()).unwrap();
+                assert_eq!(left.len(), 1);
+                assert_eq!(
+                    left[0].confidence, 100,
+                    "gc must keep the highest-confidence duplicate, deterministically"
+                );
+            }
+        }
+    }
 
     #[test]
     fn removes_duplicates_keeping_first() {

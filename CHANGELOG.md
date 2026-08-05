@@ -206,6 +206,17 @@ platform).
   only 64 bits of entropy however strong the MAC is. The forgery was
   reproduced directly before fixing and is now a regression test.
 
+- **`gc` deleted a nondeterministic choice of duplicate** (§954):
+  `maintenance::collect` consumed the backend's `search` order, but both
+  in-tree backends iterate a `HashMap`, so *which* copy of a
+  (type, title, body) group survived varied between runs. Documents sharing
+  those three fields can still differ in id, confidence, metadata and
+  embedding, so `ckos gc` could silently discard the higher-confidence copy —
+  a different one each time. Reproduced directly (both confidences observed as
+  survivors across 200 freshly built stores). `collect` now orders documents
+  by confidence descending, with the document id as a stable tie-break, so the
+  best copy is kept and the run is reproducible.
+
 ### Added
 
 - **`sdk::crypto`** — dependency-free SHA-256 (FIPS 180-4), HMAC-SHA256
@@ -252,7 +263,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-264 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+265 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening

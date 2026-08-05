@@ -14,7 +14,7 @@ State when written: 264 workspace tests passing; `cargo fmt --all --check`,
 
 ## 1. How to work on this codebase (mandatory discipline)
 
-Follow this loop for every change. It produced the 11 genuine bug fixes in
+Follow this loop for every change. It produced the 15 genuine bug fixes in
 §3 and zero regressions:
 
 1. **Audit** — read one module closely against its own doc comments. The doc
@@ -59,8 +59,9 @@ Standing principles (each has already prevented or caught real bugs here):
 
 Environment facts (verified, do not re-litigate): pushes are restricted to the
 designated work branch; pushing tags, `.github/workflows/` files, direct
-GitHub REST calls, and repo-settings changes are all permission-denied (seven
-channels tested). CI therefore stays staged at `docs/ci-workflow.yml` until a
+GitHub REST calls, release/tag creation, and repo-settings changes are all
+permission-denied (eight channels tested; the REST gateway answers "GitHub
+access is not enabled for this session"). CI therefore stays staged at `docs/ci-workflow.yml` until a
 maintainer copies it to `.github/workflows/ci.yml` by hand.
 
 ---
@@ -92,7 +93,7 @@ defect:
 
 ## 3. Fixed this generation — bug classes to watch for recurrence
 
-Twelve genuine, reproduced-then-fixed defects. The *class* column is what you
+Fifteen genuine, reproduced-then-fixed defects. The *class* column is what you
 should grep for elsewhere before assuming a module is clean:
 
 | Fix (commit) | Class |
@@ -111,7 +112,7 @@ should grep for elsewhere before assuming a module is clean:
 | Graph label substring matching, HTTP unbounded `read_line` (`0a17f17`, `5fd552d`) | substring vs token matching inconsistency; size cap not covering the read that precedes the check |
 | `ArithmeticCheck` judged fragments of larger expressions (`30eb86c`) | a sub-term evaluated as if it were the whole expression |
 | `web::json` emitted `NaN`/`inf` (`2c531b1`) | serializer contract broken by a value the type allows but the format forbids |
-| Message signing forgeable without the key (this generation) | *linear* keyed hash — a key-only term that cancels between two outputs |
+| Message signing forgeable without the key (`2a0aa73`) | *linear* keyed hash — a key-only term that cancels between two outputs |
 
 ---
 
