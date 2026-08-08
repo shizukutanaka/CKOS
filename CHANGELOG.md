@@ -122,6 +122,18 @@ platform).
   directly before fixing (`NodeKind::Other("foo\tbar")` came back with
   `confidence: 0`, a bogus `date`, and a mangled label); the kind token is now
   sanitized like every other field.
+- **Stemmed tokens bypassed the query-expansion stopword list** (§950), a
+  self-inflicted regression from the S-stemmer landing in `tokens`: the list is
+  written in natural spelling but candidates arrive stemmed, so every entry
+  whose stem differs stopped matching (`this` → `thi`, `was` → `wa`, `has` →
+  `ha`, `its` → `it`, `his` → `hi`). `this` is long enough to clear the
+  length filter, so pseudo-relevance feedback injected the junk token `thi`
+  into the query — as the *top* expansion term, since it was the most frequent
+  word in the feedback set. Reproduced directly
+  (`expand_query("cache", ["this system uses this cache and this queue"])` →
+  `"cache thi queue system"`). The list is now stemmed at the point of use, and
+  a test asserts no entry's stem can leak, so a future addition ending in `-s`
+  cannot silently reintroduce this.
 - **Synonym expansion silently did nothing for a plural query** (§949): the
   built-in [`SynonymTable`] is written in the singular and lookups used the raw
   query token, so `ckos search schedulers` got *no* synonym expansion while
@@ -303,7 +315,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-272 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+273 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening
