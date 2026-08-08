@@ -5,17 +5,21 @@ this repository. Written so it can be followed without any prior session
 context. Every claim below carries a `file:line`-level pointer or a commit
 reference so you can verify it instead of trusting it.
 
-State when written: 264 workspace tests passing; `cargo fmt --all --check`,
+State: all four gates green at every commit — `cargo fmt --all --check`,
 `RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets`,
-`RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` all clean.
-13 std-only crates, zero external dependencies.
+`RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`,
+`cargo test --workspace`. 13 std-only crates, zero external dependencies.
+For the current test count and the full fix list, read `CHANGELOG.md`'s
+Unreleased section — this document deliberately carries no running totals,
+because a hand-maintained count silently goes stale and a handbook whose own
+numbers are wrong cannot be trusted on anything else.
 
 ---
 
 ## 1. How to work on this codebase (mandatory discipline)
 
-Follow this loop for every change. It produced the 15 genuine bug fixes in
-§3 and zero regressions:
+Follow this loop for every change. It produced every fix in §3, with zero
+regressions:
 
 1. **Audit** — read one module closely against its own doc comments. The doc
    comment is the contract; a mismatch between doc and behavior is a bug even
@@ -93,8 +97,9 @@ defect:
 
 ## 3. Fixed this generation — bug classes to watch for recurrence
 
-Fifteen genuine, reproduced-then-fixed defects. The *class* column is what you
-should grep for elsewhere before assuming a module is clean:
+Every defect below was reproduced first, then fixed with a regression test.
+The *class* column is what you should grep for elsewhere before assuming a
+module is clean:
 
 | Fix (commit) | Class |
 |---|---|
@@ -113,6 +118,7 @@ should grep for elsewhere before assuming a module is clean:
 | `ArithmeticCheck` judged fragments of larger expressions (`30eb86c`) | a sub-term evaluated as if it were the whole expression |
 | `web::json` emitted `NaN`/`inf` (`2c531b1`) | serializer contract broken by a value the type allows but the format forbids |
 | Message signing forgeable without the key (`2a0aa73`) | *linear* keyed hash — a key-only term that cancels between two outputs |
+| `gc` deleted a nondeterministic choice of duplicate (`42d68a0`) | iteration order of an unordered container used where the contract implies a defined order |
 
 ---
 

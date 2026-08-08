@@ -97,7 +97,7 @@ COMMANDS:
     kql [--session <dir>] <query>    Run a KQL query (demo graph, or a session's
                                      persisted graph with --session)
     eval --relevant <csv> [--k N]    Score search quality (Precision/Recall/
-      <dir> <query…>                 MRR/nDCG) against known-relevant titles
+      <dir> <query…>                 MRR/nDCG/MAP) vs known-relevant titles
     graph [--dot] <text…>            Extract a knowledge graph from text (§941)
     graph [--dot] --session <dir>    Extract a graph from a session's documents
     gc <dir> [--min-confidence N]    Garbage-collect a session: low-value docs
@@ -578,7 +578,7 @@ fn cmd_search(rest: &[String]) -> ExitCode {
 
 fn cmd_eval(rest: &[String]) -> ExitCode {
     if wants_help(rest) {
-        println!("usage: ckos eval --relevant <title1,title2,…> [--k N] <dir> <query…>\n  Run search and score it (Precision@k, Recall@k, MRR, nDCG@k) against the\n  comma-separated titles you consider relevant.");
+        println!("usage: ckos eval --relevant <title1,title2,…> [--k N] <dir> <query…>\n  Run search and score it (Precision@k, Recall@k, MRR, nDCG@k, MAP) against the\n  comma-separated titles you consider relevant.");
         return ExitCode::SUCCESS;
     }
     let (relevant_csv, rest) = match take_value_flag(rest, "--relevant") {
@@ -653,6 +653,7 @@ fn cmd_eval(rest: &[String]) -> ExitCode {
     println!("  recall@{:<5} {:.3}", scores.k, scores.recall);
     println!("  MRR         {:.3}", scores.reciprocal_rank);
     println!("  nDCG@{:<6} {:.3}", scores.k, scores.ndcg);
+    println!("  MAP         {:.3}", scores.average_precision);
     ExitCode::SUCCESS
 }
 

@@ -219,6 +219,19 @@ platform).
 
 ### Added
 
+- **Average precision / MAP in the eval harness** (§959): `sdk::eval` claimed
+  the standard IR metric set but omitted average precision — the canonical
+  TREC summary metric (Manning, Raghavan & Schütze, *IIR* §8.4). P@k and
+  recall@k cannot distinguish a run that ranks the relevant items first from
+  one that ranks them last, and reciprocal rank only ever looks at the first
+  hit, so nothing in-tree scored *ordering across all* relevant items.
+  `average_precision` follows the TREC convention (divide by the total
+  relevant count, so items never retrieved contribute 0 instead of being
+  silently excluded) and ignores repeated ids so a run cannot inflate its own
+  score by listing a document twice; `mean_average_precision` averages it
+  across queries. Reported by `ckos eval` as `MAP` and carried on
+  `EvalScores`. Verified against hand-computed textbook values.
+
 - **`sdk::crypto`** — dependency-free SHA-256 (FIPS 180-4), HMAC-SHA256
   (RFC 2104) and a constant-time comparison, verified against the published
   standard test vectors. Backs §930 message signing.
@@ -263,7 +276,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-265 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+268 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening
