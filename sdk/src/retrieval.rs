@@ -87,12 +87,65 @@ pub fn plan_retrieval(question: &str) -> RetrievalStrategy {
     }
 }
 
-/// Split text into lowercase tokens longer than one character.
+/// Light **S-stemmer** (Harman, *How effective is suffixing?*, JASIS 42(1),
+/// 1991): strip only plural `-s` forms, in three ordered rules of which at
+/// most one fires.
+///
+/// ```text
+/// ies (but not eies, aies) -> y      queries -> query
+/// es  (but not aes, ees, oes) -> e   caches  -> cache
+/// s   (but not us, ss) -> ""         runs    -> run
+/// ```
+///
+/// Deliberately *not* Porter/Lovins: Harman measured that aggressive suffix
+/// stripping changes as many queries for the worse as for the better, while
+/// plural-only stemming is close to free. What matters for matching is that
+/// the same transform runs over documents and queries, so even a linguistically
+/// odd output (`ties -> ty`) still matches itself on both sides.
+///
+/// An exception *terminates*: a word matching a rule's suffix but hitting its
+/// exception is left alone rather than falling through to the next rule.
+/// Falling through would make the exceptions dead letters — `goes` would skip
+/// the `-oes` guard only for the bare `-s` rule to strip the same character.
+///
+/// Idempotent: no output of a rule can trigger another (`query`, `cache` and
+/// `run` all end in a character no rule matches), so re-tokenizing an already
+/// stemmed string — which pseudo-relevance feedback does when it folds terms
+/// back into the query — is a no-op.
+///
+/// Every slice offset lands on an ASCII suffix byte, so non-ASCII text is
+/// either left untouched or cut at a genuine char boundary.
+fn s_stem(word: &str) -> String {
+    if let Some(stem) = word.strip_suffix("ies") {
+        if word.ends_with("eies") || word.ends_with("aies") {
+            return word.to_string();
+        }
+        return format!("{stem}y");
+    }
+    let Some(stem) = word.strip_suffix('s') else {
+        return word.to_string();
+    };
+    if word.ends_with("es") {
+        if word.ends_with("aes") || word.ends_with("ees") || word.ends_with("oes") {
+            return word.to_string();
+        }
+        return stem.to_string();
+    }
+    if word.ends_with("us") || word.ends_with("ss") {
+        return word.to_string();
+    }
+    stem.to_string()
+}
+
+/// Lowercase, split on non-alphanumerics, light-stem, and drop 1-character
+/// tokens. Used for *both* documents and queries so the two sides normalize
+/// identically — the only property stemming needs in order to help matching.
 fn tokens(text: &str) -> Vec<String> {
     text.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
-        .filter(|t| t.len() > 1)
-        .map(String::from)
+        .filter(|t| !t.is_empty())
+        .map(s_stem)
+        .filter(|t| t.chars().count() > 1)
         .collect()
 }
 
@@ -667,6 +720,75 @@ mod tests {
         assert_eq!(hits.len(), 2);
         // Title match ("kernel design") outranks the body-only mention.
         assert_eq!(hits[0].title, "kernel design");
+    }
+
+    #[test]
+    fn light_stemming_follows_the_s_stemmer_rules() {
+        // Harman (1991) S-stemmer: three ordered rules, at most one fires.
+        assert_eq!(s_stem("queries"), "query");
+        assert_eq!(s_stem("caches"), "cache");
+        assert_eq!(s_stem("runs"), "run");
+        assert_eq!(s_stem("schedulers"), "scheduler");
+        // The explicit exceptions must NOT be stripped.
+        assert_eq!(s_stem("class"), "class"); // -ss
+        assert_eq!(s_stem("status"), "status"); // -us
+        assert_eq!(s_stem("does"), "does"); // -oes
+        assert_eq!(s_stem("sees"), "sees"); // -ees
+                                            // Words with no plural suffix are untouched.
+        assert_eq!(s_stem("kernel"), "kernel");
+        assert_eq!(s_stem("cache"), "cache");
+        // Idempotent: re-stemming an output is a no-op, which is what makes it
+        // safe for pseudo-relevance feedback to fold terms back into a query.
+        for w in ["queries", "caches", "runs", "class", "status"] {
+            let once = s_stem(w);
+            assert_eq!(s_stem(&once), once, "stemming {w} is not idempotent");
+        }
+    }
+
+    #[test]
+    fn stemming_does_not_slice_multibyte_text() {
+        // Every rule slices by byte offset, so a non-ASCII token must never hit
+        // a char boundary panic — the same class of bug as the CJK cut in
+        // `memory::summarize`. Tokenizing must simply leave these alone.
+        assert_eq!(s_stem("日本語"), "日本語");
+        assert_eq!(s_stem("スケジューラ"), "スケジューラ");
+        // A CJK word with an ASCII plural s still slices safely.
+        assert_eq!(s_stem("日本語s"), "日本語");
+        assert_eq!(tokens("日本語のカーネル"), vec!["日本語のカーネル"]);
+    }
+
+    #[test]
+    fn plural_query_matches_singular_document() {
+        // The recall gap light stemming closes: exact-match tokenizing could
+        // not connect "schedulers" to a document that only ever writes
+        // "scheduler". Both sides now normalize the same way.
+        let mut store = InMemoryStore::new();
+        store
+            .write(Document::new(
+                "note",
+                "scheduler",
+                "the scheduler dispatches work",
+            ))
+            .unwrap();
+        let graph = KnowledgeGraph::new();
+        let r = Retriever::new(&store, &graph);
+
+        assert!(
+            r.search("schedulers", 10)
+                .iter()
+                .any(|h| h.title == "scheduler"),
+            "a plural query must reach the singular document"
+        );
+        // And the reverse direction.
+        let mut store2 = InMemoryStore::new();
+        store2
+            .write(Document::new("note", "caches", "warm caches everywhere"))
+            .unwrap();
+        let r2 = Retriever::new(&store2, &graph);
+        assert!(
+            r2.search("cache", 10).iter().any(|h| h.title == "caches"),
+            "a singular query must reach the plural document"
+        );
     }
 
     #[test]

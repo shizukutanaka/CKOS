@@ -15,6 +15,23 @@ platform).
   term's contribution below an unmatched document's. δ = 1.0 (the paper's
   recommended value); regression test covers the long-rare-term-beats-
   short-common-term case the correction targets.
+- **Light stemming in the retrieval tokenizer** (§950): `tokens` matched terms
+  by exact string, so a query for `schedulers` could not reach a document that
+  only ever writes `scheduler` — a plain recall gap on the live search path
+  (`ckos search`, `/api/search`), and one neither pseudo-relevance feedback nor
+  the synonym table closes (PRF only pulls terms from documents already found
+  by literal overlap; the synonym table is a curated list, not morphology).
+  Documents and queries now pass through an **S-stemmer** (Harman, *How
+  effective is suffixing?*, JASIS 42(1), 1991): plural `-s` forms only, with
+  the published exceptions (`-us`, `-ss`, `-aes`, `-ees`, `-oes`, `-eies`,
+  `-aies`). Deliberately not Porter/Lovins — Harman measured that aggressive
+  suffix stripping helps and harms about equally often, while plural-only
+  stemming is close to free. Exceptions terminate rather than falling through,
+  since a fall-through would let the bare `-s` rule strip the very character
+  the exception guards. Tested against the rule table, for idempotence (so
+  folding feedback terms back into a query is a no-op), and for multi-byte
+  safety — every slice offset lands on an ASCII suffix byte, the same class of
+  bug as the earlier CJK cut in `memory::summarize`.
 - **Personalized-PageRank graph expansion** (§951/§952): the retriever's
   multi-hop graph expansion is now a HippoRAG-style Personalized PageRank
   pass (`graph::personalized_pagerank`, arXiv:2405.14831 / 2502.14802)
@@ -276,7 +293,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-268 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+271 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening
