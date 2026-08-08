@@ -2,7 +2,8 @@
 //!
 //! Dependency-free implementations of the standard information-retrieval metrics
 //! used to judge RAG search quality: Precision@k, Recall@k, reciprocal rank
-//! (MRR over many queries), and nDCG@k with binary relevance. They operate on a
+//! (MRR over many queries), average precision (MAP over many queries), and
+//! nDCG@k with binary relevance. They operate on a
 //! ranked list of result ids/titles and the set of ids known to be relevant, so
 //! the search layer can be tuned against a labelled set rather than by feel.
 
@@ -22,6 +23,9 @@ pub struct EvalScores {
     pub reciprocal_rank: f32,
     /// nDCG@k with binary gains (DCG normalized by the ideal DCG).
     pub ndcg: f32,
+    /// Average precision over the whole ranking (TREC convention — see
+    /// [`average_precision`]). Not cut at `k`: it summarizes the full ranking.
+    pub average_precision: f32,
 }
 
 /// Precision@k: fraction of the top-`k` results that are relevant (divided by
@@ -87,6 +91,56 @@ pub fn ndcg_at_k(ranked: &[String], relevant: &HashSet<String>, k: usize) -> f32
     }
 }
 
+/// **Average precision** over the full ranking (Manning, Raghavan & Schütze,
+/// *Introduction to Information Retrieval* §8.4; the TREC `map` metric):
+///
+/// ```text
+/// AP = (1/|R|) · Σ  P@i   over each rank i holding a relevant item
+/// ```
+///
+/// Unlike P@k it rewards ranking relevant items *early* rather than merely
+/// retrieving them, and unlike reciprocal rank it accounts for every relevant
+/// item, not just the first. Following the TREC convention the divisor is the
+/// total number of relevant items `|R|`, so relevant items that were never
+/// retrieved contribute 0 rather than being silently excluded — an evaluation
+/// that ignores what a run missed would flatter a short, incomplete ranking.
+/// Returns 0 when nothing is relevant.
+///
+/// Duplicate ids in `ranked` are counted once: a run listing the same document
+/// twice must not be able to inflate its own score.
+pub fn average_precision(ranked: &[String], relevant: &HashSet<String>) -> f32 {
+    if relevant.is_empty() {
+        return 0.0;
+    }
+    let mut seen: HashSet<&String> = HashSet::new();
+    let mut found = 0usize;
+    let mut sum = 0.0f32;
+    for (i, id) in ranked.iter().enumerate() {
+        if !seen.insert(id) {
+            continue; // already credited this document
+        }
+        if relevant.contains(id) {
+            found += 1;
+            sum += found as f32 / (i + 1) as f32; // precision at this rank
+        }
+    }
+    sum / relevant.len() as f32
+}
+
+/// **Mean average precision** across many queries: the mean of each query's
+/// [`average_precision`]. The standard single-number summary of a retrieval
+/// run's quality. Empty input yields 0.
+pub fn mean_average_precision(per_query: &[(Vec<String>, HashSet<String>)]) -> f32 {
+    if per_query.is_empty() {
+        return 0.0;
+    }
+    let total: f32 = per_query
+        .iter()
+        .map(|(ranked, relevant)| average_precision(ranked, relevant))
+        .sum();
+    total / per_query.len() as f32
+}
+
 /// Compute every metric at cutoff `k` for one ranked list.
 pub fn evaluate(ranked: &[String], relevant: &HashSet<String>, k: usize) -> EvalScores {
     EvalScores {
@@ -95,6 +149,7 @@ pub fn evaluate(ranked: &[String], relevant: &HashSet<String>, k: usize) -> Eval
         recall: recall_at_k(ranked, relevant, k),
         reciprocal_rank: reciprocal_rank(ranked, relevant),
         ndcg: ndcg_at_k(ranked, relevant, k),
+        average_precision: average_precision(ranked, relevant),
     }
 }
 
@@ -146,6 +201,51 @@ mod tests {
         assert_eq!(reciprocal_rank(&list(&["a", "b", "c"]), &relevant), 0.5);
         assert_eq!(reciprocal_rank(&list(&["b", "a"]), &relevant), 1.0);
         assert_eq!(reciprocal_rank(&list(&["x", "y"]), &relevant), 0.0);
+    }
+
+    #[test]
+    fn average_precision_matches_hand_computed_values() {
+        // Textbook example (IIR §8.4): relevant at ranks 1 and 3 of 4, with
+        // three relevant documents in total.
+        //   P@1 = 1/1, P@3 = 2/3, the third relevant is never retrieved (0).
+        //   AP = (1.0 + 0.6667) / 3 = 0.5556
+        let ap = average_precision(&list(&["a", "x", "b", "y"]), &set(&["a", "b", "c"]));
+        assert!((ap - (1.0 + 2.0 / 3.0) / 3.0).abs() < 1e-6, "got {ap}");
+
+        // A perfect ranking scores 1.0; reversing it must score strictly less
+        // even though both retrieve every relevant item — the property P@k and
+        // recall@k cannot express.
+        let relevant = set(&["a", "b"]);
+        assert!((average_precision(&list(&["a", "b", "x"]), &relevant) - 1.0).abs() < 1e-6);
+        let late = average_precision(&list(&["x", "a", "b"]), &relevant);
+        assert!(late < 1.0, "ranking relevant items later must cost: {late}");
+        // P@2 = 1/2 and P@3 = 2/3 → AP = (0.5 + 0.6667)/2 = 0.5833
+        assert!((late - (0.5 + 2.0 / 3.0) / 2.0).abs() < 1e-6);
+
+        // Nothing relevant, or nothing found → 0.
+        assert_eq!(average_precision(&list(&["a"]), &set(&[])), 0.0);
+        assert_eq!(average_precision(&list(&["x"]), &set(&["a"])), 0.0);
+    }
+
+    #[test]
+    fn average_precision_ignores_repeated_ids() {
+        // A run that lists the same relevant document twice must not score
+        // higher than one that lists it once.
+        let relevant = set(&["a", "b"]);
+        let once = average_precision(&list(&["a", "b"]), &relevant);
+        let twice = average_precision(&list(&["a", "a", "b"]), &relevant);
+        assert!((once - 1.0).abs() < 1e-6);
+        assert!(twice <= once, "duplicates must not inflate AP: {twice}");
+    }
+
+    #[test]
+    fn mean_average_precision_averages_per_query() {
+        let queries = vec![
+            (list(&["a", "x"]), set(&["a"])), // AP = 1.0
+            (list(&["x", "b"]), set(&["b"])), // AP = 0.5
+        ];
+        assert!((mean_average_precision(&queries) - 0.75).abs() < 1e-6);
+        assert_eq!(mean_average_precision(&[]), 0.0);
     }
 
     #[test]

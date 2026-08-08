@@ -32,7 +32,10 @@ pub mod synonyms;
 
 pub use agent::{AgentInstance, AgentManifest, AgentState, CapabilityRegistry};
 pub use engine::{Engine, ExecutionResult};
-pub use eval::{evaluate, evaluate_hits, mean_reciprocal_rank, EvalScores};
+pub use eval::{
+    average_precision, evaluate, evaluate_hits, mean_average_precision, mean_reciprocal_rank,
+    EvalScores,
+};
 pub use knowledge_bus::{KnowledgeBus, ReindexQueue, Reindexer};
 pub use kql::{execute as kql_execute, parse as kql_parse, KqlQuery, KqlResult};
 pub use messaging::{Message, MessageBus, Payload, ServiceMesh};
@@ -49,7 +52,10 @@ pub use synonyms::{expand_query_with_synonyms, SynonymTable};
 pub mod prelude {
     pub use crate::agent::{AgentInstance, AgentManifest, AgentState, CapabilityRegistry};
     pub use crate::engine::{Engine, ExecutionResult};
-    pub use crate::eval::{evaluate, evaluate_hits, mean_reciprocal_rank, EvalScores};
+    pub use crate::eval::{
+        average_precision, evaluate, evaluate_hits, mean_average_precision, mean_reciprocal_rank,
+        EvalScores,
+    };
     pub use crate::knowledge_bus::{KnowledgeBus, ReindexQueue, Reindexer};
     pub use crate::kql::{
         execute as kql_execute, parse as kql_parse, KqlQuery, KqlResult, NodeMatch, ReturnTarget,
