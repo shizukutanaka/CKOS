@@ -32,6 +32,19 @@ platform).
   folding feedback terms back into a query is a no-op), and for multi-byte
   safety — every slice offset lands on an ASCII suffix byte, the same class of
   bug as the earlier CJK cut in `memory::summarize`.
+- **tf × idf term selection for pseudo-relevance feedback** (§950): expansion
+  candidates were ranked by raw frequency in the feedback set, so the (small)
+  expansion budget went to whatever those documents happened to repeat — which
+  is usually a term the *whole corpus* shares. A term present in every document
+  discriminates between none of them, so it recalls nothing while displacing a
+  term that would. Reproduced: with one expansion slot over a six-document
+  store, `system` (in five of six) won and `photon` — the only term reaching
+  the target document — was displaced, so the target was never recalled.
+  `expand_query_with_corpus` now weights candidates by feedback frequency times
+  inverse document frequency over the store (Rocchio/RM3 term selection), using
+  the same non-negative BM25 idf form as the keyword ranker; `search_expanded`
+  uses it. `expand_query` stays as the frequency-only fallback for callers with
+  no corpus, where idf is not computable at all.
 - **Personalized-PageRank graph expansion** (§951/§952): the retriever's
   multi-hop graph expansion is now a HippoRAG-style Personalized PageRank
   pass (`graph::personalized_pagerank`, arXiv:2405.14831 / 2502.14802)
@@ -315,7 +328,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-273 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+274 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening

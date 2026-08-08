@@ -172,10 +172,62 @@ const EXPANSION_STOPWORDS: &[&str] = &[
 /// second retrieval pass recalls documents the original wording missed. Returns
 /// the original query unchanged when no useful term is found.
 pub fn expand_query(query: &str, feedback: &[String], max_terms: usize) -> String {
+    let candidates = expansion_candidates(query, feedback);
+    let ranked = rank_candidates(candidates, |_term, tf| tf as f32);
+    append_terms(query, ranked, max_terms)
+}
+
+/// Pseudo-relevance feedback that ranks candidates by **tf × idf** against the
+/// whole `corpus`, the standard Rocchio/RM3 term-selection weighting, instead
+/// of raw feedback frequency.
+///
+/// Raw frequency spends the (small) expansion budget on whatever the feedback
+/// documents happen to repeat, which is typically a term the *entire* corpus
+/// shares — and a term every document contains cannot discriminate between
+/// them, so it recalls nothing while displacing a term that would. Weighting by
+/// inverse document frequency demotes exactly those terms. The idf is the same
+/// non-negative BM25 form the keyword ranker uses, so a term absent
+/// from the corpus is favoured rather than mis-scored.
+///
+/// Prefer this whenever a corpus is available; [`expand_query`] is the
+/// fallback for callers that have only the feedback texts, where inverse
+/// document frequency is not computable at all.
+pub fn expand_query_with_corpus(
+    query: &str,
+    feedback: &[String],
+    corpus: &[String],
+    max_terms: usize,
+) -> String {
     use std::collections::HashMap;
-    if max_terms == 0 {
-        return query.to_string();
+    let candidates = expansion_candidates(query, feedback);
+    if corpus.is_empty() {
+        let ranked = rank_candidates(candidates, |_term, tf| tf as f32);
+        return append_terms(query, ranked, max_terms);
     }
+    // Document frequency over the corpus, counted once per document.
+    let mut df: HashMap<String, usize> = HashMap::new();
+    for text in corpus {
+        let seen: std::collections::HashSet<String> = tokens(text).into_iter().collect();
+        for tok in seen {
+            *df.entry(tok).or_default() += 1;
+        }
+    }
+    let n = corpus.len() as f32;
+    let ranked = rank_candidates(candidates, |term, tf| {
+        let d = *df.get(term).unwrap_or(&0) as f32;
+        let idf = ((n - d + 0.5) / (d + 0.5) + 1.0).ln();
+        tf as f32 * idf
+    });
+    append_terms(query, ranked, max_terms)
+}
+
+/// Candidate expansion terms and their feedback-set frequencies: informative
+/// tokens from `feedback` that are not already in `query`.
+fn expansion_candidates(
+    query: &str,
+    feedback: &[String],
+) -> std::collections::HashMap<String, usize> {
+    use std::collections::HashMap;
     let existing: std::collections::HashSet<String> = tokens(query).into_iter().collect();
     // Stem the stopword list so it matches the stemmed candidate tokens.
     let stopwords: std::collections::HashSet<String> =
@@ -188,10 +240,36 @@ pub fn expand_query(query: &str, feedback: &[String], max_terms: usize) -> Strin
             }
         }
     }
-    let mut ranked: Vec<(String, usize)> = freq.into_iter().collect();
-    // Most frequent first; alphabetical tie-break for deterministic output.
-    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    let expansion: Vec<String> = ranked.into_iter().take(max_terms).map(|(t, _)| t).collect();
+    freq
+}
+
+/// Order candidates by `weight` descending, alphabetically among ties so the
+/// output is deterministic.
+fn rank_candidates(
+    candidates: std::collections::HashMap<String, usize>,
+    weight: impl Fn(&str, usize) -> f32,
+) -> Vec<String> {
+    let mut ranked: Vec<(String, f32)> = candidates
+        .into_iter()
+        .map(|(term, tf)| {
+            let w = weight(&term, tf);
+            (term, w)
+        })
+        .collect();
+    ranked.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    ranked.into_iter().map(|(t, _)| t).collect()
+}
+
+/// Append up to `max_terms` expansion terms to `query`, or return it unchanged.
+fn append_terms(query: &str, ranked: Vec<String>, max_terms: usize) -> String {
+    if max_terms == 0 {
+        return query.to_string();
+    }
+    let expansion: Vec<String> = ranked.into_iter().take(max_terms).collect();
     if expansion.is_empty() {
         query.to_string()
     } else {
@@ -412,7 +490,17 @@ impl<'a> Retriever<'a> {
             .iter()
             .map(|d| format!("{} {}", d.title, d.body))
             .collect();
-        let expanded = expand_query(question, &feedback, max_terms);
+        // Weight candidates by tf x idf over the whole store, not by raw
+        // feedback frequency: a term every document shares cannot discriminate
+        // between them, so spending an expansion slot on it recalls nothing.
+        let corpus: Vec<String> = self
+            .store
+            .search(&Query::default())
+            .unwrap_or_default()
+            .iter()
+            .map(|d| format!("{} {}", d.title, d.body))
+            .collect();
+        let expanded = expand_query_with_corpus(question, &feedback, &corpus, max_terms);
         self.search(&expanded, limit)
     }
 
@@ -903,6 +991,68 @@ mod tests {
         assert!(!expanded.contains("the "));
         // No feedback → unchanged.
         assert_eq!(expand_query("kernel", &[], 3), "kernel");
+    }
+
+    #[test]
+    fn expansion_prefers_a_discriminative_term_over_a_ubiquitous_one() {
+        // Raw feedback frequency spends the expansion budget on whatever the
+        // feedback repeats, which is usually a term the whole corpus shares —
+        // and a term in every document discriminates between none of them.
+        // Reproduced: with one expansion slot, "system" (in all six documents)
+        // won and the only term that could reach the target doc, "photon", was
+        // displaced, so the target was never recalled.
+        let mut store = InMemoryStore::new();
+        store
+            .write(Document::new(
+                "note",
+                "kernel",
+                "kernel system system system system runtime photon",
+            ))
+            .unwrap();
+        // "system" and "runtime" are corpus-wide; only "photon" is selective.
+        for i in 0..4 {
+            store
+                .write(Document::new(
+                    "note",
+                    format!("other {i}"),
+                    "system runtime notes",
+                ))
+                .unwrap();
+        }
+        store
+            .write(Document::new(
+                "note",
+                "photon runtime guide",
+                "photon accelerator",
+            ))
+            .unwrap();
+
+        let corpus: Vec<String> = store
+            .search(&Query::default())
+            .unwrap()
+            .iter()
+            .map(|d| format!("{} {}", d.title, d.body))
+            .collect();
+        let feedback = vec!["kernel kernel system system system system runtime photon".to_string()];
+
+        // Frequency alone picks the useless ubiquitous term...
+        assert_eq!(expand_query("kernel", &feedback, 1), "kernel system");
+        // ...tf x idf picks the discriminative one.
+        let weighted = expand_query_with_corpus("kernel", &feedback, &corpus, 1);
+        assert_eq!(
+            weighted, "kernel photon",
+            "idf must demote the corpus-wide term"
+        );
+
+        // And the end-to-end effect: the target document is now recalled.
+        let graph = KnowledgeGraph::new();
+        let r = Retriever::new(&store, &graph);
+        assert!(
+            r.search_expanded("kernel", 10, 3, 1)
+                .iter()
+                .any(|h| h.title == "photon runtime guide"),
+            "expansion must recall the document only the discriminative term reaches"
+        );
     }
 
     #[test]
