@@ -96,6 +96,8 @@ defect:
 | `kernel/src/telemetry.rs`, `kernel/src/audit.rs` | Poison-recovering locks (panic-cascade test), drop-oldest retention at the cap, every mean guards its zero divisor, FNV-1a determinism |
 | `memory/src/chunk.rs` | Every size argument clamped to ≥1 (no `chunks(0)` panic); `Recursive`'s documented "no chunk exceeds target" invariant holds empirically for targets 1..40 across CJK, long-word and no-terminator inputs; overlap slices by chars |
 | `sdk/src/crypto.rs` | SHA-256 and HMAC-SHA256 against the published FIPS 180-4 and RFC 4231 vectors (not self-consistency) |
+| `sdk/src/kql.rs` selector | Substring label matching is **intended** here — `NodeSelector.text` is the documented `CONTAINS` operator, not a ranking signal. Do not "fix" it to token matching the way `graph_hits` was fixed; the code shape is the same but the contract is not |
+| `memory::embedding::cosine` | Length mismatch and zero vectors return 0.0 (documented), so an embedder dimension change degrades to "no vector signal" rather than a silently wrong score |
 
 ---
 
@@ -139,6 +141,16 @@ meeting the stated condition (that would be label-moving, §1):
   tier. Lift only together with real promote/demote logic and a consumer.
 - **`kernel::ResourceProbe`**: seam with no consumer. Lift when a real
   hardware probe exists.
+- **`HashingEmbedder` deliberately does *not* stem**, while `retrieval::tokens`
+  does (S-stemmer, Harman 1991). Leaving the asymmetry is the safe choice, not
+  an oversight: document embeddings are computed at write time and *persisted*,
+  then compared against a freshly computed query vector. Changing the
+  embedder's tokenizer would leave every stored vector on the old
+  normalization at the *same dimension*, so `cosine`'s length guard cannot
+  catch it and relevance would degrade silently — precisely the failure mode
+  §1's "explicit rejection over silent corruption" rule exists to prevent.
+  Lift only together with an embedding-version marker on documents plus
+  re-embedding (or explicit rejection) of vectors carrying an older marker.
 - **`Event::{TaskCreated, RuntimeLoaded, MemoryUpdated, PluginInstalled,
   AgentRegistered}`** are never published; `Event::topic()` has no caller
   (`kernel/src/event.rs`). Lift per-variant when a genuine publisher exists.
