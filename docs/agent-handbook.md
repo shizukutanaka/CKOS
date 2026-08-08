@@ -91,7 +91,11 @@ defect:
 | `memory/src/memory_score.rs` | Min-max normalization incl. all-equal guard, Generative-Agents blend, clamped decay |
 | `graph/src/extract.rs` | Entity runs, stop-word stripping, typed-relation mapping, edge dedup seeded from existing edges |
 | `web/src/dashboard.html` | All dynamic content via `textContent` (no XSS), force-layout math guarded against div-by-zero, clamped coordinates |
-| `sdk/src/eval.rs` | P@k / R@k / MRR / nDCG formulas against hand-checked values |
+| `sdk/src/eval.rs` | P@k / R@k / MRR / nDCG / AP formulas against hand-checked values |
+| IR primitives vs. their papers | BM25+ (Lv & Zhai 2011, δ applied only to matched terms), RRF (Cormack 2009, k=60, 1-based rank), MMR (Carbonell & Goldstein 1998), nDCG (Järvelin & Kekäläinen 2002) — all four match the published formulas |
+| `kernel/src/telemetry.rs`, `kernel/src/audit.rs` | Poison-recovering locks (panic-cascade test), drop-oldest retention at the cap, every mean guards its zero divisor, FNV-1a determinism |
+| `memory/src/chunk.rs` | Every size argument clamped to ≥1 (no `chunks(0)` panic); `Recursive`'s documented "no chunk exceeds target" invariant holds empirically for targets 1..40 across CJK, long-word and no-terminator inputs; overlap slices by chars |
+| `sdk/src/crypto.rs` | SHA-256 and HMAC-SHA256 against the published FIPS 180-4 and RFC 4231 vectors (not self-consistency) |
 
 ---
 
