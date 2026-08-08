@@ -122,6 +122,16 @@ platform).
   directly before fixing (`NodeKind::Other("foo\tbar")` came back with
   `confidence: 0`, a bogus `date`, and a mangled label); the kind token is now
   sanitized like every other field.
+- **Synonym expansion silently did nothing for a plural query** (§949): the
+  built-in [`SynonymTable`] is written in the singular and lookups used the raw
+  query token, so `ckos search schedulers` got *no* synonym expansion while
+  `scheduler` got the full set — an arbitrary split, and one that disagreed
+  with the retrieval tokenizer now that it stems both documents and queries.
+  Reproduced directly (`"scheduler"` → `scheduler dispatch dispatcher`,
+  `"schedulers"` → unchanged, `"caches"` → unchanged). Table keys and lookups
+  now share the retrieval tokenizer's stemmer, so the two agree; the
+  already-present check dedups on the stem too, so a synonym present in another
+  inflection is not appended twice.
 - **`ckos serve`'s `/api/search` cache could resurrect data a concurrent
   `/api/run` had just invalidated**: the cache-miss check, the retrieval
   computation, and the cache write were three separate lock acquisitions. A
@@ -293,7 +303,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-271 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+272 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening

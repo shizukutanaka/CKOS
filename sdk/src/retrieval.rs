@@ -115,7 +115,7 @@ pub fn plan_retrieval(question: &str) -> RetrievalStrategy {
 ///
 /// Every slice offset lands on an ASCII suffix byte, so non-ASCII text is
 /// either left untouched or cut at a genuine char boundary.
-fn s_stem(word: &str) -> String {
+pub(crate) fn s_stem(word: &str) -> String {
     if let Some(stem) = word.strip_suffix("ies") {
         if word.ends_with("eies") || word.ends_with("aies") {
             return word.to_string();
