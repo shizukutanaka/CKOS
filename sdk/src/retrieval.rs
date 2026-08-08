@@ -155,6 +155,11 @@ fn terms(query: &str) -> Vec<String> {
 }
 
 /// Very common words excluded from query-expansion candidates.
+///
+/// Written in natural spelling and **stemmed at the point of use**: candidate
+/// tokens come from [`tokens`], which stems, so comparing against the raw
+/// spellings would silently miss every entry whose stem differs (`this` → `thi`,
+/// `was` → `wa`, …) and let that stem through as an expansion term.
 const EXPANSION_STOPWORDS: &[&str] = &[
     "the", "and", "for", "are", "was", "were", "with", "that", "this", "from", "have", "has",
     "had", "but", "not", "you", "all", "any", "its", "their", "they", "she", "him", "her", "his",
@@ -172,13 +177,13 @@ pub fn expand_query(query: &str, feedback: &[String], max_terms: usize) -> Strin
         return query.to_string();
     }
     let existing: std::collections::HashSet<String> = tokens(query).into_iter().collect();
+    // Stem the stopword list so it matches the stemmed candidate tokens.
+    let stopwords: std::collections::HashSet<String> =
+        EXPANSION_STOPWORDS.iter().map(|w| s_stem(w)).collect();
     let mut freq: HashMap<String, usize> = HashMap::new();
     for text in feedback {
         for tok in tokens(text) {
-            if tok.chars().count() > 2
-                && !existing.contains(&tok)
-                && !EXPANSION_STOPWORDS.contains(&tok.as_str())
-            {
+            if tok.chars().count() > 2 && !existing.contains(&tok) && !stopwords.contains(&tok) {
                 *freq.entry(tok).or_default() += 1;
             }
         }
@@ -720,6 +725,35 @@ mod tests {
         assert_eq!(hits.len(), 2);
         // Title match ("kernel design") outranks the body-only mention.
         assert_eq!(hits[0].title, "kernel design");
+    }
+
+    #[test]
+    fn stopwords_are_matched_after_stemming_not_before() {
+        // Regression: the stopword list is written in natural spelling but
+        // candidate terms are stemmed, so comparing raw spellings missed every
+        // entry whose stem differs. "this" -> "thi" survived the filter and was
+        // injected into the query as the top expansion term.
+        let feedback = vec!["this system uses this cache and this queue".to_string()];
+        let expanded = expand_query("cache", &feedback, 3);
+        assert!(
+            !expanded.split_whitespace().any(|t| t == "thi"),
+            "a stemmed stopword must not become an expansion term: {expanded}"
+        );
+
+        // Systemic, not just the one word: no entry's stem may survive, so a
+        // future addition ending in -s cannot silently leak either.
+        let stopwords: std::collections::HashSet<String> =
+            EXPANSION_STOPWORDS.iter().map(|w| s_stem(w)).collect();
+        for w in EXPANSION_STOPWORDS {
+            let text = format!("{w} {w} {w} kernel");
+            let out = expand_query("query", &[text], 5);
+            for tok in out.split_whitespace() {
+                assert!(
+                    !stopwords.contains(tok),
+                    "stopword {w:?} leaked as {tok:?} in {out:?}"
+                );
+            }
+        }
     }
 
     #[test]
