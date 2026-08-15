@@ -426,13 +426,23 @@ impl KnowledgeGraph {
             let mut dangling = 0.0f32;
             for id in self.nodes.keys() {
                 let r = rank[id];
-                let out = self.adjacency.get(id).map(|e| e.len()).unwrap_or(0);
+                let edges = self.adjacency.get(id).map(Vec::as_slice).unwrap_or(&[]);
+                // Count only edges whose target still exists. Neither `connect`
+                // nor `GraphStore::load` validates endpoints, so an edge can
+                // point at a missing node; including it in the divisor while
+                // being unable to deliver its share would destroy that share
+                // outright. Restricting to live targets keeps the transition
+                // matrix column-stochastic over the nodes that do exist
+                // (Langville & Meyer, "Google's PageRank and Beyond").
+                let live = || edges.iter().filter(|e| self.nodes.contains_key(&e.to));
+                let out = live().count();
                 if out == 0 {
-                    dangling += r; // no out-links: mass redistributed below
+                    // No live out-links: fully dangling, redistributed below.
+                    dangling += r;
                     continue;
                 }
                 let share = d * r / out as f32;
-                for edge in &self.adjacency[id] {
+                for edge in live() {
                     if let Some(slot) = next.get_mut(&edge.to) {
                         *slot += share;
                     }
@@ -551,6 +561,58 @@ mod tests {
         // central_nodes surfaces the hub first.
         let top = g.central_nodes(1);
         assert_eq!(top[0].0.label, "Hub");
+    }
+
+    #[test]
+    fn pagerank_conserves_mass_when_an_edge_points_at_a_missing_node() {
+        // Regression: out-degree counted every adjacency entry, but the
+        // distribution loop skipped edges whose target is not in the graph
+        // (`next.get_mut` yields None). The share allocated to that edge was
+        // therefore neither delivered nor redistributed — it vanished, every
+        // iteration, so the documented "scores summing to ~1.0" silently broke
+        // and surviving neighbours were under-credited.
+        //
+        // The full-dangling case (a node with *no* out-edges) was already
+        // handled; only a *partially* dangling node slipped past the guard.
+        let mut g = KnowledgeGraph::new();
+        let a = g.add_node(NodeKind::Concept, "A", 50);
+        let b = g.add_node(NodeKind::Concept, "B", 50);
+        // `connect` does not validate endpoints, and `GraphStore::load`
+        // replays edge rows without checking that both nodes were loaded, so a
+        // graph file missing one `N` line reaches exactly this state.
+        let ghost = NodeId::new();
+        g.connect(&a, &b, EdgeKind::References);
+        g.connect(&a, &ghost, EdgeKind::References);
+
+        let pr = g.pagerank(0.85, 30);
+        let total: f32 = pr.values().sum();
+        assert!(
+            (total - 1.0).abs() < 1e-3,
+            "rank mass must be conserved, got {total}"
+        );
+
+        // The dead edge must not dilute B either: dropping a target that does
+        // not exist should leave the same ranking as if it had never been
+        // written, i.e. the plain A -> B chain.
+        let mut clean = KnowledgeGraph::new();
+        let ca = clean.add_node(NodeKind::Concept, "A", 50);
+        let cb = clean.add_node(NodeKind::Concept, "B", 50);
+        clean.connect(&ca, &cb, EdgeKind::References);
+        let clean_pr = clean.pagerank(0.85, 30);
+        assert!(
+            (pr[&b] - clean_pr[&cb]).abs() < 1e-4,
+            "B should score as in the clean graph: {} vs {}",
+            pr[&b],
+            clean_pr[&cb]
+        );
+
+        // Personalized PageRank shares the same core, so it leaks identically.
+        let ppr = g.personalized_pagerank(std::slice::from_ref(&a), 0.85, 30);
+        let ppr_total: f32 = ppr.values().sum();
+        assert!(
+            (ppr_total - 1.0).abs() < 1e-3,
+            "PPR mass must be conserved, got {ppr_total}"
+        );
     }
 
     #[test]

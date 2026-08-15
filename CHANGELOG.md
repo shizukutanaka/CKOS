@@ -157,6 +157,23 @@ platform).
   now share the retrieval tokenizer's stemmer, so the two agree; the
   already-present check dedups on the stem too, so a synonym present in another
   inflection is not appended twice.
+- **PageRank silently destroyed rank mass on edges to missing nodes**
+  (§948/§951/§952): `pagerank_core` counted *every* adjacency entry in a node's
+  out-degree, but delivered a share only when the target existed
+  (`next.get_mut(&edge.to)`), so the share allocated to an edge pointing at a
+  node not in the graph was neither delivered nor redistributed — it vanished
+  on every iteration. The already-correct dangling-node path only catches nodes
+  with *no* out-edges, so a **partially** dangling node slipped past it.
+  Neither `connect` nor `GraphStore::load` validates edge endpoints (load
+  replays `E` rows without checking the `N` rows arrived), so a hand-edited or
+  partially corrupt `graph.kg` reaches this state, and `ckos run --session` /
+  `ckos graph --session` load one every time. Reproduced: a two-node graph with
+  one live edge and one edge to a missing id summed to **0.46**, not the
+  documented ~1.0. Out-degree is now counted over live targets only, which both
+  conserves mass and makes a node whose every edge is dead fall through to the
+  existing dangling path — keeping the transition matrix column-stochastic over
+  the nodes that exist (Langville & Meyer, *Google's PageRank and Beyond*).
+  Personalized PageRank shares the core and was equally affected.
 - **`ckos serve`'s `/api/search` cache could resurrect data a concurrent
   `/api/run` had just invalidated**: the cache-miss check, the retrieval
   computation, and the cache write were three separate lock acquisitions. A
@@ -328,7 +345,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-274 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+275 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening

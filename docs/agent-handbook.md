@@ -125,6 +125,7 @@ module is clean:
 | `web::json` emitted `NaN`/`inf` (`2c531b1`) | serializer contract broken by a value the type allows but the format forbids |
 | Message signing forgeable without the key (`2a0aa73`) | *linear* keyed hash — a key-only term that cancels between two outputs |
 | `gc` deleted a nondeterministic choice of duplicate (`42d68a0`) | iteration order of an unordered container used where the contract implies a defined order |
+| PageRank leaked mass on edges to missing nodes (this round) | a guard that only covers the *total* case (no out-edges) while the *partial* case (some edges dead) slips past |
 
 ---
 
