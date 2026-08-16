@@ -126,6 +126,7 @@ module is clean:
 | Message signing forgeable without the key (`2a0aa73`) | *linear* keyed hash — a key-only term that cancels between two outputs |
 | `gc` deleted a nondeterministic choice of duplicate (`42d68a0`) | iteration order of an unordered container used where the contract implies a defined order |
 | PageRank leaked mass on edges to missing nodes (this round) | a guard that only covers the *total* case (no out-edges) while the *partial* case (some edges dead) slips past |
+| `HashingEmbedder` sign taken from a hash bit determined by the bucket index (this round) | a "decorrelating" bit that is actually a function of the value it should be independent of |
 
 ---
 
@@ -152,6 +153,12 @@ meeting the stated condition (that would be label-moving, §1):
   §1's "explicit rejection over silent corruption" rule exists to prevent.
   Lift only together with an embedding-version marker on documents plus
   re-embedding (or explicit rejection) of vectors carrying an older marker.
+  **Caveat on timing:** this stranding risk applies *once embeddings are
+  released/persisted with a compat guarantee*. The signed-hashing correctness
+  fix (see §3) was made *before* any release precisely to avoid needing that
+  marker — there were no protected persisted vectors yet. A genuine embedder
+  bug found pre-release should still be fixed now; only post-release changes
+  need the version-marker infrastructure first.
 - **`Event::{TaskCreated, RuntimeLoaded, MemoryUpdated, PluginInstalled,
   AgentRegistered}`** are never published; `Event::topic()` has no caller
   (`kernel/src/event.rs`). Lift per-variant when a genuine publisher exists.

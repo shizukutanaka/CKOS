@@ -45,6 +45,24 @@ platform).
   the same non-negative BM25 idf form as the keyword ranker; `search_expanded`
   uses it. `expand_query` stays as the frequency-only fallback for callers with
   no corpus, where idf is not computable at all.
+- **Signed hashing in `HashingEmbedder` now actually decorrelates collisions**
+  (§944): the ±1 sign for each token was taken from FNV-1a's *low* bit, but
+  that bit is merely the parity of the input bytes (the odd-prime multiply
+  preserves it), so for any even `dim` — the default is 64 — it is exactly the
+  bucket index's parity. Every token landing in a bucket therefore shared a
+  sign, so colliding distinct tokens could only add, never cancel: the sign
+  matched the bucket parity for 100% of tokens and colliding pairs cancelled 0%
+  of the time, versus the ~50% signed hashing (Weinberger et al. 2009) needs to
+  make the inner product an unbiased collision estimate. The result was a
+  spurious positive-similarity floor between documents sharing no tokens. The
+  sign now comes from the *top* bit, which the multiply chain mixes well and
+  which `% dim` does not consume; measured cancellation returns to ~50%. Vectors
+  persisted by an earlier build should be regenerated (`ckos gc` drops broken
+  ones; re-indexing recomputes) — done pre-release, so no compat marker was
+  required (see `docs/agent-handbook.md` §4). The module's "honest limitation"
+  test and doc were updated: a no-shared-word paraphrase still shows no semantic
+  recall (~0.13, now vs the ~0.77 of literal overlap), but the old "~0.13 either
+  way" figure was itself the bug's positive-collision floor.
 - **Personalized-PageRank graph expansion** (§951/§952): the retriever's
   multi-hop graph expansion is now a HippoRAG-style Personalized PageRank
   pass (`graph::personalized_pagerank`, arXiv:2405.14831 / 2502.14802)
@@ -345,7 +363,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-275 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+276 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening
