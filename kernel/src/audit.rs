@@ -205,6 +205,21 @@ mod tests {
     }
 
     #[test]
+    fn hash_matches_the_published_fnv_1a_vectors() {
+        // The audit trail's whole claim is that a recorded hash proves what was
+        // processed without keeping the payload (§903). That only holds if the
+        // hash is stable *across builds* — hashes recorded yesterday must still
+        // match the same input today. Determinism within one process cannot
+        // catch a changed constant; only known answers can. Pinned against the
+        // published Fowler–Noll–Vo FNV-1a 64-bit reference vectors, the same
+        // "verify against the standard, not against ourselves" rule already
+        // applied to SHA-256/HMAC in `ckos_sdk::crypto`.
+        assert_eq!(content_hash(""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(content_hash("a"), 0xaf63_dc4c_8601_ec8c);
+        assert_eq!(content_hash("foobar"), 0x8594_4171_f739_67e8);
+    }
+
+    #[test]
     fn survives_a_panic_while_the_lock_is_held() {
         // A thread that panics while holding the audit lock poisons it; the
         // log must keep working afterwards instead of cascading the panic

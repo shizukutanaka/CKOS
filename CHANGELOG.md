@@ -306,6 +306,16 @@ platform).
 
 ### Added
 
+- **Known-answer tests pinning both FNV-1a hashes to the published vectors**:
+  `kernel::audit::content_hash` (64-bit) and `memory::embedding`'s bucket hash
+  (32-bit) were covered only by same-build determinism checks, which cannot
+  catch a changed constant. That matters most for the audit trail, whose §903
+  claim is that a recorded hash proves what was processed without retaining the
+  payload — a claim that requires stability *across* builds, not within one
+  run. Both now assert the published Fowler–Noll–Vo reference values (verified
+  to match before pinning), applying the same "check against the standard, not
+  against ourselves" rule already used for SHA-256/HMAC in `sdk::crypto`.
+
 - **Average precision / MAP in the eval harness** (§959): `sdk::eval` claimed
   the standard IR metric set but omitted average precision — the canonical
   TREC summary metric (Manning, Raghavan & Schütze, *IIR* §8.4). P@k and
@@ -363,7 +373,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-276 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+278 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening
