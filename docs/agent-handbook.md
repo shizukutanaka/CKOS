@@ -96,6 +96,7 @@ defect:
 | `kernel/src/telemetry.rs`, `kernel/src/audit.rs` | Poison-recovering locks (panic-cascade test), drop-oldest retention at the cap, every mean guards its zero divisor, FNV-1a determinism |
 | `memory/src/chunk.rs` | Every size argument clamped to ≥1 (no `chunks(0)` panic); `Recursive`'s documented "no chunk exceeds target" invariant holds empirically for targets 1..40 across CJK, long-word and no-terminator inputs; overlap slices by chars |
 | `sdk/src/crypto.rs` | SHA-256 and HMAC-SHA256 against the published FIPS 180-4 and RFC 4231 vectors (not self-consistency) |
+| `graph/src/versioning.rs` | Union merge by semantic identity (kind + lowercased label): strategy resolution incl. deterministic `HigherConfidence` ties, conflict reporting, edge union deduped by identity triple, endpoints that fail to resolve skipped, single-parent chain / branch-pointer semantics. It does **not** claim 3-way merge, so absent delete-vs-modify detection is scope, not a defect |
 | `sdk/src/kql.rs` selector | Substring label matching is **intended** here — `NodeSelector.text` is the documented `CONTAINS` operator, not a ranking signal. Do not "fix" it to token matching the way `graph_hits` was fixed; the code shape is the same but the contract is not |
 | `memory::embedding::cosine` | Length mismatch and zero vectors return 0.0 (documented), so an embedder dimension change degrades to "no vector signal" rather than a silently wrong score |
 

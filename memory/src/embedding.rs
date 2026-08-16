@@ -124,6 +124,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn fnv1a_matches_the_published_vectors() {
+        // Bucket assignment (and, since the sign fix, the sign bit) both come
+        // from this hash, so a changed constant would silently reshuffle every
+        // embedding — invisible to the other tests here, which only compare
+        // vectors computed by the same build. Pinned against the published
+        // Fowler–Noll–Vo FNV-1a 32-bit reference vectors.
+        assert_eq!(fnv1a(""), 0x811c_9dc5);
+        assert_eq!(fnv1a("a"), 0xe40c_292c);
+        assert_eq!(fnv1a("b"), 0xe70c_2de5);
+        assert_eq!(fnv1a("foobar"), 0xbf9c_f968);
+    }
+
+    #[test]
     fn sign_hash_is_independent_of_the_bucket_index() {
         // Regression: the ±1 sign came from FNV-1a's low bit, which for an even
         // `dim` (the default 64) is exactly the bucket index's parity — so every
