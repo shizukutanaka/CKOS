@@ -192,6 +192,20 @@ platform).
   existing dangling path — keeping the transition matrix column-stochastic over
   the nodes that exist (Langville & Meyer, *Google's PageRank and Beyond*).
   Personalized PageRank shares the core and was equally affected.
+- **Hybrid search hid a matching document when two shared a title** (§950):
+  `fuse_rrf` keyed fusion on the display title, but nothing makes a title
+  unique. Two distinct documents with the same title collapsed into one result
+  — the second vanished from the output entirely, and the survivor's score was
+  inflated by absorbing its reciprocal-rank contribution. RRF (Cormack et al.
+  2009) fuses rankings *of the same item*, and a title is not an item identity.
+  Reproduced: a store with three matching documents, two sharing a title,
+  returned only two hits, the merged one scoring roughly double. `Hit` now
+  carries an `id` (the document id; `None` for graph nodes, which this codebase
+  identifies by label, as `graph::versioning` also does) and fusion keys on it.
+  Cross-source corroboration is preserved by a second pass that folds a graph
+  entry into a store entry with the same name — but only when exactly one store
+  entry carries that name, since a node matching two different documents
+  corroborates neither in particular.
 - **`ckos serve`'s `/api/search` cache could resurrect data a concurrent
   `/api/run` had just invalidated**: the cache-miss check, the retrieval
   computation, and the cache write were three separate lock acquisitions. A
@@ -373,7 +387,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-278 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+280 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening

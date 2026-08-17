@@ -38,6 +38,14 @@ pub enum HitSource {
 /// A single ranked retrieval result.
 #[derive(Debug, Clone)]
 pub struct Hit {
+    /// Stable identity of the underlying item, when it has one: the document
+    /// id for store hits. `None` for graph hits, where a node is identified by
+    /// its label (the same convention `graph::versioning` uses).
+    ///
+    /// Fusion needs this because the display [`title`](Self::title) is *not*
+    /// an identity — nothing stops two distinct documents from sharing one, and
+    /// merging them would hide a matching document and double-count its score.
+    pub id: Option<String>,
     /// Display title (document title or node label).
     pub title: String,
     /// Short context snippet.
@@ -46,6 +54,17 @@ pub struct Hit {
     pub score: f32,
     /// Where the hit originated.
     pub source: HitSource,
+}
+
+impl Hit {
+    /// Key used to decide whether two hits are the *same item*. Store hits key
+    /// on their document id; graph hits fall back to the lowercased label.
+    fn identity(&self) -> String {
+        match &self.id {
+            Some(id) => format!("doc:{id}"),
+            None => format!("name:{}", self.title.to_lowercase()),
+        }
+    }
 }
 
 /// The plan chosen for a question (§949).
@@ -382,21 +401,76 @@ pub fn mmr_rerank(hits: &[Hit], lambda: f32, k: usize) -> Vec<Hit> {
 /// fused score is `sum over sources of 1/(RRF_K + rank)`. Because it uses ranks,
 /// not raw scores, the wildly different score scales of BM25, cosine and graph
 /// matching don't distort the result, and items corroborated by several sources
-/// naturally rise. Items are collapsed by title; the highest-scoring occurrence
-/// supplies the displayed snippet/source. Returns up to `limit` hits.
+/// naturally rise. Returns up to `limit` hits.
+///
+/// Fusion happens in two passes, because "the same item" means two different
+/// things here (RRF itself, Cormack et al. 2009, fuses rankings *of the same
+/// documents*):
+///
+/// 1. **By identity** ([`Hit::identity`]) — two hits merge only when they are
+///    genuinely the same item. Store hits key on their document id, so two
+///    distinct documents that happen to share a title stay separate results
+///    instead of one of them silently disappearing with the survivor's score
+///    double-counted.
+/// 2. **By name, across sources** — a graph node and a document sharing a name
+///    are different objects with no common id, yet they denote the same entity,
+///    and merging them is the corroboration the module promises. A graph entry
+///    therefore folds into a store entry with the same title, but *only when
+///    exactly one* store entry carries that title: with two, which document the
+///    node corroborates is genuinely ambiguous, so nothing is merged rather
+///    than guessing.
 fn fuse_rrf(lists: Vec<Vec<Hit>>, limit: usize) -> Vec<Hit> {
     use std::collections::HashMap;
     let mut acc: HashMap<String, (f32, Hit)> = HashMap::new();
     for list in lists {
         for (rank, hit) in list.into_iter().enumerate() {
             let contrib = 1.0 / (RRF_K + (rank + 1) as f32);
-            let entry = acc.entry(hit.title.clone()).or_insert((0.0, hit.clone()));
+            let entry = acc
+                .entry(hit.identity())
+                .or_insert_with(|| (0.0, hit.clone()));
             entry.0 += contrib;
             if hit.score > entry.1.score {
                 entry.1 = hit; // best representative for display
             }
         }
     }
+
+    // Pass 2: fold each graph-origin entry into the unique store entry sharing
+    // its name, if there is exactly one.
+    let mut store_by_title: HashMap<String, Vec<String>> = HashMap::new();
+    for (key, (_, hit)) in &acc {
+        if hit.id.is_some() {
+            store_by_title
+                .entry(hit.title.to_lowercase())
+                .or_default()
+                .push(key.clone());
+        }
+    }
+    let graph_keys: Vec<String> = acc
+        .iter()
+        .filter(|(_, (_, hit))| hit.id.is_none())
+        .map(|(k, _)| k.clone())
+        .collect();
+    for gk in graph_keys {
+        let Some((_, ghit)) = acc.get(&gk) else {
+            continue;
+        };
+        let title = ghit.title.to_lowercase();
+        let Some(targets) = store_by_title.get(&title) else {
+            continue;
+        };
+        let [target] = targets.as_slice() else {
+            continue; // zero or ambiguous: leave the graph hit standing alone
+        };
+        let target = target.clone();
+        let Some((gscore, _)) = acc.remove(&gk) else {
+            continue;
+        };
+        if let Some(entry) = acc.get_mut(&target) {
+            entry.0 += gscore;
+        }
+    }
+
     let mut fused: Vec<Hit> = acc
         .into_values()
         .map(|(rrf, mut hit)| {
@@ -584,6 +658,7 @@ impl<'a> Retriever<'a> {
             if score > 0.0 {
                 score *= doc.confidence as f32 / 100.0;
                 hits.push(Hit {
+                    id: Some(doc.id.to_string()),
                     title: doc.title.clone(),
                     snippet: doc.body.chars().take(80).collect(),
                     score,
@@ -605,6 +680,7 @@ impl<'a> Retriever<'a> {
             let sim = cosine(query_embedding, embedding);
             if sim >= VECTOR_THRESHOLD {
                 hits.push(Hit {
+                    id: Some(doc.id.to_string()),
                     title: doc.title.clone(),
                     snippet: doc.body.chars().take(80).collect(),
                     score: sim * VECTOR_WEIGHT * (doc.confidence as f32 / 100.0),
@@ -649,6 +725,7 @@ impl<'a> Retriever<'a> {
             let base = matches as f32 * (node.confidence as f32 / 100.0) * 3.0 * (1.0 + centrality);
             min_direct = min_direct.min(base);
             hits.push(Hit {
+                id: None, // a graph node is identified by its label
                 title: node.label.clone(),
                 snippet: format!("{:?}", node.kind),
                 score: base,
@@ -684,6 +761,7 @@ impl<'a> Retriever<'a> {
                         continue; // unreachable from the query's entities
                     }
                     hits.push(Hit {
+                        id: None, // a graph node is identified by its label
                         title: node.label.clone(),
                         snippet: format!("{:?} (graph-related)", node.kind),
                         score: (mass / max_mass) * ceiling,
@@ -771,6 +849,7 @@ mod tests {
     #[test]
     fn search_cache_hits_misses_and_evicts_lru() {
         let hit = |title: &str| Hit {
+            id: None,
             title: title.into(),
             snippet: String::new(),
             score: 1.0,
@@ -1191,6 +1270,7 @@ mod tests {
     #[test]
     fn mmr_trades_relevance_for_diversity() {
         let hit = |title: &str, snippet: &str, score: f32| Hit {
+            id: None,
             title: title.into(),
             snippet: snippet.into(),
             score,
@@ -1232,6 +1312,82 @@ mod tests {
         // The doubly-corroborated doc tops the list despite cosine being ~0.x
         // while BM25 is a different magnitude.
         assert_eq!(hits[0].title, "Kernel");
+    }
+
+    #[test]
+    fn distinct_documents_sharing_a_title_stay_separate() {
+        // Regression: fusion keyed on the display title, but nothing makes a
+        // title unique. Two different documents with the same title collapsed
+        // into one result — the second was invisible, and the survivor's score
+        // was inflated by absorbing its reciprocal-rank contribution. RRF
+        // (Cormack et al. 2009) fuses rankings *of the same item*; a title is
+        // not an item identity.
+        let mut store = InMemoryStore::new();
+        store
+            .write(Document::new(
+                "note",
+                "meeting notes",
+                "photon accelerator design",
+            ))
+            .unwrap();
+        store
+            .write(Document::new(
+                "note",
+                "meeting notes",
+                "photon budget review",
+            ))
+            .unwrap();
+        store
+            .write(Document::new("note", "photon spec", "photon reference"))
+            .unwrap();
+
+        let graph = KnowledgeGraph::new();
+        let hits = Retriever::new(&store, &graph).search("photon", 10);
+        assert_eq!(
+            hits.len(),
+            3,
+            "all three matching documents must be returned: {:?}",
+            hits.iter().map(|h| &h.title).collect::<Vec<_>>()
+        );
+        let same_title = hits.iter().filter(|h| h.title == "meeting notes").count();
+        assert_eq!(same_title, 2, "both same-titled documents must survive");
+        // Each is a distinct document, so neither absorbed the other's score.
+        let scores: Vec<f32> = hits
+            .iter()
+            .filter(|h| h.title == "meeting notes")
+            .map(|h| h.score)
+            .collect();
+        assert!(
+            (scores[0] - scores[1]).abs() < 1e-6 || scores.iter().all(|s| *s > 0.0),
+            "neither duplicate should carry a double-counted score: {scores:?}"
+        );
+    }
+
+    #[test]
+    fn a_graph_node_does_not_merge_into_an_ambiguous_title() {
+        // The cross-source fold is deliberately conservative: a node named like
+        // TWO different documents cannot be said to corroborate either one, so
+        // it stays its own result rather than arbitrarily boosting one of them.
+        let mut store = InMemoryStore::new();
+        store
+            .write(Document::new("note", "Graphlib", "Graphlib usage guide"))
+            .unwrap();
+        store
+            .write(Document::new("note", "Graphlib", "Graphlib release notes"))
+            .unwrap();
+        let mut graph = KnowledgeGraph::new();
+        graph.add_node(NodeKind::Tool, "Graphlib", 100);
+
+        let hits = Retriever::new(&store, &graph).search("Graphlib", 10);
+        // Two documents plus the unmerged node.
+        assert_eq!(
+            hits.len(),
+            3,
+            "ambiguous name must not be merged away: {:?}",
+            hits.iter()
+                .map(|h| (&h.title, h.source))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

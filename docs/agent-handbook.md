@@ -128,6 +128,7 @@ module is clean:
 | `gc` deleted a nondeterministic choice of duplicate (`42d68a0`) | iteration order of an unordered container used where the contract implies a defined order |
 | PageRank leaked mass on edges to missing nodes (this round) | a guard that only covers the *total* case (no out-edges) while the *partial* case (some edges dead) slips past |
 | `HashingEmbedder` sign taken from a hash bit determined by the bucket index (this round) | a "decorrelating" bit that is actually a function of the value it should be independent of |
+| `fuse_rrf` merged distinct documents sharing a title (this round) | a human-readable label used as an identity key, where the real identity exists but was not carried |
 
 ---
 
