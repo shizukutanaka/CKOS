@@ -273,12 +273,14 @@ mod tests {
         use crate::retrieval::HitSource;
         let hits = vec![
             Hit {
+                id: None,
                 title: "a".into(),
                 snippet: String::new(),
                 score: 2.0,
                 source: HitSource::Keyword,
             },
             Hit {
+                id: None,
                 title: "z".into(),
                 snippet: String::new(),
                 score: 1.0,
