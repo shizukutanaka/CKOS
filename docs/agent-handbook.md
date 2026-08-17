@@ -129,6 +129,7 @@ module is clean:
 | PageRank leaked mass on edges to missing nodes (this round) | a guard that only covers the *total* case (no out-edges) while the *partial* case (some edges dead) slips past |
 | `HashingEmbedder` sign taken from a hash bit determined by the bucket index (this round) | a "decorrelating" bit that is actually a function of the value it should be independent of |
 | `fuse_rrf` merged distinct documents sharing a title (this round) | a human-readable label used as an identity key, where the real identity exists but was not carried |
+| `RuntimeRegistry::register` desynced its order index from its map (this round) | two parallel collections that must agree, where only one deduplicates — grep for a `Vec` index beside a `HashMap` |
 
 ---
 
