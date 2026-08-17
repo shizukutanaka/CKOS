@@ -186,6 +186,18 @@ meeting the stated condition (that would be label-moving, §1):
   positive appears on a real long output, and then by switching to a
   length-independent measure — moving-average TTR (Covington & McFall 2010) —
   not by retuning the constant, which just moves the cliff.
+- **Task retries have no backoff** (`sdk/src/engine.rs::requeue`), unlike every
+  production retry loop (AWS backoff-and-jitter, Kubernetes CrashLoopBackOff,
+  gRPC retry policies). Checked, not assumed: with an always-failing task and a
+  healthy sibling in one workflow the observed order was `completed,
+  bad-attempt, bad-attempt, bad-attempt` — the scheduler already dispatches
+  ready work ahead of the doomed task's retries, so nothing starves. Note the
+  naive fix is *worse*: sleeping in `requeue` would stall the single-threaded
+  dispatch loop and create the head-of-line blocking that measurably does not
+  exist today. Lift only when a genuinely remote runtime makes rapid retries
+  harmful, and then as a delayed requeue — a "not before" dispatch cycle on the
+  task (the scheduler already has a monotonic clock) that `dispatch_next`
+  skips past — never a blocking sleep.
 - **`ckos serve` has no TLS/auth by design** (`web/src/lib.rs` module doc):
   local single-operator surface; a reverse proxy adds transport security.
   Destructive ops (gc) stay CLI-only.
