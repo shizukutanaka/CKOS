@@ -390,6 +390,27 @@ impl Engine {
     /// returning `true` if it was re-queued or `false` if its retry budget
     /// ([`MAX_TASK_RETRIES`]) is exhausted. Entering `Retry` increments the
     /// task's attempt counter (see [`Task::attempts`]).
+    ///
+    /// **No backoff, deliberately.** Production retry loops (AWS's
+    /// exponential-backoff-and-jitter guidance, Kubernetes' CrashLoopBackOff,
+    /// gRPC retry policies) delay each attempt so a failing dependency is not
+    /// hammered. Two reasons this one does not, both checked rather than
+    /// assumed:
+    ///
+    /// * It causes no starvation here. Measured with an always-failing task and
+    ///   a healthy sibling in one workflow, the observed order was
+    ///   `completed, bad-attempt, bad-attempt, bad-attempt` — the scheduler's
+    ///   scoring dispatches ready work ahead of the doomed task's retries, so
+    ///   retries do not block healthy tasks.
+    /// * The obvious fix would make things worse. Sleeping inside `requeue`
+    ///   would stall the single-threaded dispatch loop and create exactly the
+    ///   head-of-line blocking the measurement shows is currently absent.
+    ///
+    /// If a genuinely remote runtime ever makes rapid retries harmful, the
+    /// right shape is a *delayed requeue*: stamp the task with a "not before"
+    /// dispatch cycle (the scheduler already keeps a monotonic clock for
+    /// aging) and have `dispatch_next` skip it until then — spacing retries
+    /// without blocking anyone else.
     fn requeue(&self, scheduler: &mut Scheduler, task: &mut Task) -> Result<bool> {
         if task.attempts() >= MAX_TASK_RETRIES {
             return Ok(false);
