@@ -206,6 +206,17 @@ platform).
   entry into a store entry with the same name — but only when exactly one store
   entry carries that name, since a node matching two different documents
   corroborates neither in particular.
+- **`RuntimeRegistry` listed one runtime twice after re-registration** (§900):
+  `register` pushed to the `order` index unconditionally while
+  `runtimes.insert` *replaced* the map entry, so the two fell out of sync when
+  an id was registered again — and `list()`, the §900 runtime table the CLI and
+  dashboard render, reported a single runtime as two. Nothing requires a
+  `Runtime` to return a freshly generated id, so a stable id plus a config
+  reload reaches this state. Reproduced (`order.len() == 2`,
+  `runtimes.len() == 1`, `list().len() == 2`). `register` now extends `order`
+  only when the id is new, keeping the order/map key sets equal — the same
+  invariant `retrieval::SearchCache` already maintains between its order queue
+  and entry map — while a repeat registration still replaces the runtime.
 - **`ckos serve`'s `/api/search` cache could resurrect data a concurrent
   `/api/run` had just invalidated**: the cache-miss check, the retrieval
   computation, and the cache write were three separate lock acquisitions. A
@@ -387,7 +398,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-280 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+281 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening

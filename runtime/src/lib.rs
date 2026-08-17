@@ -142,11 +142,23 @@ impl RuntimeRegistry {
         Self::default()
     }
 
-    /// Register a runtime, returning its id.
+    /// Register a runtime, returning its id. Registering an id that is already
+    /// present *replaces* that runtime rather than adding a second entry.
+    ///
+    /// `order` is a parallel index over `runtimes`, so the two key sets must
+    /// stay equal — the same invariant `retrieval::SearchCache` maintains
+    /// between its order queue and its entry map. A `Runtime` may return a
+    /// stable id (nothing requires the generated one), so re-registering after
+    /// a config reload would otherwise push a duplicate into `order` while the
+    /// map replaced its single entry, and the §900 runtime table would report
+    /// one runtime twice.
     pub fn register(&mut self, runtime: Box<dyn Runtime>) -> RuntimeId {
         let id = runtime.id().clone();
-        self.order.push(id.clone());
-        self.runtimes.insert(id.clone(), runtime);
+        // Only extend the order index when the id is genuinely new; `insert`
+        // returning `Some` means we replaced an existing registration.
+        if self.runtimes.insert(id.clone(), runtime).is_none() {
+            self.order.push(id.clone());
+        }
         id
     }
 
@@ -239,6 +251,64 @@ mod tests {
             assert_eq!(k.to_string().parse::<RuntimeKind>().unwrap(), k);
         }
         assert!("quantum".parse::<RuntimeKind>().is_err());
+    }
+
+    #[test]
+    fn re_registering_an_id_replaces_rather_than_duplicating() {
+        // Regression: `register` pushed to the `order` index unconditionally
+        // while `runtimes.insert` replaced the map entry, so an id registered
+        // twice left the two out of sync — `list()`, the §900 runtime table
+        // surfaced by the CLI and dashboard, reported one runtime as two.
+        // Nothing forces a `Runtime` to hand back a freshly generated id, so a
+        // stable id plus a config reload reaches this state.
+        struct FixedId {
+            id: RuntimeId,
+            name: &'static str,
+        }
+        impl Runtime for FixedId {
+            fn id(&self) -> &RuntimeId {
+                &self.id
+            }
+            fn name(&self) -> &str {
+                self.name
+            }
+            fn kind(&self) -> RuntimeKind {
+                RuntimeKind::Cpu
+            }
+            fn capabilities(&self) -> &[Capability] {
+                &[]
+            }
+            fn run(&self, _r: &InferenceRequest) -> Result<InferenceResponse> {
+                Err(KernelError::other("not used"))
+            }
+        }
+
+        let id = RuntimeId::new();
+        let mut reg = RuntimeRegistry::new();
+        reg.register(Box::new(FixedId {
+            id: id.clone(),
+            name: "first",
+        }));
+        reg.register(Box::new(FixedId {
+            id: id.clone(),
+            name: "second",
+        }));
+
+        let listed = reg.list();
+        assert_eq!(listed.len(), 1, "one runtime must list once: {listed:?}");
+        // Replacement, not a no-op: the later registration is the live one.
+        assert_eq!(listed[0].name, "second");
+        // The order index and the map agree, as in `SearchCache`.
+        assert_eq!(reg.order.len(), reg.runtimes.len());
+
+        // Distinct ids still accumulate in registration order.
+        let other = RuntimeId::new();
+        reg.register(Box::new(FixedId {
+            id: other,
+            name: "third",
+        }));
+        assert_eq!(reg.list().len(), 2);
+        assert_eq!(reg.order.len(), reg.runtimes.len());
     }
 
     #[test]
