@@ -428,6 +428,20 @@ impl Check for ForbiddenContentCheck {
 ///   unique/total token ratio below `min_diversity`.
 ///
 /// Short outputs are skipped, since repetition is only meaningful at length.
+///
+/// **Known length sensitivity.** The diversity signal is a raw type-token
+/// ratio, which falls with length even for perfectly good prose (Heaps' law:
+/// vocabulary grows sublinearly in token count), so it is not comparable
+/// across outputs of different sizes. Measured on this repository's own
+/// documentation — genuine human-written English — the ratio runs 0.55 at
+/// 1 000 tokens, 0.38 at 4 000 and 0.32 at 8 000, i.e. still comfortably above
+/// the 0.25 default but trending toward it. No false positive was reproducible
+/// on real text at the sizes available here, so the threshold is left alone;
+/// the note exists so nobody raises `min_diversity` or points this check at
+/// very long outputs without knowing the ratio drifts down on its own. The
+/// length-independent replacement, if it ever bites, is a moving-average TTR
+/// (Covington & McFall, *Cutting the Gordian Knot*, 2010) rather than a
+/// retuned constant.
 pub struct RepetitionCheck {
     max_run: usize,
     min_tokens: usize,
