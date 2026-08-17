@@ -176,6 +176,16 @@ meeting the stated condition (that would be label-moving, §1):
   `sdk/src/synonyms.rs` is the documented partial mitigation. Lift = real
   embedding model behind the `Embedder` trait (FFI/ONNX), which breaks
   std-only, so it must be an optional, feature-gated crate.
+- **`RepetitionCheck`'s diversity signal is a raw type-token ratio**, which is
+  length-dependent by construction (Heaps' law), so it is not comparable across
+  outputs of different sizes. Measured on this repo's own documentation: 0.55 at
+  1 000 tokens, 0.38 at 4 000, 0.32 at 8 000 — above the 0.25 default, but
+  trending toward it. **No false positive was reproducible on real prose at
+  those sizes, so the code was deliberately left unchanged** (§1: an
+  unreproducible suspicion is not a finding). Lift only if a genuine false
+  positive appears on a real long output, and then by switching to a
+  length-independent measure — moving-average TTR (Covington & McFall 2010) —
+  not by retuning the constant, which just moves the cliff.
 - **`ckos serve` has no TLS/auth by design** (`web/src/lib.rs` module doc):
   local single-operator surface; a reverse proxy adds transport security.
   Destructive ops (gc) stay CLI-only.
