@@ -8,9 +8,7 @@
 //! — surfacing improvements a single agent would miss.
 
 use crate::engine::ExecutionResult;
-use ckos_kernel::error::Result;
-use ckos_kernel::{DocumentId, TaskId};
-use ckos_memory::{Document, Storage};
+use ckos_kernel::TaskId;
 
 /// A single self-evaluation of a task result (§921).
 #[derive(Debug, Clone)]
@@ -137,27 +135,10 @@ pub fn consensus(reflections: &[Reflection]) -> Consensus {
     }
 }
 
-/// Persist a reflection to memory as a `reflection` document (§921), tagging it
-/// with the originating task and carrying the score as the document confidence.
-pub fn store_reflection(store: &mut dyn Storage, reflection: &Reflection) -> Result<DocumentId> {
-    let mut doc = Document::new(
-        "reflection",
-        format!("reflection for {}", reflection.task),
-        reflection.hint.clone(),
-    );
-    doc.confidence = reflection.score;
-    doc.metadata
-        .insert("task".to_string(), reflection.task.to_string());
-    let id = doc.id.clone();
-    store.write(doc)?;
-    Ok(id)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use ckos_kernel::Capability;
-    use ckos_memory::{InMemoryStore, Query};
 
     fn result(verified: bool, agent: Option<&str>, output: &str) -> ExecutionResult {
         ExecutionResult {
@@ -220,21 +201,5 @@ mod tests {
         // A weight = 91+91=182, B weight = 11, total 193 → ~0.943.
         assert!(c.agreement > 0.9);
         assert_eq!(c.hints.len(), 2);
-    }
-
-    #[test]
-    fn reflections_persist_to_memory() {
-        let mut store = InMemoryStore::new();
-        let reflection = HeuristicReflector::new().reflect(&result(false, None, ""));
-        store_reflection(&mut store, &reflection).unwrap();
-        let hits = store
-            .search(&Query {
-                doc_type: Some("reflection".into()),
-                limit: 10,
-                ..Default::default()
-            })
-            .unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].confidence, reflection.score);
     }
 }
