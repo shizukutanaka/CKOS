@@ -167,15 +167,24 @@ impl Engine {
         &self.telemetry
     }
 
-    /// Execute one task: select runtime → run → verify, emitting events and
-    /// writing an audit record (§903) on every path, success or failure. Drives
-    /// the task through its §893 lifecycle as it actually progresses — a
+    /// Execute one task: select runtime → run → verify, writing an audit
+    /// record (§903) on every path, success or failure. Drives the task
+    /// through its §893 lifecycle as it actually progresses — a
     /// runtime-selection failure leaves it at `Queued` (it never started); a
     /// runtime error transitions `Running -> Failed`; verification transitions
     /// `Verifying -> Completed` or `Verifying -> Failed`. This is the only
     /// place `TaskState` advances, so `task.state()` always reflects reality.
+    ///
+    /// Events (§894) track the same reality, which is why they are not
+    /// uniform across paths: a policy denial publishes `PolicyViolation`
+    /// only, and a runtime-selection failure publishes none at all — neither
+    /// task ever reached a runtime, and `TaskFailed` would contradict a state
+    /// that is still `Queued`. `TaskStarted` is published once a runtime has
+    /// been selected and the task is `Running`, matching that event's
+    /// contract ("a task began executing on a runtime"); a consumer therefore
+    /// gets `TaskStarted` if and only if the task really did start, and it
+    /// repeats per attempt across the retry loop.
     pub fn execute(&self, task: &mut Task) -> Result<ExecutionResult> {
-        self.bus.publish(Event::TaskStarted(task.id.clone()));
         // A fresh task enters the queue here; a task re-queued through the
         // §893 recovery loop (Failed → Rollback → Retry → Queued, see
         // `run_workflow`) is already Queued and re-enters directly.
@@ -223,6 +232,13 @@ impl Engine {
         };
         let runtime_name = runtime.name().to_string();
         task.transition_to(TaskState::Running)?;
+        // Published here, not on entry: `Event::TaskStarted` means "a task
+        // began executing on a runtime", and only now is that true. Emitting
+        // it first announced a runtime execution for tasks that a policy
+        // denial or a missing runtime stopped before any runtime existed —
+        // reproduced with an empty `RuntimeRegistry`, where `execute` returned
+        // `Err`, the task ended `Queued`, and `TaskStarted` had already fired.
+        self.bus.publish(Event::TaskStarted(task.id.clone()));
 
         let started = Instant::now();
         let response = match runtime.run(&InferenceRequest {
@@ -612,6 +628,77 @@ mod tests {
         // Denied before a runtime was ever exercised: honestly still Queued.
         assert_eq!(task.state(), TaskState::Queued);
         assert_eq!(violations.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn task_started_is_published_only_when_a_runtime_really_started_the_task() {
+        // Regression: `Event::TaskStarted` is documented as "a task began
+        // executing on a runtime", but it was published as `execute`'s very
+        // first statement — before the policy gate and before any runtime was
+        // selected. So a task stopped by either gate announced a runtime
+        // execution that never happened, contradicting the module's own
+        // invariant that the observable state reflects reality. Reproduced
+        // with an empty `RuntimeRegistry`: `execute` returned `Err`, the task
+        // ended `Queued`, and `TaskStarted` had already fired once.
+        //
+        // Both never-started paths are covered, plus the positive case — a
+        // fix that simply stopped publishing the event would pass a
+        // negative-only test.
+        let count_starts = |engine: &Engine| {
+            let n = Arc::new(AtomicUsize::new(0));
+            let seen = Arc::clone(&n);
+            engine.bus().subscribe(Arc::new(move |e: &Event| {
+                if matches!(e, Event::TaskStarted(_)) {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                }
+            }));
+            n
+        };
+
+        // 1. No runtime can serve the capability.
+        let engine = Engine::new(
+            RuntimeRegistry::new(),
+            CapabilityRegistry::new(),
+            Verifier::new(),
+        );
+        let starts = count_starts(&engine);
+        let mut task = Task::new("nothing can serve this", Capability::Reasoning);
+        assert!(engine.execute(&mut task).is_err());
+        assert_eq!(task.state(), TaskState::Queued, "it never started");
+        assert_eq!(
+            starts.load(Ordering::SeqCst),
+            0,
+            "a task with no runtime must not announce that it started on one"
+        );
+
+        // 2. Denied by policy, before a runtime is ever selected.
+        let mut runtimes = RuntimeRegistry::new();
+        runtimes.register(Box::new(EchoRuntime::new(vec![Capability::Medical])));
+        let engine = Engine::new(runtimes, CapabilityRegistry::new(), Verifier::new())
+            .with_policy(PolicyEngine::new(), vec!["guest".to_string()]);
+        let starts = count_starts(&engine);
+        let mut task = Task::new("diagnose", Capability::Medical);
+        assert!(engine.execute(&mut task).is_err());
+        assert_eq!(task.state(), TaskState::Queued);
+        assert_eq!(
+            starts.load(Ordering::SeqCst),
+            0,
+            "a policy-denied task must not announce that it started"
+        );
+
+        // 3. A task that genuinely runs still publishes exactly one.
+        let mut runtimes = RuntimeRegistry::new();
+        runtimes.register(Box::new(EchoRuntime::new(vec![Capability::Reasoning])));
+        let engine = Engine::new(runtimes, CapabilityRegistry::new(), Verifier::new());
+        let starts = count_starts(&engine);
+        let mut task = Task::new("summarize", Capability::Reasoning);
+        assert!(engine.execute(&mut task).is_ok());
+        assert_eq!(task.state(), TaskState::Completed);
+        assert_eq!(
+            starts.load(Ordering::SeqCst),
+            1,
+            "a task that did start must still announce it"
+        );
     }
 
     #[test]
