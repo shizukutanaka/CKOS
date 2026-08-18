@@ -98,6 +98,10 @@ COMMANDS:
                                      persisted graph with --session)
     eval --relevant <csv> [--k N]    Score search quality (Precision/Recall/
       <dir> <query…>                 MRR/nDCG/MAP) vs known-relevant titles
+    index <dir> <file…>              Ingest files into a session: chunk them
+      [--chunk N] [--overlap N]      (§939), embed and store each passage, extract
+                                     concepts into the graph and re-index the new
+                                     nodes so search reaches both (§938)
     graph [--dot] <text…>            Extract a knowledge graph from text (§941)
     graph [--dot] --session <dir>    Extract a graph from a session's documents
     gc <dir> [--min-confidence N]    Garbage-collect a session: low-value docs
@@ -147,6 +151,7 @@ fn main() -> ExitCode {
         Some("kql") => cmd_kql(&args[1..]),
         Some("eval") => cmd_eval(&args[1..]),
         Some("graph") => cmd_graph(&args[1..]),
+        Some("index") => cmd_index(&args[1..]),
         Some("gc") => cmd_gc(&args[1..]),
         Some("verify") => cmd_verify(&args[1..]),
         Some("tool") => cmd_tool(&args[1..]),
@@ -816,6 +821,156 @@ fn cmd_kql(rest: &[String]) -> ExitCode {
         println!("related ({}):", result.related.len());
         result.related.iter().for_each(&print_match);
     }
+    ExitCode::SUCCESS
+}
+
+/// `ckos index` — the §938 index pipeline, end to end.
+///
+/// Reads each file, splits it into retrievable passages (§939 recursive
+/// chunking with optional overlap), stores every chunk as an embedded document,
+/// extracts concepts from the text into the session's knowledge graph (§941),
+/// and re-indexes the newly created nodes as embedded `graph_node` documents
+/// (§938) so a later `ckos search` reaches passages *and* concepts.
+///
+/// This is the ingest path the platform was missing: `ckos run --session`
+/// records what a run produced, but nothing could take an existing corpus in.
+fn cmd_index(rest: &[String]) -> ExitCode {
+    if wants_help(rest) {
+        println!("usage: ckos index <dir> <file…> [--chunk N] [--overlap N]\n  Ingest files into a session (§938): chunk each file into passages (§939),\n  store them embedded, extract concepts into the session graph (§941), and\n  re-index the new nodes so `ckos search` finds passages and concepts alike.\n  --chunk N    target characters per passage (default 800)\n  --overlap N  characters of context repeated between passages (default 80)");
+        return ExitCode::SUCCESS;
+    }
+    let (chunk_arg, rest) = match take_value_flag(rest, "--chunk") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let (overlap_arg, rest) = match take_value_flag(&rest, "--overlap") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let parse_num = |v: Option<String>, default: usize, flag: &str| -> Option<usize> {
+        match v {
+            None => Some(default),
+            Some(raw) => match raw.parse() {
+                Ok(n) => Some(n),
+                Err(_) => {
+                    eprintln!("error: {flag} needs a character count, e.g. {flag} 800");
+                    None
+                }
+            },
+        }
+    };
+    let Some(target) = parse_num(chunk_arg, 800, "--chunk") else {
+        return ExitCode::FAILURE;
+    };
+    let Some(overlap) = parse_num(overlap_arg, 80, "--overlap") else {
+        return ExitCode::FAILURE;
+    };
+
+    let Some((dir, files)) = rest.split_first() else {
+        eprintln!("error: `index` needs a session directory and at least one file, e.g. `ckos index ./my-session notes.md`");
+        return ExitCode::FAILURE;
+    };
+    if files.is_empty() {
+        eprintln!("error: `index` needs at least one file to ingest");
+        return ExitCode::FAILURE;
+    }
+
+    let mut store = match FileStore::open(dir) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: could not open session {dir}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    warn_skipped(&store);
+
+    // Accumulate into any graph already saved, exactly as `ckos run --session`
+    // and `ckos graph --session` do — never start empty and clobber it.
+    let graph_path = Path::new(dir.as_str()).join(GRAPH_FILE);
+    let existing = match GraphStore::load(&graph_path) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("error: could not load {}: {e}", graph_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    // Wrap the graph in a bus so every new node announces itself and the
+    // re-index subscriber picks it up (§923 → §938).
+    let mut bus = KnowledgeBus::from_graph(existing);
+    let queue = bus.subscribe_reindex();
+    let embedder = HashingEmbedder::default();
+
+    let (mut chunks_written, mut added, mut reinforced) = (0usize, 0usize, 0usize);
+    for file in files {
+        let text = match std::fs::read_to_string(file) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("error: could not read {file}: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let passages = chunk_with_overlap(&text, ChunkStrategy::Recursive(target), overlap);
+        // Re-indexing a file *replaces* its passages. `Document::new` mints a
+        // fresh id every call, so without this a second `ckos index` of the
+        // same file would store a second full copy of every passage — the same
+        // duplication `Reindexer` was fixed for. Deleting first (rather than
+        // reusing ids) also handles a file that now chunks into fewer pieces.
+        let stale: Vec<DocumentId> = store
+            .search(&Query {
+                doc_type: Some("chunk".to_string()),
+                ..Default::default()
+            })
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|d| d.metadata.get("source").map(String::as_str) == Some(file.as_str()))
+            .map(|d| d.id)
+            .collect();
+        for id in stale {
+            if let Err(e) = store.delete(&id) {
+                eprintln!("error: could not replace an old passage of {file}: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+        for (i, passage) in passages.iter().enumerate() {
+            let mut doc = Document::new("chunk", format!("{file}#{i}"), passage.clone());
+            doc.embedding = Some(embedder.embed(passage));
+            doc.metadata.insert("source".to_string(), file.clone());
+            if let Err(e) = store.write(doc) {
+                eprintln!("error: could not store a passage of {file}: {e}");
+                return ExitCode::FAILURE;
+            }
+            chunks_written += 1;
+        }
+        let report = bus.ingest_text(&text);
+        added += report.nodes_added;
+        reinforced += report.nodes_reinforced;
+        println!(
+            "{file}: {} passage(s), {} new concept(s), {} reinforced",
+            passages.len(),
+            report.nodes_added,
+            report.nodes_reinforced
+        );
+    }
+
+    // Drain the queue: every newly announced node becomes an embedded document
+    // so hybrid search can reach concepts, not just passages (§938).
+    let reindexed = Reindexer::new(bus.graph(), &embedder).process(&queue, &mut store);
+
+    if let Err(e) = GraphStore::save(&graph_path, bus.graph()) {
+        eprintln!("error: could not save {}: {e}", graph_path.display());
+        return ExitCode::FAILURE;
+    }
+
+    println!(
+        "\nindexed {} file(s) into {dir}: {chunks_written} passage(s), {added} new concept(s), {reinforced} reinforced, {reindexed} node document(s) re-indexed",
+        files.len()
+    );
     ExitCode::SUCCESS
 }
 

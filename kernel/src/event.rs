@@ -52,25 +52,6 @@ pub enum Event {
     WorkflowCompleted(WorkflowId),
 }
 
-impl Event {
-    /// Short topic label, useful for filtering and metrics (§933).
-    pub fn topic(&self) -> &'static str {
-        match self {
-            Event::TaskCreated(_) => "task.created",
-            Event::TaskStarted(_) => "task.started",
-            Event::TaskCompleted(_) => "task.completed",
-            Event::TaskFailed { .. } => "task.failed",
-            Event::RuntimeLoaded(_) => "runtime.loaded",
-            Event::MemoryUpdated { .. } => "memory.updated",
-            Event::GraphChanged(_) => "graph.changed",
-            Event::PluginInstalled { .. } => "plugin.installed",
-            Event::PolicyViolation { .. } => "policy.violation",
-            Event::AgentRegistered(_) => "agent.registered",
-            Event::WorkflowCompleted(_) => "workflow.completed",
-        }
-    }
-}
-
 /// A subscriber callback. `Send + Sync` so the bus can be shared across threads.
 pub type Subscriber = Arc<dyn Fn(&Event) + Send + Sync>;
 

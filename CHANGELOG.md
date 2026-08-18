@@ -329,7 +329,53 @@ platform).
   by confidence descending, with the document id as a stable tie-break, so the
   best copy is kept and the run is reproducible.
 
+### Removed
+
+- **Dead scaffolding deleted** (Musk-algorithm step 2 — delete before you
+  optimise, because the most common error is refining a part that should not
+  exist). Each removal was measured, not guessed: a workspace scan for public
+  items with zero references outside their own definition and test module.
+  - `Event::topic()` — zero callers anywhere, tests included. §933 is satisfied
+    by a metrics sink, not by an unused label accessor.
+  - `PluginKind` — a §901 category enum that categorised nothing: no field
+    stored it, no function took or returned it. Add it back when a `Tool`
+    actually needs classifying.
+  - `Dag::roots()` — called only by its own assertions, i.e. a test justifying
+    the existence of the thing it tests. The engine orders steps with
+    `topological_order`.
+
+  Kept deliberately: `crypto::to_hex`, which is test-only today but has a named
+  near-term consumer — a 32-byte signature has to be rendered somehow to cross
+  the §902 JSON API.
+
 ### Added
+
+- **`ckos index <dir> <file…>` — the §938 ingest path, now reachable.** Musk
+  step 1 (question the requirement) applied to spec compliance surfaced the
+  real gap: nine subsystems had *no path from any product entry point*, so the
+  §889–§962 claim was being met in name only. Measured by checking every public
+  item and subsystem for a reference from `cli/` or `web/`. `ckos run --session`
+  could record what a run produced, but nothing could take an existing corpus
+  *in*.
+
+  One command turns five of those dormant pieces into user-visible behaviour:
+  it chunks each file into retrievable passages (§939 recursive chunking with
+  overlap), stores every passage embedded, feeds the text through
+  `KnowledgeBus::ingest_text` so extracted concepts announce themselves (§923 →
+  §941), and drains the `ReindexQueue` through `Reindexer` so each new node
+  becomes an embedded `graph_node` document (§938). After indexing, `ckos
+  search` reaches passages *and* concepts — verified end to end.
+
+  Re-indexing a file **replaces** its passages rather than storing a second
+  copy: `Document::new` mints a fresh id per call, so the first cut of this
+  command duplicated every passage on a second run — the same defect class
+  `Reindexer` was fixed for, caught here by testing idempotence before
+  committing. The graph accumulates (nodes reinforced, never cloned or
+  clobbered), matching `ckos run --session`.
+
+  `KnowledgeBus::from_graph` was added because the command genuinely needs it:
+  ingest must start from the graph already on disk, not an empty one.
+
 
 - **Known-answer tests pinning both FNV-1a hashes to the published vectors**:
   `kernel::audit::content_hash` (64-bit) and `memory::embedding`'s bucket hash
@@ -398,7 +444,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-281 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+282 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening
