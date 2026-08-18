@@ -75,6 +75,34 @@ platform).
 
 ### Fixed
 
+- **The atomic write's scratch path was shared, so two writers could corrupt
+  the file the rename was meant to protect** (`graph::GraphStore::save`,
+  `memory::file_store::write_atomic`). Both derived the temp path from the
+  destination (`<dest>.tmp`), making it identical for every writer of that
+  file. `File::create` opens `O_TRUNC`, so two writers truncate each other's
+  partial file while each keeps writing at *its own* offset, and the rename
+  then installs the mixture — the exact corruption the rename exists to
+  prevent, making the documented "readers see either the old file or the
+  complete new one" guarantee conditional on nobody writing concurrently.
+  Verified at the syscall level rather than argued: with writer A at offset
+  2048 of 4096 when writer B truncated and wrote 1024 bytes, the renamed file
+  was neither A's nor B's content but B's 1024 bytes, then **1024 NUL bytes**
+  (the hole A's truncated prefix left), then A's tail. Concurrency here is not
+  hypothetical — `ckos serve` handles requests on separate threads, two
+  `POST /api/run` calls against one session both save that session's graph,
+  and `Reindexer` addresses documents by a *deterministic* id.
+  Each `save`/`write_atomic` now takes a scratch path unique to the call
+  (`.<name>.<pid>.<seq>.tmp`); the `.tmp` extension still keeps it out of
+  `FileStore::open`'s `*.doc` scan.
+  Honest note on how this was found: 40 rounds of two genuinely concurrent
+  `save`s, plus 20 more with a synchronized start and a 60 000-node graph,
+  never tripped it — the window is narrow, not absent, which is why the
+  syscall-level check was done before concluding anything. The regression
+  tests (one per crate) therefore model the interleaving *deterministically*
+  instead of racing: they hold an open handle at a nonzero offset on the old
+  scratch path — exactly the state a writer mid-`write_all` is in — and assert
+  the saved file contains neither NUL bytes nor the other writer's data. Both
+  fail with the fix reverted (3 932 and 4 045 NUL bytes respectively).
 - **A 413/400 rejection was destroyed by its own connection close.** Closing a
   socket that still holds unread data makes the OS send RST rather than FIN,
   and the RST discards whatever of the response is still in flight.
@@ -595,7 +623,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-283 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+285 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening
