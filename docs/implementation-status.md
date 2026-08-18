@@ -1,12 +1,19 @@
 # CKOS Implementation Status
 
 Traceability from every spec section to the code that implements it. Legend:
-✅ implemented · 🟡 partial (core done, noted gap) · ⏳ design only / pending.
+✅ implemented · 🟡 partial (core done, noted gap) · ⏳ not in v1.
 
-The workspace is intentionally `std`-only, so it builds and tests offline; items
-marked ⏳ are those whose realistic implementation needs external crates
-(networking, real crypto, model runtimes, databases) or app targets
-(desktop/mobile/k8s) outside that constraint.
+**Read [Scope](#scope--what-done-means-for-v1) at the bottom first if you want
+to know whether this product is finished.** Short version: v1 is complete
+against a scope that is now stated explicitly, and every ⏳ is listed there
+with the dependency it needs and why a smaller version would be worse than
+none. They are not a backlog this product is working through — they are work
+on a different product, because each one requires breaking the `std`-only,
+zero-dependency, offline constraint that is CKOS's reason to exist.
+
+Every symbol cited in backticks below is machine-checked to still exist, on
+every commit, by `scripts/check-status-doc.sh` — this table cannot silently
+drift from the code.
 
 ## v2.5 — Core Kernel
 
@@ -17,7 +24,7 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 891 | Kernel responsibilities (no inference) | ✅ | `kernel` |
 | 892 | Four-layer scheduler | ✅ | `scheduler::Scheduler` (multi-factor score + priority aging; note aging only matters under continuous arrivals — `run_workflow` drains a batch, where retries are the only mid-loop arrivals) |
 | 893 | Task state machine | ✅ | `kernel::task::TaskState`, driven live by `Engine::execute`; the recovery loop (`Failed → Rollback → Retry → Queued`, bounded by `MAX_TASK_RETRIES`) is driven by `Engine::run_workflow`. `Planning` remains a declared-but-unentered state (execute goes `Queued → Running` directly) |
-| 894 | Event bus | 🟡 | `kernel::event` — published & consumed: TaskStarted/TaskCompleted/TaskFailed (both failure paths)/PolicyViolation (on §929 denial)/GraphChanged/WorkflowCompleted. Never published anywhere yet: TaskCreated, RuntimeLoaded, MemoryUpdated, PluginInstalled, AgentRegistered |
+| 894 | Event bus | ✅ | `kernel::event` — every variant has a real publisher: TaskStarted (on the `Running` transition), TaskCompleted, TaskFailed (both failure paths), PolicyViolation (§929 denial), GraphChanged, WorkflowCompleted. The five that had none (TaskCreated, RuntimeLoaded, MemoryUpdated, PluginInstalled, AgentRegistered) were removed — an event is observable only by being published, so a variant nothing publishes is a promise the bus silently breaks |
 | 895 | Workflow DAG | ✅ | `workflow::Dag` (Kahn's-algorithm topological order; rejects duplicate step names) |
 | 896 | Memory hierarchy L0–L5 | 🟡 | `rank_memories` (Generative-Agents recency×importance×relevance; consumed by `Session::recall`, reachable via `ckos history <dir> <query…>`, see §927). The six-level *tier* vocabulary was removed: it classified nothing — documents carried no tier and no code path routed by one — so it satisfied this section in name only. Real tiering needs a tier on `Document` plus promote/demote logic with a consumer |
 | 897 | Knowledge graph | ✅ | `graph` (+ `GraphStore` file persistence) |
@@ -81,23 +88,70 @@ marked ⏳ are those whose realistic implementation needs external crates
 | 957 | Distributed knowledge | ⏳ | sharding/partial-sync pending |
 | 958 | Search cache | ✅ | `sdk::retrieval::SearchCache` (LRU query→hits cache), one per session directory, held in `ckos serve`'s shared `AppState` and warmed across `/api/search` requests (the CLI's one-shot processes still have no cache to warm) — invalidated whenever `/api/run` mutates that session |
 | 959 | Learning pipeline | 🟡 | reflection persistence + auto-reindex + `sdk::eval` (Precision/Recall/MRR/nDCG); full closed loop ⏳ |
-| 960 | Unified knowledge API | 🟡 | `cli` (`search`/`kql`/`history`/`eval`); network API ⏳ |
+| 960 | Unified knowledge API | ✅ | `cli` (`search`/`kql`/`history`/`eval`) **and** the network API this row used to list as pending: `ckos serve` exposes `/api/search`, `/api/kql`, `/api/history`, `/api/graph`, `/api/run` over HTTP/JSON (§902). Additional transports (gRPC/WebSocket/MCP) are out of scope for v1 — see Scope below |
 | 961 | AI-native filesystem | ⏳ | proposal |
 | 962 | Knowledge Query Language | ✅ | `sdk::kql` — FIND/RELATED (with `VIA <edge-kind>` typed-relation filter)/FILTER (AND/OR/NOT)/BEFORE/AFTER/ORDER/LIMIT/RETURN; `ckos kql` incl. `--session` |
 
-## Summary
+## Scope — what "done" means for v1
 
-Every core mechanism the spec describes has a working, tested implementation
-behind a trait seam where a production backend will later plug in. The ⏳ items
-fall into three buckets, all deliberate:
+The previous version of this section said every mechanism has "a working,
+tested implementation behind a trait seam where a production backend will
+later plug in." That sentence let the product be permanently 90% finished: a
+trait with no implementation is not a delivered capability, and counting it as
+one is the same label-moving the codebase forbids everywhere else. So the
+requirement itself gets questioned first, per section by section.
 
-1. **External-dependency backends** — real inference runtimes, SQL/vector
-   databases, HMAC/mTLS crypto, OpenTelemetry export, an async runtime. The
-   traits (`Runtime`, `Storage`, `Embedder`, `AuditSink`, `EventBus`,
-   `IdentityProvider`) exist; only the concrete impls are pending.
-2. **App / deployment targets** — desktop, mobile, Kubernetes, Docker Compose.
-3. **Advanced data-pipeline features** — statistical graph extraction
-   (heuristic extraction shipped in `graph::extract`; NER model pending),
-   semantic/hierarchical chunking, cross-modal encoders, sharding.
+**The constraint that decides scope.** CKOS is `std`-only, zero-dependency,
+offline-first. That is not an accident or a temporary state — it is the
+product's reason to exist: it builds and runs anywhere with a Rust toolchain,
+with no supply chain, no network, and no vendor. Every remaining ⏳ below
+requires breaking exactly that constraint. So they are not "unfinished work on
+CKOS"; they are **work on a different product** that would share this one's
+name.
 
-See [`roadmap.md`](roadmap.md) for sequencing.
+That makes them out of scope for v1, and the table above marks them so. This
+is a judgment call, recorded here rather than left implicit, and the
+repository owner can overturn any line of it.
+
+### In scope, and delivered
+
+Everything not listed below. The complete offline path works end to end and is
+covered by the test suite: plan → schedule → execute → verify → reflect →
+persist → extract a graph → index → hybrid-search (BM25+ / vector / graph with
+RRF) → query with KQL → consolidate → collect. Reachable from both `ckos` and
+`ckos serve`.
+
+### Out of scope for v1 — each needs a dependency the product forbids
+
+| Item | Needs | Why not a smaller version |
+|---|---|---|
+| §901 WASM plugin sandbox | a wasm runtime (wasmtime) | A fake sandbox is worse than none: it would imply isolation the host cannot enforce. The permission gate that *is* enforceable ships today |
+| §902 gRPC / WebSocket / MCP legs | protobuf, an async runtime | The HTTP/JSON leg is delivered and is the one a browser and `curl` can both use |
+| §924–925 real / edge runtimes | model runtimes, FFI | `Runtime` is a trait with a working `EchoRuntime`; a stub "real" backend would be a lie about inference |
+| §926 distributed workflow, §957 sharding | an async runtime, a network transport | Distribution is a different architecture, not a flag on this one |
+| §928 OIDC / LDAP | network + real token crypto | `StaticTokenProvider` is honest about being a demo; a hand-rolled OIDC verifier would be a security hazard |
+| §930 mTLS, §955 encryption at rest | TLS, a vetted cipher | Hand-rolling AES/TLS is strictly worse than not offering it. `sdk::crypto` deliberately stops at SHA-256/HMAC, which *can* be verified against published vectors |
+| §933 OpenTelemetry / Prometheus export | otel crates | Audit + telemetry are collected and exposed at `GET /api/status`; only the wire format is missing |
+| §936 SQL / vector database backends | a DB driver | `Storage` is a trait with two working impls (`InMemoryStore`, `FileStore`) |
+| §938 deep parse, §941 statistical NER, §944 real embeddings, §939 semantic chunking, §945 cross-modal | model weights / parsers | §939 and §949's remaining depth are *downstream of* §944 — semantic chunking needs a semantic embedder. Heuristic versions ship and their limits are measured, not asserted (see `embedding.rs`) |
+| §961 AI-native filesystem | — | A research proposal, never specified to buildable detail |
+
+### Genuinely blocked, not out of scope
+
+These are wanted, ready, and stopped by something only the repository owner
+can do. They are the honest release blockers:
+
+| Item | State | Who unblocks it |
+|---|---|---|
+| §905 CI | `docs/ci-workflow.yml` is complete and runs the same `./scripts/check.sh` as the pre-commit hook | A maintainer copies it to `.github/workflows/ci.yml`. Automation lacks the `workflows` permission (verified: the push is rejected) |
+| Public release | Version tagged in `Cargo.toml`, `CHANGELOG.md` current | Repository owner: switch the default branch and cut the release. Verified unavailable to automation across eight channels; the GitHub gateway answers "GitHub access is not enabled for this session" |
+
+### Deliberate gaps inside delivered features
+
+Not everything above is unqualified. `docs/agent-handbook.md` §4 lists each
+known gap in a *shipped* feature together with the condition for lifting it —
+including the two that most affect real use: `HashingEmbedder` is lexical, not
+semantic (measured), and `ckos serve` has no TLS, authentication, or CSRF
+protection by design.
+
+See [`roadmap.md`](roadmap.md) for sequencing of anything above v1.

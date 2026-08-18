@@ -193,10 +193,14 @@ meeting the stated condition (that would be label-moving, §1):
   marker — there were no protected persisted vectors yet. A genuine embedder
   bug found pre-release should still be fixed now; only post-release changes
   need the version-marker infrastructure first.
-- **`Event::{TaskCreated, RuntimeLoaded, MemoryUpdated, PluginInstalled,
-  AgentRegistered}`** are never published (`kernel/src/event.rs`). Lift
-  per-variant when a genuine publisher exists. (`Event::topic()` *was* listed
-  here; it is deleted — see §3.)
+- **`Event` now carries only variants with a real publisher.** The five that
+  had none (`TaskCreated`, `RuntimeLoaded`, `MemoryUpdated`, `PluginInstalled`,
+  `AgentRegistered`) are deleted, as is `Event::topic()`. Add one back
+  *together with its publisher, in the same change* — an event is observable
+  only by being published, so a variant nothing publishes is a promise the bus
+  silently breaks. Note the dividing line used here: `Task::workflow` is
+  written and never read, and it **stays**, because a consumer reading it gets
+  a true answer; an unpublished event is unobservable by construction.
 - **`AgentState` lifecycle is not driven by the engine** — discovery honors
   it, but nothing suspends/terminates agents automatically. Lift when a
   consumer (e.g. circuit breaker on repeated failure) justifies transitions.

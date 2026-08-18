@@ -6,14 +6,24 @@
 //! transport (NATS, Kafka, the Service Mesh of §916) be substituted later
 //! without touching publishers.
 
-use crate::id::{AgentId, NodeId, RuntimeId, TaskId, WorkflowId};
+use crate::id::{NodeId, TaskId, WorkflowId};
 use std::sync::{Arc, Mutex};
 
-/// Events emitted across the kernel (representative set from §894 + §923).
+/// Events emitted across the kernel (§894 + §923).
+///
+/// **Every variant here has a real publisher.** Five others — `TaskCreated`,
+/// `RuntimeLoaded`, `MemoryUpdated`, `PluginInstalled`, `AgentRegistered` —
+/// were declared but never published anywhere, and were removed. An event is
+/// observable only by being published, so a variant with no publisher is not
+/// a feature a subscriber can ever use; it is a promise the bus silently
+/// breaks. (Contrast `Task::workflow`, which nothing reads but which *is*
+/// populated with correct data, so a consumer reading it gets a true answer.
+/// That one stays.)
+///
+/// Adding a variant back is welcome — together with the publisher that makes
+/// it true, in the same change.
 #[derive(Debug, Clone)]
 pub enum Event {
-    /// A task entered the kernel in the `Created` state (§893).
-    TaskCreated(TaskId),
     /// A task began executing on a runtime.
     TaskStarted(TaskId),
     /// A task reached the terminal `Completed` state.
@@ -25,20 +35,8 @@ pub enum Event {
         /// Human-readable failure cause.
         reason: String,
     },
-    /// A runtime was loaded and registered with the kernel.
-    RuntimeLoaded(RuntimeId),
-    /// A memory entry was written or changed.
-    MemoryUpdated {
-        /// Key of the updated entry.
-        key: String,
-    },
     /// A knowledge-graph node was added or modified.
     GraphChanged(NodeId),
-    /// A plugin was installed into the host.
-    PluginInstalled {
-        /// Name of the installed plugin.
-        name: String,
-    },
     /// A policy check denied an action (§929).
     PolicyViolation {
         /// The principal that attempted the action.
@@ -46,8 +44,6 @@ pub enum Event {
         /// The permission token that was denied.
         action: String,
     },
-    /// An agent registered with the capability registry (§910).
-    AgentRegistered(AgentId),
     /// A workflow ran all of its tasks to completion (§895).
     WorkflowCompleted(WorkflowId),
 }
@@ -131,11 +127,11 @@ mod tests {
         let id = bus.subscribe(Arc::new(move |_e: &Event| {
             c.fetch_add(1, Ordering::SeqCst);
         }));
-        bus.publish(Event::TaskCreated(TaskId::new()));
-        bus.publish(Event::TaskCreated(TaskId::new()));
+        bus.publish(Event::TaskStarted(TaskId::new()));
+        bus.publish(Event::TaskStarted(TaskId::new()));
         assert_eq!(count.load(Ordering::SeqCst), 2);
         bus.unsubscribe(id);
-        bus.publish(Event::TaskCreated(TaskId::new()));
+        bus.publish(Event::TaskStarted(TaskId::new()));
         assert_eq!(count.load(Ordering::SeqCst), 2);
     }
 }
