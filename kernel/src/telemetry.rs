@@ -2,10 +2,7 @@
 //!
 //! Collects per-task execution metrics — latency, tokens, derived token rate —
 //! and aggregates them so the scheduler can optimise (§913): e.g. bias
-//! `runtime_fit` toward the runtime with the best observed latency. Hardware
-//! counters (CPU/GPU/NPU/memory/power) are exposed through the [`ResourceProbe`]
-//! seam; the default [`NullProbe`] reports nothing so the core stays dependency
-//! free, and a platform probe plugs in without touching callers.
+//! `runtime_fit` toward the runtime with the best observed latency.
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -41,38 +38,6 @@ impl TaskMetrics {
         } else {
             self.tokens as f64 * 1000.0 / self.latency_ms as f64
         }
-    }
-}
-
-/// A point-in-time hardware resource sample (§904). Fields are fractions
-/// `0.0..=1.0` for utilisations; `None` when a counter is unavailable.
-#[derive(Debug, Clone, Default)]
-pub struct ResourceSnapshot {
-    /// CPU utilisation fraction, if available.
-    pub cpu: Option<f32>,
-    /// GPU utilisation fraction, if available.
-    pub gpu: Option<f32>,
-    /// NPU utilisation fraction, if available.
-    pub npu: Option<f32>,
-    /// Resident memory usage in megabytes, if available.
-    pub memory_mb: Option<u64>,
-    /// Instantaneous power draw in watts, if available.
-    pub power_watts: Option<f32>,
-}
-
-/// Source of hardware resource samples (§904).
-pub trait ResourceProbe: Send + Sync {
-    /// Take a sample; may return an empty snapshot if counters are unavailable.
-    fn sample(&self) -> ResourceSnapshot;
-}
-
-/// A probe that reports nothing — the dependency-free default.
-#[derive(Default)]
-pub struct NullProbe;
-
-impl ResourceProbe for NullProbe {
-    fn sample(&self) -> ResourceSnapshot {
-        ResourceSnapshot::default()
     }
 }
 

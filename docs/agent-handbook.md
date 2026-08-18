@@ -44,6 +44,12 @@ regressions:
    warnings" cargo doc --workspace --no-deps` · `cargo test --workspace`.
    Prefer the script — retyping the chain invites quietly dropping a gate, and
    it is what the staged CI runs.)
+
+   Better still, stop relying on remembering: `./scripts/install-hooks.sh`
+   points `core.hooksPath` at `.githooks/`, whose pre-commit hook runs the
+   script, so a commit that breaks a gate cannot be created (verified: a
+   deliberately misformatted file was refused). `git commit --no-verify`
+   bypasses it for a genuine work-in-progress commit.
 5. **One logical fix per commit**, with a message that states the defect, the
    reproduction, and the fix rationale. Update `CHANGELOG.md`'s Unreleased
    `### Fixed` section and the test count in the same commit.
@@ -147,10 +153,16 @@ module is clean:
 These are NOT bugs. Each is parked with a reason; do not wire them up without
 meeting the stated condition (that would be label-moving, §1):
 
-- **`graph::GraphRepo` versioning** (`graph/src/versioning.rs`): complete,
-  tested library; no CLI/engine caller. Lift when a real user workflow needs
-  branch/merge of graphs (e.g. a `ckos graph branch/merge` command with a
-  concrete use case).
+- **`graph::GraphRepo` (§942/§943) and `messaging::ServiceMesh` (§912) are
+  SDK-level, with no CLI surface — deliberately, and this was decided, not
+  drifted into.** The test applied when auditing every dormant part was: *can a
+  consumer use this as-is to accomplish something real?* Both pass — graph
+  branch/merge and multi-agent routing both work standalone, in-process, for a
+  library user today. (`MemoryTier` and `ResourceProbe` failed the same test —
+  nothing routed by tier, nothing ever called `sample()` — and were deleted;
+  see §3.) `GraphRepo` additionally has no on-disk format, so a CLI surface
+  would first require inventing repo persistence; do not add a `ckos graph
+  branch` that silently loses every branch between invocations.
 - **`memory::MemoryTier`**: classification vocabulary only; documents carry no
   tier. Lift only together with real promote/demote logic and a consumer.
 - **`kernel::ResourceProbe`**: seam with no consumer. Lift when a real
