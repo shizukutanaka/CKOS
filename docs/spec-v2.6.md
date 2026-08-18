@@ -73,7 +73,7 @@ closing the §904→§913 optimization loop.
 ## §921–§923 Reflection & knowledge bus
 
 - **§921 Agent reflection**: task → result → score → improvement hint → memory.
-  → `sdk::reflection::{Reflector, store_reflection}`.
+  → `sdk::reflection::Reflector` + `sdk::Session::record_reflections`.
 - **§922 Collective reflection**: planner/reasoner/verifier → consensus → memory
   update. → `sdk::reflection::consensus`.
 - **§923 Knowledge bus**: graph updates flow as events so embeddings re-generate
