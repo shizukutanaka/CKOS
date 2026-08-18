@@ -31,13 +31,12 @@ pub mod json;
 mod routes;
 
 use json::Json;
-use std::io::{self, Read};
+use std::io;
 use std::net::{TcpListener, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
 
 /// Hard cap on connections handled concurrently. Without one, a connection
 /// flood (a retry storm, a port scanner, even an eager browser) would spawn
@@ -93,21 +92,21 @@ fn serve_bounded(listener: TcpListener, max_concurrent: usize, session_root: Pat
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
         if active.load(Ordering::Acquire) >= max_concurrent {
-            let _ = http::Response::json_status(
-                503,
-                Json::object([("error", "server busy, try again".into())]),
-            )
-            .write_to(&mut stream);
             // A well-behaved client (or an eager browser) may have already
-            // written its request before we could respond. If we drop the
-            // socket while that data is still unread, the OS sends RST
-            // instead of a clean close — which can destroy our in-flight
-            // 503 body before the peer ever reads it. A short, bounded
-            // drain (never blocking indefinitely, so a slow/hostile peer
-            // can't hold this fast path open) avoids that.
-            let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
-            let mut discard = [0u8; 1024];
-            while matches!(stream.read(&mut discard), Ok(n) if n > 0) {}
+            // written its request before we could respond, and closing on
+            // unread data RSTs our 503 away. `write_early_response` is the
+            // one place that rule lives — it was duplicated here and missing
+            // from `handle_connection`'s 413/400 paths, where a truncated
+            // reply was actually measured. Its byte cap also fixes what this
+            // copy got wrong: an idle timeout alone does not stop a peer that
+            // keeps streaming, since every read succeeds.
+            http::write_early_response(
+                &mut stream,
+                &http::Response::json_status(
+                    503,
+                    Json::object([("error", "server busy, try again".into())]),
+                ),
+            );
             continue;
         }
         active.fetch_add(1, Ordering::AcqRel);
@@ -353,7 +352,7 @@ mod tests {
 
         // Give the stalled search time to pass its own cache-miss check and
         // finish computing — well inside the 300ms stall window.
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(std::time::Duration::from_millis(50));
 
         // A second, concurrent run mutates the same session — this must
         // invalidate the cache such that the stalled search's now-stale

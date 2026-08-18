@@ -75,6 +75,30 @@ platform).
 
 ### Fixed
 
+- **A 413/400 rejection was destroyed by its own connection close.** Closing a
+  socket that still holds unread data makes the OS send RST rather than FIN,
+  and the RST discards whatever of the response is still in flight.
+  `serve_bounded`'s 503 path already knew this and drained before closing;
+  `handle_connection`'s 413 and 400 paths did not — and they are where it
+  matters most, since by construction the peer is mid-request. Measured, not
+  assumed: a client actually streaming the oversized body it announced
+  received a **truncated** response in 3 of 5 runs — as little as
+  `"HTTP/1.1 "`, 9 bytes, and in other runs full headers promising
+  `Content-Length: 29` with no body — while its read returned `Ok`, so the
+  peer sees a *successful* read of a fragment carrying no status code.
+  The existing oversize test could not catch this because it deliberately
+  never sends the body ("a correct implementation rejects before attempting
+  to read it") — true of the parse, but the close still races the peer's
+  writes. Both reject paths now go through one `http::write_early_response`,
+  which the 503 path also uses, so the rule lives in a single place instead of
+  one correct copy and two omissions. Its **byte** cap additionally fixes what
+  the 503 copy got wrong: an idle timeout alone does not bound a drain,
+  because it only fires when the peer goes quiet — a peer that keeps streaming
+  makes every read succeed and holds the connection thread indefinitely.
+  Regression test calibrated in both directions rather than assumed: against
+  the reverted fix, 5 attempts missed the race in 1 of 3 runs while 30
+  attempts tripped it within the first four every time across 4 runs; with the
+  drain in place, 150 attempts produced no truncation.
 - **`ckos serve`: a request's `session` was an unconstrained filesystem path**
   (path traversal, CWE-22). Every session handler passes the parameter to
   `FileStore::open`, which `create_dir_all`s it and then writes `*.doc` files
@@ -571,7 +595,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-282 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+283 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening

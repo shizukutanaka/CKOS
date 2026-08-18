@@ -153,6 +153,7 @@ module is clean:
 | `fuse_rrf` merged distinct documents sharing a title (this round) | a human-readable label used as an identity key, where the real identity exists but was not carried |
 | `RuntimeRegistry::register` desynced its order index from its map (this round) | two parallel collections that must agree, where only one deduplicates — grep for a `Vec` index beside a `HashMap` |
 | `ckos serve`'s `session` parameter was an unconstrained filesystem path (this round) | a *documented* scope limitation ("no auth, use a proxy") mistaken for covering an *undocumented* one (unbounded filesystem reach) — when a module doc waives one property, check it does not silently waive a different one. Grep for request-supplied strings reaching `Path`/`fs` |
+| 413/400 replies were RST away by their own connection close (this round) | a hazard *correctly handled in one place* (the 503 path's drain) and omitted from its siblings — when you find a subtle guard with a long comment, grep for the other sites that need it before assuming it is the only one. Its test also passed only because it avoided the very input that triggers the bug |
 
 ---
 
