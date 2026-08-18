@@ -331,6 +331,21 @@ platform).
 
 ### Removed
 
+- **Two redundant functions deleted**, each superseded by a better mechanism
+  already in use — found by re-measuring reachability transitively rather than
+  by direct grep:
+  - `reflection::store_reflection` — zero production callers. `Session::
+    record_reflections` already persists reflections *and* stamps them with the
+    session key and the sequence number recency ranking needs, so this was a
+    strictly weaker duplicate. Its test went with it; `record_reflections` is
+    covered by both a unit test and the end-to-end test, so no real behaviour
+    lost coverage.
+  - `Retriever::search_synonyms` — zero production callers. The CLI composes
+    `expand_query_with_synonyms` with `search` precisely so `--synonyms` stacks
+    with `--expand` and `--diverse`; the all-in-one wrapper cannot compose, so
+    it was the worse of the two designs.
+
+
 - **Dead scaffolding deleted** (Musk-algorithm step 2 — delete before you
   optimise, because the most common error is refining a part that should not
   exist). Each removal was measured, not guessed: a workspace scan for public
@@ -352,9 +367,14 @@ platform).
 
 - **`ckos index <dir> <file…>` — the §938 ingest path, now reachable.** Musk
   step 1 (question the requirement) applied to spec compliance surfaced the
-  real gap: nine subsystems had *no path from any product entry point*, so the
-  §889–§962 claim was being met in name only. Measured by checking every public
-  item and subsystem for a reference from `cli/` or `web/`. `ckos run --session`
+  real gap: several subsystems had *no path from any product entry point*, so
+  the §889–§962 claim was being met in name only.
+  (**Correction:** the first measurement said "nine" by grepping `cli/` and
+  `web/` for direct references only. That misses reachability *through* the
+  SDK — `rank_memories` was already live via `Session::recall`, which
+  `ckos history <dir> <query>` calls. Re-measured transitively, the accurate
+  count of subsystems with no entry point was seven, three of which this
+  command now connects.) `ckos run --session`
   could record what a run produced, but nothing could take an existing corpus
   *in*.
 
@@ -444,7 +464,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-282 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+281 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening
