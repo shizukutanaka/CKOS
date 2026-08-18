@@ -149,7 +149,11 @@
 <header>
   <h1>CKOS <small>Cognitive Kernel OS</small></h1>
   <label for="session">session dir</label>
-  <input type="text" id="session" placeholder="(none — try-it mode)" autocomplete="off">
+  <!-- Relative to the server's --session-root; an absolute path or one
+       containing `..` is rejected with 400, so a request can never reach
+       outside that directory. -->
+  <input type="text" id="session" placeholder="(none — try-it mode)" autocomplete="off"
+         title="A name relative to the server's session root. Absolute paths and `..` are rejected.">
 </header>
 <nav id="tabs"></nav>
 <main id="panels"></main>

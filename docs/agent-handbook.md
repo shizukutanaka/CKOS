@@ -152,6 +152,7 @@ module is clean:
 | `HashingEmbedder` sign taken from a hash bit determined by the bucket index (this round) | a "decorrelating" bit that is actually a function of the value it should be independent of |
 | `fuse_rrf` merged distinct documents sharing a title (this round) | a human-readable label used as an identity key, where the real identity exists but was not carried |
 | `RuntimeRegistry::register` desynced its order index from its map (this round) | two parallel collections that must agree, where only one deduplicates — grep for a `Vec` index beside a `HashMap` |
+| `ckos serve`'s `session` parameter was an unconstrained filesystem path (this round) | a *documented* scope limitation ("no auth, use a proxy") mistaken for covering an *undocumented* one (unbounded filesystem reach) — when a module doc waives one property, check it does not silently waive a different one. Grep for request-supplied strings reaching `Path`/`fs` |
 
 ---
 
@@ -226,7 +227,15 @@ meeting the stated condition (that would be label-moving, §1):
   skips past — never a blocking sleep.
 - **`ckos serve` has no TLS/auth by design** (`web/src/lib.rs` module doc):
   local single-operator surface; a reverse proxy adds transport security.
-  Destructive ops (gc) stay CLI-only.
+  Destructive ops (gc) stay CLI-only. **This waiver covers transport and
+  identity only** — it does not extend to what a request can reach. Sessions
+  are confined under `--session-root` (`AppState::resolve_session`); treating
+  the auth waiver as covering filesystem reach is exactly the mistake that
+  produced the traversal bug in §3. There is likewise **no CSRF token**: the
+  confinement bounds *where* a cross-origin `POST /api/run` can write, not
+  *whether* it can. Lift when the gateway grows any authenticated or
+  destructive route — then an origin check or token is required, not
+  optional.
 - **CI staged, not active** (`docs/ci-workflow.yml`): workflow-file pushes are
   permission-denied from automation (verified). A maintainer must copy it to
   `.github/workflows/ci.yml` once.

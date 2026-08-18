@@ -80,7 +80,7 @@ appear in any position, and `ckos <command> --help` prints per-command usage.
 | `capabilities` | List the built-in capability vocabulary | `ckos capabilities` |
 | `runtimes` | List the runtime registry table (§900): registered backends, execution locality, and the capabilities each serves | `ckos runtimes` |
 | `workflow [--role <role> \| --token <token>] <file>` | Load and execute a workflow definition file; `--token` authenticates via a demo identity provider (§928: `tok-admin-hq`, `tok-admin-restricted`, `tok-guest`), carrying real ABAC attributes | `ckos workflow pipeline.wf` |
-| `serve [--host <addr>] [--port <port>]` | Start the §902 API gateway: a `std`-only HTTP/JSON server plus an embedded single-page dashboard (Run/Search/History/KQL/Graph/Verify/System) over the SDK. Binds to `127.0.0.1` by default | `ckos serve --port 8080` |
+| `serve [--host <addr>] [--port <port>] [--session-root <dir>]` | Start the §902 API gateway: a `std`-only HTTP/JSON server plus an embedded single-page dashboard (Run/Search/History/KQL/Graph/Verify/System) over the SDK. Binds to `127.0.0.1` by default; every request's `session` is confined under `--session-root` (default `.`) | `ckos serve --port 8080 --session-root ./sessions` |
 | `version` | Print the CKOS version | `ckos version` |
 
 ### A typical session flow
@@ -134,6 +134,15 @@ in-browser force-directed SVG layout), Verify, and System (capabilities,
 runtime registry, and cumulative server status). Every panel works against a
 `session` directory you type into the header, or in zero-setup "try it" mode
 against transient state.
+
+That `session` name is resolved **under the server's session root** — the
+current directory unless you pass `--session-root <dir>` — and cannot escape
+it: an absolute path or one containing `..` is rejected with a 400. This
+matters because the session handlers create the directory and write documents
+into it, so an unconfined name would be a filesystem-wide write primitive
+reachable from any page in your browser (the form-encoded `POST /api/run` is
+a CORS-simple request that needs no preflight). Point `--session-root` at a
+dedicated sessions directory and the API can reach nothing else.
 
 Unlike the one-shot CLI, `ckos serve` is a long-lived process, so it shares
 one `Engine` across every request: audit records (§903) and telemetry (§904)

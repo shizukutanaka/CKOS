@@ -117,7 +117,8 @@ COMMANDS:
     runtimes                         List the runtime registry table (§900):
                                      backends, locality, capabilities served
     serve [--host H] [--port N]      Start the §902 API gateway + browser
-                                     dashboard (default 127.0.0.1:8080)
+         [--session-root DIR]        dashboard (default 127.0.0.1:8080;
+                                     sessions confined to DIR, default .)
     version                          Print the CKOS version
     help                             Show this help
 ";
@@ -1477,7 +1478,7 @@ fn cmd_runtimes() -> ExitCode {
 
 fn cmd_serve(rest: &[String]) -> ExitCode {
     if wants_help(rest) {
-        println!("usage: ckos serve [--host <addr>] [--port <port>]\n  Start the §902 API gateway: a std-only HTTP/JSON server plus an embedded\n  browser dashboard (Run/Search/History/KQL/Graph/Verify/System) over the\n  SDK. Binds to 127.0.0.1 by default — least privilege by default, per the\n  workspace's design principles; pass --host 0.0.0.0 to accept non-local\n  connections (do this only behind a trusted network or reverse proxy: there\n  is no TLS and no authentication in front of the dashboard itself).");
+        println!("usage: ckos serve [--host <addr>] [--port <port>] [--session-root <dir>]\n  Start the §902 API gateway: a std-only HTTP/JSON server plus an embedded\n  browser dashboard (Run/Search/History/KQL/Graph/Verify/System) over the\n  SDK. Binds to 127.0.0.1 by default — least privilege by default, per the\n  workspace's design principles; pass --host 0.0.0.0 to accept non-local\n  connections (do this only behind a trusted network or reverse proxy: there\n  is no TLS and no authentication in front of the dashboard itself).\n\n  A request's `session` names a directory *under* --session-root (the current\n  directory by default) and cannot escape it — an absolute path or one\n  containing `..` is rejected with 400. Point --session-root at a dedicated\n  sessions directory so a request can reach nothing else.");
         return ExitCode::SUCCESS;
     }
     let (host, rest) = match take_value_flag(rest, "--host") {
@@ -1487,7 +1488,14 @@ fn cmd_serve(rest: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let (port, _rest) = match take_value_flag(&rest, "--port") {
+    let (port, rest) = match take_value_flag(&rest, "--port") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let (session_root, _rest) = match take_value_flag(&rest, "--session-root") {
         Ok(v) => v,
         Err(e) => {
             eprintln!("error: {e}");
@@ -1511,6 +1519,25 @@ fn cmd_serve(rest: &[String]) -> ExitCode {
         }
     };
     let bound = listener.local_addr().map(|a| a.to_string()).unwrap_or(addr);
+    // Every `session` a request names is resolved under this root and cannot
+    // escape it (see `ckos_web::serve_rooted`). Printed, not silent: an
+    // operator should be able to see the whole filesystem region the server
+    // can touch without reading the source.
+    let root = match session_root {
+        Some(dir) => std::path::PathBuf::from(dir),
+        None => match std::env::current_dir() {
+            Ok(dir) => dir,
+            Err(e) => {
+                eprintln!("error: could not determine the current directory: {e}");
+                eprintln!("hint: pass --session-root <dir> to set it explicitly");
+                return ExitCode::FAILURE;
+            }
+        },
+    };
     println!("ckos serve: listening on http://{bound}  (Ctrl+C to stop)");
-    ckos_web::serve(listener);
+    // Shown absolute where possible: `--session-root ./root` echoed back as
+    // `./root` tells the operator nothing about which directory that is.
+    let shown = std::fs::canonicalize(&root).unwrap_or(root.clone());
+    println!("ckos serve: sessions confined to {}", shown.display());
+    ckos_web::serve_rooted(listener, root);
 }
