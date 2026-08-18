@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Runs every gate before a commit is created. Installed by
+# `./scripts/install-hooks.sh`, which points `core.hooksPath` here.
+#
+# Rationale: the four gates were previously a manual chain, and a manual step
+# that must happen every single time is a step that eventually does not. This
+# is the automate stage of the Musk algorithm — deliberately last, after the
+# checks were questioned, the dead parts deleted and the commands collapsed
+# into one script. Automating the earlier, messier version would have
+# entrenched it.
+#
+# Bypass deliberately with `git commit --no-verify`.
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+exec "$repo_root/scripts/check.sh"

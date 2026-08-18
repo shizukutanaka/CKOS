@@ -384,6 +384,19 @@ platform).
 
 ### Added
 
+- **`scripts/install-hooks.sh` + `.githooks/pre-commit` — the gate now runs
+  itself** (Musk step 5, automate — deliberately last: the checks were
+  questioned, the dead parts deleted, and four commands collapsed into one
+  before anything was wired to run automatically, because automating the
+  earlier messier version would have entrenched it). A manual step that must
+  happen *every single time* is one that eventually does not. `core.hooksPath`
+  points at the version-controlled `.githooks/`, so one command gives every
+  clone the same hook. Verified by attempting a commit with a deliberately
+  misformatted file: the commit was refused and `HEAD` did not move.
+  `git commit --no-verify` remains the escape hatch for a genuine
+  work-in-progress commit.
+
+
 - **`scripts/check.sh` — one command for every gate** (Musk step 4, accelerate
   cycle time; step 5, automate, comes only after). The four gates were retyped
   as a long shell chain on every change: slow, easy to abbreviate under

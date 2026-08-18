@@ -44,6 +44,12 @@ regressions:
    warnings" cargo doc --workspace --no-deps` · `cargo test --workspace`.
    Prefer the script — retyping the chain invites quietly dropping a gate, and
    it is what the staged CI runs.)
+
+   Better still, stop relying on remembering: `./scripts/install-hooks.sh`
+   points `core.hooksPath` at `.githooks/`, whose pre-commit hook runs the
+   script, so a commit that breaks a gate cannot be created (verified: a
+   deliberately misformatted file was refused). `git commit --no-verify`
+   bypasses it for a genuine work-in-progress commit.
 5. **One logical fix per commit**, with a message that states the defect, the
    reproduction, and the fix rationale. Update `CHANGELOG.md`'s Unreleased
    `### Fixed` section and the test count in the same commit.
