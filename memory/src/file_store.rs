@@ -41,16 +41,39 @@ use std::path::{Path, PathBuf};
 
 const EXT: &str = "doc";
 
-/// Write `contents` to `path` atomically: write a sibling `<path>.tmp`, flush
-/// it to disk, then rename over the destination. On POSIX the rename is
-/// atomic, so a crash mid-write can never leave a truncated/corrupt file in
-/// place of the previous good copy — readers see either the old file or the
-/// complete new one.
+/// A scratch path for [`write_atomic`], unique to this call.
+///
+/// It must not be a pure function of the destination, which is what
+/// `path.with_extension("doc.tmp")` was. `File::create` opens `O_TRUNC`, so
+/// two writers sharing one scratch path truncate each other's partial file
+/// while each keeps writing at *its own* offset, and the rename installs the
+/// mixture. Verified at the syscall level: writer A at offset 2048 of 4096
+/// when writer B truncated and wrote 1024 bytes produced a renamed file that
+/// was neither — B's 1024 bytes, then **1024 NUL bytes** for the hole A's
+/// truncated prefix left, then A's tail. `ckos serve` writes documents from
+/// per-request threads, and `Reindexer` addresses documents by a
+/// *deterministic* id, so two concurrent writers of one path is reachable.
+///
+/// The `.tmp` extension is what keeps these out of [`FileStore::open`]'s
+/// `*.doc` scan; the leading dot just hides them from a casual `ls`.
+fn scratch_path(path: &Path) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let name = path
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "doc".to_string());
+    path.with_file_name(format!(".{name}.{}.{n}.tmp", std::process::id()))
+}
+
+/// Write `contents` to `path` atomically: write a unique sibling scratch file
+/// ([`scratch_path`]), flush it to disk, then rename over the destination. On
+/// POSIX the rename is atomic, so a crash mid-write can never leave a
+/// truncated/corrupt file in place of the previous good copy — readers see
+/// either the old file or the complete new one.
 fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
-    let tmp = path.with_extension(format!(
-        "{}.tmp",
-        path.extension().and_then(|s| s.to_str()).unwrap_or("")
-    ));
+    let tmp = scratch_path(path);
     {
         use std::io::Write;
         let mut f = fs::File::create(&tmp)?;
@@ -524,6 +547,49 @@ mod tests {
         );
         let got = FileStore::open(&tmp.0).unwrap().read(&id).unwrap().unwrap();
         assert_eq!(got.body, "body");
+    }
+
+    #[test]
+    fn a_concurrent_writers_scratch_file_cannot_corrupt_this_write() {
+        // Regression: the scratch path was `<dest>.tmp` — a pure function of
+        // the destination — so two writers of one document shared it.
+        // `File::create` is `O_TRUNC`, so each truncates the other's partial
+        // file while still writing at its own offset, and the rename installs
+        // the mixture. Measured at the syscall level: A at offset 2048 of
+        // 4096, B truncating and writing 1024, produced a renamed file that
+        // was neither — B's 1024 bytes, 1024 NUL bytes, then A's tail.
+        //
+        // Modelled deterministically: holding an open handle at a nonzero
+        // offset on the old scratch path is exactly the state a writer
+        // mid-`write_all` is in. If `write_atomic` still picks that path, the
+        // rename hands this handle the document's inode.
+        let tmp = TempDir::new();
+        let mut store = FileStore::open(&tmp.0).unwrap();
+        let doc = Document::new("note", "durable", "body");
+        let id = doc.id.clone();
+        let dest = tmp.0.join(format!("{}.{EXT}", id.as_str()));
+        let old_scheme = dest.with_extension(format!("{EXT}.tmp"));
+
+        use std::io::Write;
+        let mut squatter = fs::File::create(&old_scheme).expect("create scratch squatter");
+        squatter.write_all(&vec![b'X'; 4096]).expect("squat");
+
+        store.write(doc).unwrap();
+
+        squatter.write_all(b"GARBAGE").expect("continue writing");
+        squatter.sync_all().expect("sync");
+        drop(squatter);
+
+        let raw = fs::read(&dest).expect("read document");
+        assert!(
+            !raw.contains(&0),
+            "the saved document must not contain the NUL hole a truncated \
+             co-writer leaves ({} NUL bytes in {} total)",
+            raw.iter().filter(|b| **b == 0).count(),
+            raw.len()
+        );
+        let got = FileStore::open(&tmp.0).unwrap().read(&id).unwrap().unwrap();
+        assert_eq!(got.body, "body", "document must round-trip intact");
     }
 
     #[test]

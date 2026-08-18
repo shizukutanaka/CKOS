@@ -32,6 +32,35 @@ fn sanitize(s: &str) -> String {
     s.replace(['\t', '\n', '\r'], " ")
 }
 
+/// A scratch path for the write-then-rename in [`GraphStore::save`], unique
+/// to this call.
+///
+/// It must not be a pure function of the destination, which is what
+/// `path.with_extension("kg.tmp")` was. `File::create` opens `O_TRUNC`, so two
+/// writers sharing one scratch path truncate each other's partial file while
+/// each keeps writing at *its own* offset — and the rename then installs the
+/// resulting mixture. Verified at the syscall level rather than assumed: with
+/// writer A at offset 2048 of 4096 when writer B truncates and writes 1024
+/// bytes, the renamed file was neither A's nor B's content but B's 1024 bytes
+/// followed by **1024 NUL bytes** (the hole A's truncated prefix left) and
+/// then A's tail. That is exactly the corruption the atomic rename exists to
+/// prevent, so leaving the collision in place would make the guarantee below
+/// conditional on nobody writing concurrently.
+///
+/// Concurrency here is not hypothetical: `ckos serve` handles requests on
+/// separate threads, and two `POST /api/run` calls against one session both
+/// save that session's graph.
+fn scratch_path(path: &Path) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let name = path
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "graph".to_string());
+    path.with_file_name(format!(".{name}.{}.{n}.tmp", std::process::id()))
+}
+
 impl GraphStore {
     /// Serialize `graph` to `path`, overwriting any existing file (§936).
     pub fn save(path: impl AsRef<Path>, graph: &KnowledgeGraph) -> io::Result<()> {
@@ -74,12 +103,11 @@ impl GraphStore {
         // over the destination. This file holds the *entire* graph, so a
         // crash during a plain in-place write would corrupt all of it; with
         // the rename, readers see either the old graph or the complete new
-        // one, never a truncation.
+        // one, never a truncation. The scratch path is unique per call so a
+        // concurrent writer cannot truncate this one's partial file — see
+        // `scratch_path`.
         let path = path.as_ref();
-        let tmp = path.with_extension(format!(
-            "{}.tmp",
-            path.extension().and_then(|s| s.to_str()).unwrap_or("")
-        ));
+        let tmp = scratch_path(path);
         {
             use std::io::Write;
             let mut f = std::fs::File::create(&tmp)?;
@@ -169,6 +197,70 @@ mod tests {
         TempPath(
             std::env::temp_dir().join(format!("ckos-graph-{}-{n}-{name}.kg", std::process::id())),
         )
+    }
+
+    #[test]
+    fn a_concurrent_writers_scratch_file_cannot_corrupt_this_save() {
+        // Regression: the scratch path was `<dest>.tmp` — a pure function of
+        // the destination — so two writers shared it. `File::create` is
+        // `O_TRUNC`, so each truncates the other's partial file while still
+        // writing at its own offset, and the rename installs the mixture.
+        // Measured at the syscall level: A at offset 2048 of 4096, B
+        // truncating and writing 1024, produced a renamed file that was
+        // neither — B's 1024 bytes, 1024 NUL bytes, then A's tail.
+        //
+        // Modelled here deterministically rather than by racing threads (40
+        // rounds of two real concurrent `save`s, and 20 more with a
+        // synchronized start and a 60 000-node graph, never tripped it — the
+        // window is narrow, not absent). Holding an open handle at a nonzero
+        // offset on the *old* scratch path is exactly the state a writer
+        // mid-`write_all` is in; if `save` still picks that path, the rename
+        // hands our handle the destination inode and the next write lands in
+        // the live graph file.
+        let path = temp("scratch-collision");
+        let old_scheme = path.0.with_extension(format!(
+            "{}.tmp",
+            path.0.extension().and_then(|s| s.to_str()).unwrap_or("")
+        ));
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(old_scheme.clone());
+
+        use std::io::Write;
+        let mut squatter = std::fs::File::create(&old_scheme).expect("create scratch squatter");
+        squatter.write_all(&vec![b'X'; 4096]).expect("squat");
+
+        let mut g = KnowledgeGraph::new();
+        let a = g.add_node(NodeKind::Concept, "Transformer", 96);
+        let b = g.add_node(NodeKind::Person, "Vaswani", 90);
+        g.connect(&a, &b, EdgeKind::CreatedBy);
+        GraphStore::save(&path.0, &g).expect("save");
+
+        // The other writer continues at its own offset. Under the old scheme
+        // this inode has just become the graph file.
+        squatter.write_all(b"GARBAGE").expect("continue writing");
+        squatter.sync_all().expect("sync");
+        drop(squatter);
+
+        let raw = std::fs::read(&path.0).expect("read graph");
+        assert!(
+            !raw.contains(&0),
+            "the saved graph must not contain the NUL hole a truncated \
+             co-writer leaves ({} NUL bytes in {} total)",
+            raw.iter().filter(|b| **b == 0).count(),
+            raw.len()
+        );
+        assert!(
+            !raw.windows(7).any(|w| w == b"GARBAGE"),
+            "another writer's bytes must never land in the saved graph"
+        );
+        let loaded = GraphStore::load(&path.0).expect("load");
+        assert_eq!(loaded.nodes().count(), 2, "graph must round-trip intact");
+        assert_eq!(loaded.edges().count(), 1);
     }
 
     #[test]
