@@ -365,6 +365,19 @@ platform).
 
 ### Added
 
+- **`scripts/check.sh` — one command for every gate** (Musk step 4, accelerate
+  cycle time; step 5, automate, comes only after). The four gates were retyped
+  as a long shell chain on every change: slow, easy to abbreviate under
+  pressure, and impossible for CI and a contributor to share. The script runs
+  format → clippy `-D warnings` → rustdoc `-D warnings` → tests, stops at the
+  first failure and names it, and prints the passing-test total. `--fix`
+  reformats first. Exit status verified 0 when green and 1 when a gate breaks.
+  The staged CI (`docs/ci-workflow.yml`) now calls the same script instead of
+  its own command list — it had **drifted weaker**, skipping the rustdoc gate
+  entirely and running clippy without `-D warnings` — and its smoke test now
+  also exercises the new `ckos index` path end to end.
+
+
 - **`ckos index <dir> <file…>` — the §938 ingest path, now reachable.** Musk
   step 1 (question the requirement) applied to spec compliance surfaced the
   real gap: several subsystems had *no path from any product entry point*, so
