@@ -49,6 +49,9 @@ crates mirror the module layout in §890 of the spec.
 cargo build            # build everything (std-only, no network needed)
 cargo test             # run the unit + integration + doc tests
 cargo run -p ckos-cli -- help    # list commands
+
+./scripts/check.sh     # every gate CI runs: fmt, clippy -D warnings, rustdoc -D warnings, tests
+./scripts/check.sh --fix   # reformat in place, then check
 ```
 
 ## Command reference
@@ -62,6 +65,7 @@ appear in any position, and `ckos <command> --help` prints per-command usage.
 | `run [--session <dir>] [--role R \| --token T] <intent…>` | Plan + execute; `--session` persists the run and grows its knowledge graph; `--role`/`--token` authorize finance/medical/legal/robotics steps (§929). `--token` authenticates via a demo identity provider (§928) carrying real ABAC attributes, unlike bare `--role`. **Caution**: the built-in planner never classifies free text into those capabilities, so neither flag has an observable effect via `run` — see `ckos workflow` | `ckos run --session ./sess "research X"` |
 | `history <dir> [<query…>] [--k N]` | Show a session's past runs; with a query, recalls the top `--k` (default 5) records ranked by Generative-Agents memory score — recency × importance × relevance (§896/§927) — instead of dumping raw history | `ckos history ./sess "scheduler urgency"` |
 | `search [--synonyms] [--expand] [--diverse] [--lambda N] <dir> <query…>` | Hybrid BM25 + vector + graph search (RRF-fused); `--synonyms` bridges vocabulary gaps with a built-in domain table, `--expand` widens recall (PRF), `--diverse` re-ranks for variety (MMR, tune with `--lambda` 0..1) | `ckos search --synonyms ./sess "dispatcher urgency"` |
+| `index <dir> <file…> [--chunk N] [--overlap N]` | Ingest files into a session (§938): chunk each file into retrievable passages (§939, `--chunk` target chars, `--overlap` context repeated between them), store them embedded, extract concepts into the session graph (§941), and re-index the new nodes so `search` reaches passages *and* concepts. Re-indexing a file replaces its passages; the graph accumulates | `ckos index ./sess paper.md` |
 | `graph [--dot] <text…>` / `graph [--dot] --session <dir>` | Extract a typed knowledge graph from text or a session's docs | `ckos graph --session ./sess` |
 | `kql [--session <dir>] <query>` | Run a Knowledge Query Language query | `ckos kql 'FIND Concept "Transformer" RELATED Algorithm'` |
 | `eval --relevant <csv> [--k N] <dir> <query…>` | Score search quality (Precision/Recall/MRR/nDCG) against known-relevant titles | `ckos eval --relevant "Transformer" ./sess Transformer` |
@@ -77,8 +81,9 @@ appear in any position, and `ckos <command> --help` prints per-command usage.
 ### A typical session flow
 
 ```sh
+ckos index ./sess paper.md              # ingest a corpus: passages + concepts (§938/§939)
 ckos run --session ./sess "research the Transformer paper by Vaswani"  # execute + learn
-ckos search ./sess "Transformer"        # hybrid search (keyword + graph hits)
+ckos search ./sess "Transformer"        # hybrid search (passages, keyword + graph hits)
 ckos kql --session ./sess 'FIND Concept "Transformer" RETURN Graph + Sources'
 ckos plan --dot "research X" | dot -Tsvg > plan.svg                    # visualize a plan
 ```

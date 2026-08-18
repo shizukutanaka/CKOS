@@ -31,10 +31,19 @@ regressions:
 3. **Prove the test catches the bug** — after fixing, temporarily revert the
    fix and confirm the new test fails, then restore. (Example: the search-cache
    race test in `web/src/lib.rs` was validated exactly this way.)
-4. **Full gates before every commit** — all four, no exceptions:
-   `cargo fmt --all` · `RUSTFLAGS="-D warnings" cargo clippy --workspace
-   --all-targets` · `RUSTDOCFLAGS="-D warnings" cargo doc --workspace
-   --no-deps` · `cargo test --workspace`.
+4. **Full gates before every commit** — all four, no exceptions. One command
+   runs them and names the first failure:
+
+   ```sh
+   ./scripts/check.sh          # format, clippy -D warnings, rustdoc -D warnings, tests
+   ./scripts/check.sh --fix    # reformat in place first
+   ```
+
+   (Equivalently by hand: `cargo fmt --all -- --check` · `RUSTFLAGS="-D
+   warnings" cargo clippy --workspace --all-targets` · `RUSTDOCFLAGS="-D
+   warnings" cargo doc --workspace --no-deps` · `cargo test --workspace`.
+   Prefer the script — retyping the chain invites quietly dropping a gate, and
+   it is what the staged CI runs.)
 5. **One logical fix per commit**, with a message that states the defect, the
    reproduction, and the fix rationale. Update `CHANGELOG.md`'s Unreleased
    `### Fixed` section and the test count in the same commit.
