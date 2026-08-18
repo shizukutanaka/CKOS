@@ -75,6 +75,51 @@ platform).
 
 ### Fixed
 
+- **`ckos serve`: a request's `session` was an unconstrained filesystem path**
+  (path traversal, CWE-22). Every session handler passes the parameter to
+  `FileStore::open`, which `create_dir_all`s it and then writes `*.doc` files
+  and `graph.kg` there — so one unauthenticated request could create
+  directories and write documents anywhere the server process could reach.
+  Reproduced before fixing: `POST /api/run` with
+  `intent=say+hello&session=/tmp/ckos-repro-victim/deep/nested` answered
+  `200 OK` after creating all three directory levels and writing two
+  documents plus a graph into them. This is *not* covered by the crate's
+  "no TLS, no auth — put it behind a reverse proxy" scope note: a proxy adds
+  transport security and authentication, but an authenticated operator still
+  expects `session` to name a session rather than to be a filesystem-wide
+  write primitive. It is also reachable without any operator action at all —
+  the handler accepts `application/x-www-form-urlencoded`, a CORS-simple
+  content type that any web page can `POST` cross-origin to `127.0.0.1`
+  without a preflight, and the write lands whether or not the page can read
+  the (opaque) response.
+  Sessions are now confined to a **session root**: `ckos serve
+  [--session-root <dir>]` (default: the current directory, printed at
+  startup), `ckos_web::serve_rooted` for library callers, and
+  `AppState::resolve_session` resolving each name beneath it. The rule is
+  strict and easy to audit — a name is accepted only if every path component
+  is `Component::Normal`; absolute paths, `..` and Windows drive prefixes are
+  **rejected with a 400 rather than sanitized**, since silently rewriting the
+  path would write to a different session than the caller named (the same
+  "explicit rejection over silent correction" rule as oversized bodies → 413).
+  Applied at *every* handler that takes a `session` — `run`, `history`,
+  `search`, `kql`, `graph` — through one shared pair of helpers, not just the
+  one the escape was demonstrated on; `kql` and `graph` treat the parameter as
+  optional and previously reached the filesystem with the raw string. Two
+  regression tests, both confirmed to fail with the resolver reverted to a
+  pass-through: one asserts 400 plus *no directory created* for an absolute
+  path and for two traversals (including `a/../../escapee`, which only escapes
+  after descending — the partial case a `starts_with("..")` guard would miss)
+  while a plain relative name still persists under the root, the other sweeps
+  all four remaining handlers.
+  Side effect, deliberate: dropping `.` components normalizes the resolved
+  path, so `a`, `./a` and `a/` now share one search-cache entry and one
+  generation counter. Previously the raw request string was the cache key, so
+  three spellings of one directory could invalidate each other's caches
+  inconsistently.
+  Out of scope and stated rather than silently assumed: a symlink *already
+  planted inside the root* still leads where it points. No request can create
+  one through this API, so that needs prior local write access to the
+  operator's own session tree — a different threat model.
 - **CLI flags now consume every occurrence, last value wins**: `take_flag`/
   `take_value_flag` used to stop at the first occurrence of a flag; a repeated
   flag (`ckos history <dir> --k 3 --k 1 <query>`) leaked the later occurrence
@@ -526,7 +571,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-280 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+282 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening

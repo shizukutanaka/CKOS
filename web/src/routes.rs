@@ -8,12 +8,16 @@
 //! A request without a `session` parameter runs against transient in-memory
 //! state (mirroring `ckos run`/`ckos graph` with no `--session`): nothing
 //! persists, so the dashboard's "try it" panels always work with zero setup.
+//!
+//! A request *with* one names a session **relative to the server's session
+//! root** ([`AppState::session_root`]) and can never escape it — see
+//! [`AppState::resolve_session`].
 
 use crate::http::{Request, Response};
 use crate::json::Json;
 use ckos_sdk::prelude::*;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
 const GRAPH_FILE: &str = "graph.kg";
@@ -38,7 +42,11 @@ const CACHE_CAPACITY_PER_SESSION: usize = 32;
 /// expected to serve the same session repeatedly.
 pub struct AppState {
     engine: Engine,
-    /// One LRU cache per session directory, keyed by session path.
+    /// Directory every session named by a request lives under. A `session`
+    /// parameter is resolved *relative to this* and cannot escape it — see
+    /// [`Self::resolve_session`].
+    session_root: PathBuf,
+    /// One LRU cache per session directory, keyed by resolved session path.
     caches: Mutex<HashMap<String, SearchCache>>,
     /// A mutation counter per session directory, bumped whenever `run`
     /// invalidates that session's cache (see [`Self::invalidate_cache`]).
@@ -54,8 +62,8 @@ pub struct AppState {
 impl AppState {
     /// Build the shared engine (the same demo capability/runtime/verifier
     /// pool every request used to rebuild from scratch) and an empty cache
-    /// table.
-    pub fn new() -> Self {
+    /// table, with every session confined under `session_root`.
+    pub fn new(session_root: impl Into<PathBuf>) -> Self {
         let mut runtimes = RuntimeRegistry::new();
         let mut agents = CapabilityRegistry::new();
         for cap in Capability::builtin() {
@@ -67,9 +75,68 @@ impl AppState {
             .with_check(Box::new(CitationCheck));
         AppState {
             engine: Engine::new(runtimes, agents, verifier),
+            session_root: session_root.into(),
             caches: Mutex::new(HashMap::new()),
             generations: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Resolve a request's `session` parameter to a directory under
+    /// [`Self::session_root`], or reject the request.
+    ///
+    /// **This is a security boundary, not a convenience.** Every session
+    /// handler passes an operator-supplied string to `FileStore::open`, which
+    /// `create_dir_all`s it and then writes `*.doc` files and `graph.kg`
+    /// there. The parameter used to be an *unconstrained* filesystem path, so
+    /// a single unauthenticated request could create directories and write
+    /// files anywhere the process could reach — reproduced with
+    /// `POST /api/run` and `session=/tmp/ckos-repro-victim/deep/nested`, which
+    /// answered `200 OK` after creating all three directory levels and writing
+    /// two documents plus a graph into them. That is reachable from any web
+    /// page in the operator's browser: the handler accepts
+    /// `application/x-www-form-urlencoded`, which is a CORS-simple request a
+    /// cross-origin page can send to `127.0.0.1` without a preflight, and it
+    /// does not need to read the (opaque) response for the write to land.
+    ///
+    /// Note this is *not* covered by the "no TLS, no auth — put it behind a
+    /// reverse proxy" scope note in the crate doc: a proxy adds transport
+    /// security and authentication, but an authenticated operator still
+    /// expects `session` to name a session, not to be a filesystem-wide write
+    /// primitive. Confinement is the least-privilege default the rest of the
+    /// workspace follows (`ckos serve` binding `127.0.0.1`, `plugins`'
+    /// permission gate, `policy`'s default-deny).
+    ///
+    /// The rule is deliberately strict and easy to audit: the name is
+    /// accepted only if every path component is [`Component::Normal`].
+    /// Absolute paths, `..`, and Windows drive prefixes are all rejected with
+    /// a 400 rather than sanitized — silently rewriting a path the caller
+    /// asked for would write to a different session than they named. `.`
+    /// components are dropped, which also *normalizes* the result: `a`,
+    /// `./a` and `a/` now resolve to one path, so they share one cache entry
+    /// and one generation counter instead of three (previously the raw
+    /// string was the cache key, so those three spellings of one directory
+    /// could invalidate each other's caches inconsistently).
+    ///
+    /// Remaining, deliberately out of scope: a symlink *already planted
+    /// inside the root* still leads where it points. A request cannot create
+    /// one through this API, so that requires prior local write access to the
+    /// operator's own session tree — a different threat model than "any page
+    /// in the browser".
+    fn resolve_session(&self, name: &str) -> std::result::Result<PathBuf, Response> {
+        let mut path = self.session_root.clone();
+        for component in Path::new(name).components() {
+            match component {
+                Component::Normal(part) => path.push(part),
+                Component::CurDir => {}
+                _ => {
+                    return Err(Response::bad_request(&format!(
+                        "`session` must be a relative path under the server's session root \
+                         (no leading `/`, no `..`): rejected {name:?}"
+                    )))
+                }
+            }
+        }
+        Ok(path)
     }
 
     /// Lock the cache table, recovering from poisoning — one panicking
@@ -84,25 +151,30 @@ impl AppState {
         self.generations.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Key a resolved session directory into the cache/generation tables.
+    /// Resolution already normalized the path (see [`Self::resolve_session`]),
+    /// so equal directories always produce equal keys.
+    fn session_key(dir: &Path) -> String {
+        dir.to_string_lossy().into_owned()
+    }
+
     /// Current mutation generation for a session directory (0 if it has
     /// never been invalidated).
-    fn generation(&self, dir: &str) -> u64 {
-        self.generations().get(dir).copied().unwrap_or(0)
+    fn generation(&self, dir: &Path) -> u64 {
+        self.generations()
+            .get(&Self::session_key(dir))
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Evict a session's cached searches and bump its generation, so any
     /// search already past its own cache-miss check for this session knows,
     /// when it later checks, not to write its (possibly now stale) result
     /// back in (see the field doc on `generations`).
-    fn invalidate_cache(&self, dir: &str) {
-        self.caches().remove(dir);
-        *self.generations().entry(dir.to_string()).or_insert(0) += 1;
-    }
-}
-
-impl Default for AppState {
-    fn default() -> Self {
-        Self::new()
+    fn invalidate_cache(&self, dir: &Path) {
+        let key = Self::session_key(dir);
+        self.caches().remove(&key);
+        *self.generations().entry(key).or_insert(0) += 1;
     }
 }
 
@@ -115,10 +187,10 @@ pub fn route(state: &AppState, req: &Request) -> Response {
         ("GET", "/api/status") => status(state),
         ("GET", "/api/plan") => plan(req),
         ("POST", "/api/run") => run(state, req),
-        ("GET", "/api/history") => history(req),
+        ("GET", "/api/history") => history(state, req),
         ("GET", "/api/search") => search(state, req),
-        ("POST", "/api/kql") => kql(req),
-        ("GET", "/api/graph") => graph(req),
+        ("POST", "/api/kql") => kql(state, req),
+        ("GET", "/api/graph") => graph(state, req),
         ("GET", "/api/verify") => verify(req),
         _ => Response::not_found(),
     }
@@ -225,7 +297,13 @@ fn run(state: &AppState, req: &Request) -> Response {
     if intent.is_empty() {
         return Response::bad_request("missing `intent` parameter");
     }
-    let session_dir = req.param("session").filter(|s| !s.is_empty());
+    let session_dir = match req.param("session").filter(|s| !s.is_empty()) {
+        Some(name) => match state.resolve_session(name) {
+            Ok(dir) => Some(dir),
+            Err(resp) => return resp,
+        },
+        None => None,
+    };
 
     let dag = HeuristicPlanner::new().plan(intent);
     // The shared, server-lifetime engine (see AppState's doc) — its audit
@@ -240,7 +318,7 @@ fn run(state: &AppState, req: &Request) -> Response {
     };
 
     let mut warnings: Vec<Json> = Vec::new();
-    if let Some(dir) = session_dir {
+    if let Some(dir) = session_dir.as_deref() {
         // This run is about to add documents and/or graph nodes to `dir`;
         // any cached search results for it are now stale (§958 cache —
         // see `search`'s cache_key doc). Evict before mutating, not after,
@@ -270,7 +348,7 @@ fn run(state: &AppState, req: &Request) -> Response {
                     warnings.push(format!("failed to persist session: {e}").into());
                 }
 
-                let graph_path = Path::new(dir).join(GRAPH_FILE);
+                let graph_path = dir.join(GRAPH_FILE);
                 match GraphStore::load(&graph_path) {
                     Ok(mut graph) => {
                         graph.extract_concepts_with_provenance(intent, Some("run:intent"));
@@ -284,7 +362,9 @@ fn run(state: &AppState, req: &Request) -> Response {
                     Err(e) => warnings.push(format!("failed to load graph: {e}").into()),
                 }
             }
-            Err(e) => warnings.push(format!("could not open session {dir}: {e}").into()),
+            Err(e) => {
+                warnings.push(format!("could not open session {}: {e}", dir.display()).into())
+            }
         }
     }
 
@@ -320,20 +400,47 @@ fn run(state: &AppState, req: &Request) -> Response {
     ]))
 }
 
-fn open_session(dir: &str) -> std::result::Result<FileStore, Response> {
+fn open_session(dir: &Path) -> std::result::Result<FileStore, Response> {
     FileStore::open(dir).map_err(|e| {
         Response::json_status(
             400,
-            Json::object([("error", format!("could not open session {dir}: {e}").into())]),
+            Json::object([(
+                "error",
+                format!("could not open session {}: {e}", dir.display()).into(),
+            )]),
         )
     })
 }
 
-fn history(req: &Request) -> Response {
-    let Some(dir) = req.param("session").filter(|s| !s.is_empty()) else {
-        return Response::bad_request("missing `session` parameter");
+/// Read the `session` parameter and resolve it under the server's session
+/// root, or produce the 400 to return. Shared by every handler that requires
+/// a session, so no handler can reach the filesystem with an unresolved
+/// (attacker-controlled) path — see [`AppState::resolve_session`].
+fn required_session(state: &AppState, req: &Request) -> std::result::Result<PathBuf, Response> {
+    let Some(name) = req.param("session").filter(|s| !s.is_empty()) else {
+        return Err(Response::bad_request("missing `session` parameter"));
     };
-    let store = match open_session(dir) {
+    state.resolve_session(name)
+}
+
+/// The same, for handlers where a session is optional (`None` selects the
+/// zero-setup demo mode).
+fn optional_session(
+    state: &AppState,
+    req: &Request,
+) -> std::result::Result<Option<PathBuf>, Response> {
+    match req.param("session").filter(|s| !s.is_empty()) {
+        Some(name) => state.resolve_session(name).map(Some),
+        None => Ok(None),
+    }
+}
+
+fn history(state: &AppState, req: &Request) -> Response {
+    let dir = match required_session(state, req) {
+        Ok(d) => d,
+        Err(resp) => return resp,
+    };
+    let store = match open_session(&dir) {
         Ok(s) => s,
         Err(resp) => return resp,
     };
@@ -378,8 +485,9 @@ fn history(req: &Request) -> Response {
 }
 
 fn search(state: &AppState, req: &Request) -> Response {
-    let Some(dir) = req.param("session").filter(|s| !s.is_empty()) else {
-        return Response::bad_request("missing `session` parameter");
+    let dir = match required_session(state, req) {
+        Ok(d) => d,
+        Err(resp) => return resp,
     };
     let raw_query = req.param_or_empty("q").trim();
     if raw_query.is_empty() {
@@ -403,17 +511,22 @@ fn search(state: &AppState, req: &Request) -> Response {
 
     // Captured before the cache-miss check so it covers the entire window
     // this computation takes — see `AppState::generations`.
-    let gen_before = state.generation(dir);
-    if let Some(hits) = state.caches().get_mut(dir).and_then(|c| c.get(&cache_key)) {
+    let gen_before = state.generation(&dir);
+    let session_key = AppState::session_key(&dir);
+    if let Some(hits) = state
+        .caches()
+        .get_mut(&session_key)
+        .and_then(|c| c.get(&cache_key))
+    {
         return search_response(&hits, 0, true);
     }
 
-    let store = match open_session(dir) {
+    let store = match open_session(&dir) {
         Ok(s) => s,
         Err(resp) => return resp,
     };
     let skipped = store.skipped();
-    let graph = match GraphStore::load(Path::new(dir).join(GRAPH_FILE)) {
+    let graph = match GraphStore::load(dir.join(GRAPH_FILE)) {
         Ok(g) => g,
         Err(e) => {
             return Response::json_status(500, Json::object([("error", e.to_string().into())]))
@@ -446,10 +559,10 @@ fn search(state: &AppState, req: &Request) -> Response {
     // Only cache if nothing invalidated this session while we were computing
     // — otherwise this result may already be stale, and writing it now would
     // resurrect exactly what `run`'s invalidation was meant to discard.
-    if state.generation(dir) == gen_before {
+    if state.generation(&dir) == gen_before {
         state
             .caches()
-            .entry(dir.to_string())
+            .entry(session_key)
             .or_insert_with(|| SearchCache::new(CACHE_CAPACITY_PER_SESSION))
             .put(cache_key, hits.clone());
     }
@@ -495,7 +608,7 @@ fn demo_graph() -> KnowledgeGraph {
     graph
 }
 
-fn kql(req: &Request) -> Response {
+fn kql(state: &AppState, req: &Request) -> Response {
     let query_text = req.param_or_empty("query").trim();
     if query_text.is_empty() {
         return Response::bad_request("missing `query` parameter");
@@ -504,14 +617,15 @@ fn kql(req: &Request) -> Response {
         Ok(q) => q,
         Err(e) => return Response::bad_request(&e.to_string()),
     };
-    let graph = match req.param("session").filter(|s| !s.is_empty()) {
-        Some(dir) => match GraphStore::load(Path::new(dir).join(GRAPH_FILE)) {
+    let graph = match optional_session(state, req) {
+        Ok(Some(dir)) => match GraphStore::load(dir.join(GRAPH_FILE)) {
             Ok(g) => g,
             Err(e) => {
                 return Response::json_status(500, Json::object([("error", e.to_string().into())]))
             }
         },
-        None => demo_graph(),
+        Ok(None) => demo_graph(),
+        Err(resp) => return resp,
     };
     let result = kql_execute(&query, &graph);
     let to_json = |ms: &[NodeMatch]| -> Json {
@@ -535,15 +649,16 @@ fn kql(req: &Request) -> Response {
     ]))
 }
 
-fn graph(req: &Request) -> Response {
-    let g = match req.param("session").filter(|s| !s.is_empty()) {
-        Some(dir) => match GraphStore::load(Path::new(dir).join(GRAPH_FILE)) {
+fn graph(state: &AppState, req: &Request) -> Response {
+    let g = match optional_session(state, req) {
+        Ok(Some(dir)) => match GraphStore::load(dir.join(GRAPH_FILE)) {
             Ok(g) => g,
             Err(e) => {
                 return Response::json_status(500, Json::object([("error", e.to_string().into())]))
             }
         },
-        None => {
+        Err(resp) => return resp,
+        Ok(None) => {
             let text = req.param_or_empty("text").trim();
             if text.is_empty() {
                 return Response::bad_request("provide `session` or `text`");

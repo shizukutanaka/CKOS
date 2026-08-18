@@ -13,6 +13,17 @@
 //! pool as `ckos run` without `--role`/`--token`) — a production deployment
 //! reachable by untrusted clients belongs behind a reverse proxy that adds
 //! those.
+//!
+//! What that scope note does **not** excuse is filesystem reach. Sessions are
+//! confined to a **session root** ([`serve_rooted`]; [`serve`] uses the
+//! process's working directory), and a request's `session` parameter is
+//! resolved beneath it or rejected with a 400. Before that confinement
+//! existed the parameter was an unconstrained path handed to
+//! `FileStore::open`, so one request could create directories and write
+//! documents anywhere the process could reach — including from any page in
+//! the operator's browser, since the form-encoded `POST /api/run` is a
+//! CORS-simple request that needs no preflight and no readable response for
+//! the write to land.
 
 pub mod dashboard;
 pub mod http;
@@ -22,6 +33,7 @@ mod routes;
 use json::Json;
 use std::io::{self, Read};
 use std::net::{TcpListener, ToSocketAddrs};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -51,19 +63,32 @@ pub fn bind(addr: impl ToSocketAddrs) -> io::Result<TcpListener> {
 /// operation; an individual connection's I/O error or a route handler panic
 /// is contained to that connection (see [`http::handle_connection`]) and
 /// does not stop the server.
+///
+/// Sessions are rooted at the process's current working directory. Use
+/// [`serve_rooted`] to put them somewhere else.
 pub fn serve(listener: TcpListener) -> ! {
-    serve_bounded(listener, MAX_CONCURRENT_CONNECTIONS)
+    let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    serve_rooted(listener, root)
 }
 
-/// [`serve`], with the concurrency cap as a parameter — split out so tests
-/// can exercise the cap deterministically at a small size instead of opening
-/// 64 real connections.
-fn serve_bounded(listener: TcpListener, max_concurrent: usize) -> ! {
+/// [`serve`], with an explicit session root: every request's `session`
+/// parameter names a directory *beneath* `session_root` and cannot escape it
+/// (see the crate doc). Nothing outside this directory is reachable through
+/// the API, so pointing it at a dedicated sessions directory is strictly
+/// safer than serving from a home directory.
+pub fn serve_rooted(listener: TcpListener, session_root: impl Into<PathBuf>) -> ! {
+    serve_bounded(listener, MAX_CONCURRENT_CONNECTIONS, session_root.into())
+}
+
+/// [`serve_rooted`], with the concurrency cap as a parameter — split out so
+/// tests can exercise the cap deterministically at a small size instead of
+/// opening 64 real connections.
+fn serve_bounded(listener: TcpListener, max_concurrent: usize, session_root: PathBuf) -> ! {
     // Built once and shared for the server's whole lifetime — see
     // `routes::AppState`'s doc for why (the engine's audit/telemetry and the
     // per-session search cache need to persist across requests, not reset on
     // every connection).
-    let state = Arc::new(routes::AppState::new());
+    let state = Arc::new(routes::AppState::new(session_root));
     let active = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
@@ -103,10 +128,20 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpStream;
 
+    /// A server whose session root is the process working directory — fine
+    /// for the handlers that never touch a session.
     fn start_test_server() -> std::net::SocketAddr {
         let listener = bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("local_addr");
         thread::spawn(move || serve(listener));
+        addr
+    }
+
+    /// A server rooted at `root`, for the session-backed handlers.
+    fn start_test_server_rooted(root: std::path::PathBuf) -> std::net::SocketAddr {
+        let listener = bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+        thread::spawn(move || serve_rooted(listener, root));
         addr
     }
 
@@ -115,6 +150,24 @@ mod tests {
     fn addr_seq() -> usize {
         static SEQ: AtomicUsize = AtomicUsize::new(0);
         SEQ.fetch_add(1, Ordering::SeqCst)
+    }
+
+    struct TempDir(std::path::PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A unique, self-cleaning temp directory to use as a session root.
+    fn temp_root(tag: &str) -> TempDir {
+        let dir = std::env::temp_dir().join(format!(
+            "ckos-web-{tag}-{}-{}",
+            std::process::id(),
+            addr_seq()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp root");
+        TempDir(dir)
     }
 
     fn raw_request(addr: std::net::SocketAddr, request: &str) -> String {
@@ -208,21 +261,10 @@ mod tests {
 
     #[test]
     fn search_cache_hits_on_repeat_query_and_invalidates_after_run() {
-        struct TempDir(std::path::PathBuf);
-        impl Drop for TempDir {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.0);
-            }
-        }
-        let dir = std::env::temp_dir().join(format!(
-            "ckos-web-cache-{}-{}",
-            std::process::id(),
-            addr_seq()
-        ));
-        let _guard = TempDir(dir.clone());
-        let dir_str = dir.to_str().unwrap();
+        let root = temp_root("cache");
+        let dir_str = "s";
 
-        let addr = start_test_server();
+        let addr = start_test_server_rooted(root.0.clone());
         let run = |dir: &str| {
             let body = format!("intent=study+the+Transformer+paper&session={dir}");
             let req = format!(
@@ -272,21 +314,10 @@ mod tests {
         // invalidation was meant to discard. `test_stall_before_cache_write`
         // (compiled only in test builds) makes this race deterministic
         // instead of timing-dependent.
-        struct TempDir(std::path::PathBuf);
-        impl Drop for TempDir {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.0);
-            }
-        }
-        let dir = std::env::temp_dir().join(format!(
-            "ckos-web-race-{}-{}",
-            std::process::id(),
-            addr_seq()
-        ));
-        let _guard = TempDir(dir.clone());
-        let dir_str = dir.to_str().unwrap().to_string();
+        let root = temp_root("race");
+        let dir_str = "s".to_string();
 
-        let addr = start_test_server();
+        let addr = start_test_server_rooted(root.0.clone());
         let run = move |dir: &str, intent: &str| {
             let body = format!("intent={intent}&session={dir}");
             let req = format!(
@@ -358,12 +389,16 @@ mod tests {
 
     #[test]
     fn missing_required_param_is_400() {
-        let addr = start_test_server();
+        // A valid (in-root) session, so the 400 can only come from the
+        // missing `q` — not from session confinement, which has its own test.
+        let root = temp_root("missing-param");
+        let addr = start_test_server_rooted(root.0.clone());
         let resp = raw_request(
             addr,
-            "GET /api/search?session=%2Ftmp%2Fx HTTP/1.1\r\nHost: x\r\n\r\n",
+            "GET /api/search?session=s HTTP/1.1\r\nHost: x\r\n\r\n",
         );
-        assert!(resp.starts_with("HTTP/1.1 400 Bad Request"));
+        assert!(resp.starts_with("HTTP/1.1 400 Bad Request"), "got: {resp}");
+        assert!(resp.contains("missing `q`"), "got: {resp}");
     }
 
     #[test]
@@ -386,7 +421,7 @@ mod tests {
         // 503 rather than queued or spawned unboundedly.
         let listener = bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("local_addr");
-        thread::spawn(move || serve_bounded(listener, 1));
+        thread::spawn(move || serve_bounded(listener, 1, PathBuf::from(".")));
 
         let _held = TcpStream::connect(addr).expect("connect first");
         // Give the accept loop's spawned thread a moment to actually start
@@ -400,6 +435,107 @@ mod tests {
         let mut resp = String::new();
         second.read_to_string(&mut resp).expect("read");
         assert!(resp.starts_with("HTTP/1.1 503"), "got: {resp}");
+    }
+
+    #[test]
+    fn a_session_parameter_cannot_reach_outside_the_session_root() {
+        // Regression: `session` was passed straight to `FileStore::open`,
+        // which `create_dir_all`s the path and writes `*.doc` + `graph.kg`
+        // into it — so it was an unconstrained filesystem write primitive
+        // reachable from any page in the operator's browser (the form-encoded
+        // POST is CORS-simple; the opaque response doesn't stop the write).
+        //
+        // Reproduced before the fix with exactly this request shape: it
+        // answered `200 OK`, created all three levels of
+        // `<tmp>/…/deep/nested`, and wrote two documents plus a graph there.
+        let root = temp_root("confine");
+        let outside = root.0.parent().unwrap().join(format!(
+            "ckos-web-escapee-{}-{}",
+            std::process::id(),
+            addr_seq()
+        ));
+        let _outside_guard = TempDir(outside.clone());
+        assert!(!outside.exists(), "escape target must not exist up front");
+
+        let addr = start_test_server_rooted(root.0.clone());
+        let post_run = |session: &str| {
+            let body = format!("intent=say+hello&session={session}");
+            let req = format!(
+                "POST /api/run HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            raw_request(addr, &req)
+        };
+
+        // Absolute path: the shape the original repro used.
+        let absolute = post_run(&outside.display().to_string());
+        assert!(
+            absolute.starts_with("HTTP/1.1 400 Bad Request"),
+            "an absolute session path must be rejected, got: {absolute}"
+        );
+
+        // Traversal out of the root, including a form that only escapes
+        // after descending — the partial case a naive `starts_with("..")`
+        // guard would miss.
+        for traversal in ["..%2Fescapee", "a%2F..%2F..%2Fescapee"] {
+            let resp = post_run(traversal);
+            assert!(
+                resp.starts_with("HTTP/1.1 400 Bad Request"),
+                "traversal {traversal} must be rejected, got: {resp}"
+            );
+        }
+
+        assert!(
+            !outside.exists(),
+            "nothing may be created outside the session root: {} exists",
+            outside.display()
+        );
+
+        // The confinement must not break the legitimate case: a plain
+        // relative name still works, and lands inside the root.
+        let ok = post_run("s");
+        assert!(ok.starts_with("HTTP/1.1 200 OK"), "got: {ok}");
+        assert!(
+            root.0.join("s").join("graph.kg").is_file(),
+            "a relative session must still persist under the root"
+        );
+    }
+
+    #[test]
+    fn a_rejected_session_is_reported_on_every_handler_that_takes_one() {
+        // The resolver is a security boundary, so it must sit in front of
+        // *every* handler that accepts `session`, not just the one the
+        // vulnerability was demonstrated on. Two of these (kql, graph) treat
+        // the parameter as optional and previously fell through to the demo
+        // mode's code path with the raw string.
+        let root = temp_root("confine-all");
+        let addr = start_test_server_rooted(root.0.clone());
+
+        let cases = [
+            "GET /api/history?session=%2Fetc&q= HTTP/1.1\r\nHost: x\r\n\r\n".to_string(),
+            "GET /api/search?session=%2Fetc&q=x HTTP/1.1\r\nHost: x\r\n\r\n".to_string(),
+            "GET /api/graph?session=..%2Fescapee HTTP/1.1\r\nHost: x\r\n\r\n".to_string(),
+        ];
+        for req in cases {
+            let resp = raw_request(addr, &req);
+            assert!(
+                resp.starts_with("HTTP/1.1 400 Bad Request"),
+                "expected 400 for {req:?}, got: {resp}"
+            );
+        }
+
+        let body = "query=FIND+Concept+%22Transformer%22&session=%2Fetc";
+        let req = format!(
+            "POST /api/kql HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let resp = raw_request(addr, &req);
+        assert!(
+            resp.starts_with("HTTP/1.1 400 Bad Request"),
+            "kql must reject an escaping session too, got: {resp}"
+        );
     }
 
     #[test]
