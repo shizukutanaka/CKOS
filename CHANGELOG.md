@@ -75,6 +75,24 @@ platform).
 
 ### Fixed
 
+- **`Event::TaskStarted` was published for tasks that never reached a
+  runtime.** The event is documented as "a task began executing on a runtime",
+  but `Engine::execute` published it as its very first statement — before the
+  §929 policy gate and before runtime selection. A task stopped by either gate
+  therefore announced a runtime execution that never happened, contradicting
+  the module's own invariant that the observable state reflects reality.
+  Reproduced with an empty `RuntimeRegistry`: `execute` returned `Err`, the
+  task ended `Queued` (correctly — §893 has no `Queued -> Failed` edge), and
+  `TaskStarted` had already fired once. A consumer counting starts against
+  completions leaks one per denial, with nothing to close it.
+  Now published immediately after the `Running` transition, where the claim is
+  true. Note the fix is *not* to emit `TaskFailed` on those paths: the task is
+  still `Queued`, so that would make the event stream contradict the state
+  machine instead of the doc. `execute`'s doc now states plainly which events
+  each path emits, rather than the previous blanket "emitting events … on
+  every path". The regression test covers both never-started paths **and** the
+  positive case, since a fix that merely stopped publishing the event would
+  pass a negative-only test.
 - **The atomic write's scratch path was shared, so two writers could corrupt
   the file the rename was meant to protect** (`graph::GraphStore::save`,
   `memory::file_store::write_atomic`). Both derived the temp path from the
@@ -623,7 +641,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-285 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+286 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening
