@@ -73,8 +73,64 @@ platform).
   that. `graph::pagerank` was refactored onto a shared `pagerank_core`
   (uniform teleport = classic PageRank, verified behaviour-preserving).
 
+### Scope — v1 declared complete against a stated boundary
+
+`docs/implementation-status.md` used to end by saying every mechanism has "a
+working, tested implementation behind a trait seam where a production backend
+will later plug in." That sentence let the product be permanently 90%
+finished: a trait with no implementation is not a delivered capability, and
+counting it as one is the same label-moving the codebase forbids everywhere
+else. Fourteen rows sat at 🟡/⏳ with no statement of whether they ever had to
+be filled.
+
+They are now answered one at a time. Every remaining ⏳ requires breaking the
+`std`-only, zero-dependency, offline constraint — which is not a temporary
+state but the product's reason to exist — so each is **out of scope for v1**,
+listed with the dependency it needs and why a smaller version would be worse
+than none (a fake WASM sandbox implies isolation the host cannot enforce; a
+hand-rolled OIDC verifier or AES is a security hazard, which is exactly why
+`sdk::crypto` stops at SHA-256/HMAC, where published test vectors can prove it
+right). Two items are genuinely blocked rather than out of scope, and both are
+named with who can unblock them: §905 CI needs a maintainer to copy the ready
+workflow file, and the public release needs the repository owner.
+
+This is a judgment call, recorded rather than left implicit, and any line of
+it can be overturned by the owner.
+
+### Removed
+
+- **Five `Event` variants that nothing published**: `TaskCreated`,
+  `RuntimeLoaded`, `MemoryUpdated`, `PluginInstalled`, `AgentRegistered`. Four
+  had exactly one reference in the entire workspace — their own declaration;
+  the fifth appeared only as filler in the bus's own test. An event is
+  observable *only* by being published, so a variant with no publisher is not
+  a feature a subscriber can ever use — it is a promise the bus silently
+  breaks, and it was what held §894 at 🟡. §894 is now ✅ honestly: every
+  remaining variant has a real publisher.
+  The same sweep deliberately **kept** `Task::workflow` (written by `Dag::add`,
+  read by nothing) and five unused public accessors such as
+  `VersionedGraph::current_branch` and `Scheduler::pending_len`. The dividing
+  line is whether a consumer can get a true answer out of it today: those are
+  populated with correct data and readable, whereas an unpublished event is
+  unobservable by construction. Deleting coherent public accessors to inflate
+  a deletion count would be deletion theater.
+
 ### Fixed
 
+- **`docs/implementation-status.md` §960 claimed its own network API was
+  pending**, listing only the CLI, when `ckos serve` had already been
+  delivering `/api/search`, `/api/kql`, `/api/history`, `/api/graph` and
+  `/api/run` over HTTP/JSON. The row predated the `web` crate and was never
+  revisited. Now ✅ with the routes named.
+- **`scripts/check-status-doc.sh` reported a backticked *filename* as a
+  missing symbol**: it extracts capitalised tokens from inside backticks, so
+  `` `CHANGELOG.md` `` yielded a lookup for a type named `CHANGELOG`. Found by
+  the gate firing on this very commit's edits. `` `README.md` `` had escaped
+  only because the bare word "README" happens to appear in a doc comment, so
+  this was a live false-positive class rather than one bad row. A backticked
+  token that names a real file is now skipped as the file reference it is;
+  re-verified in both directions (83 symbols resolve; a row edited to cite
+  `TotallyGoneType` still exits 1).
 - **`Event::TaskStarted` was published for tasks that never reached a
   runtime.** The event is documented as "a task began executing on a runtime",
   but `Engine::execute` published it as its very first statement — before the

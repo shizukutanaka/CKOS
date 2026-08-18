@@ -49,6 +49,13 @@ for tok in re.findall(r"`([^`]+)`", doc):
     # Skip CLI invocations, HTTP routes, flags and spec references — prose, not symbols.
     if t.startswith(("ckos ", "GET ", "POST ", "PUT ", "DELETE ", "--", "/api", "§")):
         continue
+    # A backticked path is a file reference, not a symbol. Without this, the
+    # stem of a filename gets extracted and looked up as code: `CHANGELOG.md`
+    # was reported as a missing symbol `CHANGELOG`. (`README.md` escaped only
+    # because the bare word "README" happens to appear in a doc comment — so
+    # this was a live false-positive class, not a one-off.)
+    if t in names or pathlib.Path(t).name in names:
+        continue
     for a, b, c, d in re.findall(
         r"\b([A-Za-z_][A-Za-z0-9_]*)::([A-Za-z_][A-Za-z0-9_]*)"
         r"|\b([A-Z][A-Za-z0-9_]{2,})\b"
