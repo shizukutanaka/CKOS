@@ -35,9 +35,16 @@ regressions:
    runs them and names the first failure:
 
    ```sh
-   ./scripts/check.sh          # format, clippy -D warnings, rustdoc -D warnings, tests
+   ./scripts/check.sh          # format, clippy, rustdoc, status-doc symbols, tests
    ./scripts/check.sh --fix    # reformat in place first
    ```
+
+   The status-doc gate is not cosmetic: `docs/implementation-status.md` is the
+   product's §-by-§ coverage claim, and deleting inert parts left four rows
+   citing symbols that no longer existed. `scripts/check-status-doc.sh` now
+   verifies every cited symbol still resolves, so that claim is machine-checked
+   rather than hand-maintained. A deliberately historical mention goes in its
+   `ALLOWED` map *with a reason*.
 
    (Equivalently by hand: `cargo fmt --all -- --check` · `RUSTFLAGS="-D
    warnings" cargo clippy --workspace --all-targets` · `RUSTDOCFLAGS="-D
@@ -163,10 +170,6 @@ meeting the stated condition (that would be label-moving, §1):
   see §3.) `GraphRepo` additionally has no on-disk format, so a CLI surface
   would first require inventing repo persistence; do not add a `ckos graph
   branch` that silently loses every branch between invocations.
-- **`memory::MemoryTier`**: classification vocabulary only; documents carry no
-  tier. Lift only together with real promote/demote logic and a consumer.
-- **`kernel::ResourceProbe`**: seam with no consumer. Lift when a real
-  hardware probe exists.
 - **`HashingEmbedder` deliberately does *not* stem**, while `retrieval::tokens`
   does (S-stemmer, Harman 1991). Leaving the asymmetry is the safe choice, not
   an oversight: document embeddings are computed at write time and *persisted*,
@@ -184,8 +187,9 @@ meeting the stated condition (that would be label-moving, §1):
   bug found pre-release should still be fixed now; only post-release changes
   need the version-marker infrastructure first.
 - **`Event::{TaskCreated, RuntimeLoaded, MemoryUpdated, PluginInstalled,
-  AgentRegistered}`** are never published; `Event::topic()` has no caller
-  (`kernel/src/event.rs`). Lift per-variant when a genuine publisher exists.
+  AgentRegistered}`** are never published (`kernel/src/event.rs`). Lift
+  per-variant when a genuine publisher exists. (`Event::topic()` *was* listed
+  here; it is deleted — see §3.)
 - **`AgentState` lifecycle is not driven by the engine** — discovery honors
   it, but nothing suspends/terminates agents automatically. Lift when a
   consumer (e.g. circuit breaker on repeated failure) justifies transitions.

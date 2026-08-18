@@ -384,6 +384,23 @@ platform).
 
 ### Added
 
+- **`scripts/check-status-doc.sh` — the §-by-§ coverage claim is now
+  machine-checked**, and runs as part of `./scripts/check.sh`.
+  `docs/implementation-status.md` maps every spec section to the code
+  satisfying it: the product's central claim. Deleting the inert parts left
+  **four rows citing symbols that no longer existed** (`MemoryTier`,
+  `ResourceProbe`, `Event::topic()`, `search_synonyms`), plus a stale
+  `store_reflection` reference in `docs/spec-v2.6.md` and two contradictory
+  handbook entries — the table asserted coverage the code no longer provided.
+  All are corrected, but fixing instances does not stop the class: the script
+  extracts every backticked code symbol from the table and fails the gate if
+  one no longer resolves anywhere in the sources or file tree. Verified both
+  ways — passes on the corrected docs (86 symbols), and fails with exit 1 when
+  a row is edited to cite something nonexistent. A deliberately historical
+  mention (the §904 row records that the `ResourceProbe` seam *was removed*)
+  goes in an `ALLOWED` map that demands a written reason.
+
+
 - **`scripts/install-hooks.sh` + `.githooks/pre-commit` — the gate now runs
   itself** (Musk step 5, automate — deliberately last: the checks were
   questioned, the dead parts deleted, and four commands collapsed into one

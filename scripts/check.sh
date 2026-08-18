@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run every gate CKOS requires green before a commit, in one command.
 #
-# The four gates were previously retyped as a long shell one-liner on every
+# The gates were previously retyped as a long shell one-liner on every
 # change, which is slow, easy to abbreviate under time pressure, and impossible
 # for CI and a contributor to share. One script means the local loop, the
 # staged CI workflow (docs/ci-workflow.yml) and a new contributor all run
@@ -40,6 +40,9 @@ RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets || fail "clippy"
 
 step "rustdoc (-D warnings)"
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps || fail "rustdoc"
+
+step "status-doc symbols"
+./scripts/check-status-doc.sh || fail "docs/implementation-status.md cites a symbol that no longer exists"
 
 step "tests"
 # Capture so the total can be reported; stream it too, so a hang is visible.
