@@ -1,9 +1,8 @@
 //! # CKOS Memory
 //!
 //! Implements the memory hierarchy (§896), the unified document model (§937)
-//! and the storage abstraction (§936). Caches and persistent data are kept
-//! cleanly separated by [`MemoryTier`], so consolidation (§953) and garbage
-//! collection (§954) can reason about each level independently.
+//! and the storage abstraction (§936), with consolidation (§953) and garbage
+//! collection (§954) layered on top.
 
 use ckos_kernel::error::Result;
 use ckos_kernel::DocumentId;
@@ -21,30 +20,6 @@ pub use maintenance::{
     collect, compress_document, consolidate, keywords, summarize, GcPolicy, GcReason, GcReport,
 };
 pub use memory_score::{rank_memories, recency_decay, MemorySignals, MemoryWeights};
-
-/// The six-level memory hierarchy from §896.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum MemoryTier {
-    /// L0 — registers / hottest scratch state.
-    Register,
-    /// L1 — context cache.
-    ContextCache,
-    /// L2 — working memory.
-    Working,
-    /// L3 — semantic memory.
-    Semantic,
-    /// L4 — knowledge graph.
-    KnowledgeGraph,
-    /// L5 — cold archive.
-    Archive,
-}
-
-impl MemoryTier {
-    /// Whether this tier is a volatile cache rather than durable storage.
-    pub fn is_cache(self) -> bool {
-        matches!(self, MemoryTier::Register | MemoryTier::ContextCache)
-    }
-}
 
 /// The unified document model (§937): every artifact — Markdown, PDF, code,
 /// notebook — shares this shape.
@@ -172,13 +147,6 @@ impl Storage for InMemoryStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn cache_tiers_classified() {
-        assert!(MemoryTier::ContextCache.is_cache());
-        assert!(!MemoryTier::Archive.is_cache());
-        assert!(MemoryTier::Register < MemoryTier::Archive);
-    }
 
     #[test]
     fn store_round_trip_and_search() {

@@ -76,9 +76,7 @@ pub mod prelude {
     pub use ckos_kernel::error::{KernelError, Result};
     pub use ckos_kernel::event::{Event, EventBus, InMemoryEventBus};
     pub use ckos_kernel::task::{Priority, Task, TaskState};
-    pub use ckos_kernel::telemetry::{
-        InMemoryTelemetry, NullProbe, ResourceProbe, ResourceSnapshot, TaskMetrics, TelemetrySink,
-    };
+    pub use ckos_kernel::telemetry::{InMemoryTelemetry, TaskMetrics, TelemetrySink};
     pub use ckos_kernel::{AgentId, DocumentId, NodeId, RuntimeId, TaskId, WorkflowId};
 
     pub use ckos_scheduler::{runtime_fit, Scheduler, ScoreFactors};
@@ -97,7 +95,7 @@ pub mod prelude {
         chunk, chunk_with_overlap, collect as gc_collect, compress_document, consolidate, cosine,
         keywords, rank_memories, recency_decay, summarize, ChunkStrategy, Document, Embedder,
         FileStore, GcPolicy, GcReason, GcReport, HashingEmbedder, InMemoryStore, MemorySignals,
-        MemoryTier, MemoryWeights, Query, Storage,
+        MemoryWeights, Query, Storage,
     };
 
     pub use ckos_planner::{HeuristicPlanner, Planner, SubTask};

@@ -331,6 +331,25 @@ platform).
 
 ### Removed
 
+- **The last two inert subsystems deleted**, closing the requirement question
+  step 1 opened. Every dormant part was put to one test: *can a consumer use
+  this as-is to accomplish something real?*
+  - `MemoryTier` (§896) — a six-level hierarchy enum that nothing stored or
+    read. `Document` has no tier field and no code path routes by tier, so
+    using it accomplished nothing; identical in kind to the already-deleted
+    `PluginKind`.
+  - `ResourceProbe` / `NullProbe` / `ResourceSnapshot` (§904) — a sampling seam
+    whose `sample()` is never called anywhere. Implementing the trait produced
+    a snapshot no consumer reads.
+
+  `GraphRepo` (§942/§943) and `ServiceMesh` (§912) **pass** that test and are
+  kept: graph branch/merge and multi-agent routing each work standalone,
+  in-process, for a library consumer today. They are SDK-level with no CLI
+  surface by decision, now recorded in the handbook — `GraphRepo` in particular
+  has no on-disk format, so a CLI would first need repo persistence rather than
+  a command that silently loses branches between invocations.
+
+
 - **Two redundant functions deleted**, each superseded by a better mechanism
   already in use — found by re-measuring reachability transitively rather than
   by direct grep:
@@ -477,7 +496,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-281 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+280 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening

@@ -33,6 +33,4 @@ pub use event::{Event, EventBus, InMemoryEventBus};
 pub use id::{AgentId, DocumentId, NodeId, RuntimeId, TaskId, WorkflowId};
 pub use permission::permission_matches;
 pub use task::{Priority, Task, TaskState};
-pub use telemetry::{
-    InMemoryTelemetry, NullProbe, ResourceProbe, ResourceSnapshot, TaskMetrics, TelemetrySink,
-};
+pub use telemetry::{InMemoryTelemetry, TaskMetrics, TelemetrySink};
