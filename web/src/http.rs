@@ -23,6 +23,16 @@ const MAX_REQUEST_BYTES: usize = 1 << 20; // 1 MiB
 /// How long a connection may sit idle before the server gives up on it.
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long [`write_early_response`] waits for more unread request bytes
+/// before concluding the peer has stopped sending.
+const DRAIN_TIMEOUT: Duration = Duration::from_millis(200);
+
+/// Hard cap on bytes [`write_early_response`] will read and discard. The
+/// idle timeout alone does not bound the drain: it only fires when the peer
+/// goes *quiet*, so a peer that keeps streaming would hold the connection
+/// thread forever with every read succeeding.
+const MAX_DRAIN_BYTES: usize = MAX_REQUEST_BYTES;
+
 /// A parsed HTTP request. Query-string parameters and (for `POST`)
 /// form-encoded body parameters are merged into one lookup, since every
 /// route in this gateway treats them the same way.
@@ -267,6 +277,38 @@ impl Response {
     }
 }
 
+/// Write `response` on a connection we are rejecting *before* having read the
+/// request the peer is still sending, then discard what remains of it.
+///
+/// Closing a socket that still has unread data makes the OS send RST rather
+/// than a clean FIN, and an RST discards whatever of our response is still in
+/// flight. Measured, not assumed: replying 413 to a client actually streaming
+/// the oversized body it announced delivered a *truncated* response in 3 of 5
+/// runs — as little as `"HTTP/1.1 "`, 9 bytes, with the client's read
+/// returning `Ok`, so the peer sees a successful read of a fragment carrying
+/// no status code at all. Reading the rest first lets the close be clean.
+///
+/// Bounded in both directions, because this runs on the reject path where the
+/// peer is by definition uncooperative: `DRAIN_TIMEOUT` (200 ms) caps how
+/// long we wait for a peer that stops sending, and `MAX_DRAIN_BYTES` (the
+/// per-request cap) caps a peer that never stops.
+///
+/// The normal response path deliberately does *not* drain: `parse` consumed
+/// exactly the announced body, so nothing is pending, and a drain there would
+/// add the idle timeout to every single response.
+pub fn write_early_response(stream: &mut TcpStream, response: &Response) {
+    let _ = response.write_to(stream);
+    let _ = stream.set_read_timeout(Some(DRAIN_TIMEOUT));
+    let mut discard = [0u8; 8192];
+    let mut drained = 0usize;
+    while drained < MAX_DRAIN_BYTES {
+        match stream.read(&mut discard) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => drained += n,
+        }
+    }
+}
+
 /// Handle one accepted connection: parse a single request, dispatch it to
 /// `handler`, write the response, then close. A handler that panics is
 /// caught so one bad request can't take down the listener thread or leave a
@@ -275,14 +317,18 @@ pub fn handle_connection(mut stream: TcpStream, handler: &(dyn Fn(&Request) -> R
     let request = match parse(&mut stream) {
         Ok(Some(r)) => r,
         Ok(None) => return,
+        // Both arms below reject a request the peer may still be streaming,
+        // so they must drain before closing or the reply gets RST away —
+        // see `write_early_response`.
         Err(e) if e.to_string().contains("too large") => {
-            let _ =
-                Response::json_status(413, Json::object([("error", "request too large".into())]))
-                    .write_to(&mut stream);
+            write_early_response(
+                &mut stream,
+                &Response::json_status(413, Json::object([("error", "request too large".into())])),
+            );
             return;
         }
         Err(_) => {
-            let _ = Response::bad_request("malformed request").write_to(&mut stream);
+            write_early_response(&mut stream, &Response::bad_request("malformed request"));
             return;
         }
     };
@@ -348,6 +394,66 @@ mod tests {
             !resp.contains("\"error\":null"),
             "must carry a real error body"
         );
+    }
+
+    #[test]
+    fn a_413_reaches_a_client_that_is_still_streaming_its_oversized_body() {
+        // Regression: the test above deliberately never sends the body, so it
+        // could not see this. A *real* client — a browser posting a large
+        // form — streams the body it announced. The server used to write 413
+        // and drop the socket with that data still unread, which makes the OS
+        // send RST and discard the reply already in flight: measured 3 of 5
+        // runs delivering a truncated response, as little as `"HTTP/1.1 "`,
+        // with the client's read returning `Ok` rather than an error. So the
+        // peer sees a *successful* read of a fragment with no status code.
+        //
+        // Repeated, because the failure is a race with the peer's writes: a
+        // single attempt succeeds by luck often enough that a one-shot test
+        // would be worse than none. Calibrated against the reverted fix —
+        // 5 attempts missed the bug in 1 of 3 runs, 30 attempts tripped it
+        // within the first four every time across 4 runs; with the drain in
+        // place, 150 attempts produced no truncation at all. It stays cheap
+        // (~30 ms) because the drain lets each peer write fail promptly.
+        use std::net::TcpListener;
+        for attempt in 0..30 {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            std::thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                handle_connection(stream, &|_req| Response::json(Json::Bool(true)));
+            });
+
+            let mut stream = TcpStream::connect(addr).unwrap();
+            let oversized = MAX_REQUEST_BYTES * 4;
+            write!(
+                stream,
+                "POST /api/run HTTP/1.1\r\nHost: x\r\nContent-Length: {oversized}\r\n\r\n"
+            )
+            .unwrap();
+            let chunk = vec![b'x'; 64 * 1024];
+            let mut sent = 0usize;
+            while sent < oversized {
+                if stream.write_all(&chunk).is_err() {
+                    break;
+                }
+                sent += chunk.len();
+            }
+            let _ = stream.flush();
+
+            let mut resp = String::new();
+            let _ = stream.read_to_string(&mut resp);
+            // The whole response, not a prefix of it: a truncated reply is the
+            // exact failure, and `starts_with` alone would accept 30 bytes cut
+            // off mid-header.
+            assert!(
+                resp.starts_with("HTTP/1.1 413 Payload Too Large"),
+                "attempt {attempt}: got {resp:?}"
+            );
+            assert!(
+                resp.contains("\r\n\r\n") && resp.trim_end().ends_with('}'),
+                "attempt {attempt}: response truncated before its body: {resp:?}"
+            );
+        }
     }
 
     #[test]
