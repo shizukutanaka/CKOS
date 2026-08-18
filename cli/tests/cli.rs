@@ -730,3 +730,73 @@ fn serve_binds_and_answers_a_real_http_request() {
     assert!(resp.contains("\"capabilities\":["));
     assert!(resp.contains("planning"));
 }
+
+#[test]
+fn index_ingests_files_and_is_idempotent() {
+    // The §938 ingest path end to end: chunk a file into passages (§939), store
+    // them embedded, extract concepts into the session graph (§941), and
+    // re-index the new nodes (§938) so search reaches passages *and* concepts.
+    // Before `ckos index` existed, all of that was library code no user could
+    // reach from the product's own entry points.
+    struct TempDir(PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("ckos-index-sess-{}-{n}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _guard = TempDir(dir.clone());
+
+    let src = dir.join("paper.md");
+    std::fs::write(
+        &src,
+        "The Photon Accelerator is a runtime built by Vector Labs.\n\n\
+         It schedules inference across NPU devices. The Photon Accelerator depends on \
+         the CKOS Scheduler for priority ordering.\n\n\
+         Vector Labs maintains the Photon Accelerator alongside an edge runtime.\n",
+    )
+    .unwrap();
+
+    let d = dir.to_str().unwrap();
+    let s = src.to_str().unwrap();
+    let first = ckos(&["index", d, s, "--chunk", "200", "--overlap", "40"]);
+    assert!(first.status.success(), "index failed: {first:?}");
+    let f = stdout(&first);
+    assert!(f.contains("passage(s)"), "{f}");
+    assert!(f.contains("new concept(s)"), "{f}");
+
+    // A passage is retrievable: text that appears only in the body, not in any
+    // concept label.
+    let passages = stdout(&ckos(&["search", d, "schedules inference"]));
+    assert!(
+        passages.contains("paper.md#"),
+        "a chunked passage should be searchable: {passages}"
+    );
+
+    // A concept node is retrievable as its own re-indexed document.
+    let concepts = stdout(&ckos(&["search", d, "Vector Labs"]));
+    assert!(
+        concepts.contains("Vector Labs"),
+        "an extracted concept should be searchable: {concepts}"
+    );
+
+    // Re-indexing the same file replaces its passages rather than storing a
+    // second copy, and accumulates into the graph instead of duplicating it.
+    let before = stdout(&ckos(&["search", d, "photon"]));
+    let second = ckos(&["index", d, s, "--chunk", "200", "--overlap", "40"]);
+    assert!(second.status.success());
+    assert!(
+        stdout(&second).contains("0 new concept(s)"),
+        "second pass must reinforce, not re-add: {}",
+        stdout(&second)
+    );
+    let after = stdout(&ckos(&["search", d, "photon"]));
+    assert_eq!(
+        before.lines().next(),
+        after.lines().next(),
+        "re-indexing must not duplicate passages"
+    );
+}

@@ -350,6 +350,33 @@ platform).
 
 ### Added
 
+- **`ckos index <dir> <file…>` — the §938 ingest path, now reachable.** Musk
+  step 1 (question the requirement) applied to spec compliance surfaced the
+  real gap: nine subsystems had *no path from any product entry point*, so the
+  §889–§962 claim was being met in name only. Measured by checking every public
+  item and subsystem for a reference from `cli/` or `web/`. `ckos run --session`
+  could record what a run produced, but nothing could take an existing corpus
+  *in*.
+
+  One command turns five of those dormant pieces into user-visible behaviour:
+  it chunks each file into retrievable passages (§939 recursive chunking with
+  overlap), stores every passage embedded, feeds the text through
+  `KnowledgeBus::ingest_text` so extracted concepts announce themselves (§923 →
+  §941), and drains the `ReindexQueue` through `Reindexer` so each new node
+  becomes an embedded `graph_node` document (§938). After indexing, `ckos
+  search` reaches passages *and* concepts — verified end to end.
+
+  Re-indexing a file **replaces** its passages rather than storing a second
+  copy: `Document::new` mints a fresh id per call, so the first cut of this
+  command duplicated every passage on a second run — the same defect class
+  `Reindexer` was fixed for, caught here by testing idempotence before
+  committing. The graph accumulates (nodes reinforced, never cloned or
+  clobbered), matching `ckos run --session`.
+
+  `KnowledgeBus::from_graph` was added because the command genuinely needs it:
+  ingest must start from the graph already on disk, not an empty one.
+
+
 - **Known-answer tests pinning both FNV-1a hashes to the published vectors**:
   `kernel::audit::content_hash` (64-bit) and `memory::embedding`'s bucket hash
   (32-bit) were covered only by same-build determinism checks, which cannot
@@ -417,7 +444,7 @@ platform).
   identical repeat query and invalidated the moment `/api/run` adds anything
   new to that session.
 
-281 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
+282 tests passing (was 216); fmt, clippy `-D warnings`, and rustdoc
 `-D warnings` all clean. Manually verified end-to-end with `curl` against
 every route, including a full `run` → `history` → `search` → `graph` cycle
 against a real session directory (atomic-write and corrupt-file hardening

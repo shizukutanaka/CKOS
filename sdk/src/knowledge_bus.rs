@@ -26,6 +26,19 @@ impl KnowledgeBus {
         Self::default()
     }
 
+    /// Wrap an existing graph so its future mutations announce themselves.
+    ///
+    /// Ingest starts from a graph loaded off disk rather than an empty one, so
+    /// re-indexing accumulates into a session instead of replacing it; only
+    /// nodes created *after* this call are announced, which is what a
+    /// re-index subscriber wants — the pre-existing nodes are already indexed.
+    pub fn from_graph(graph: KnowledgeGraph) -> Self {
+        KnowledgeBus {
+            graph,
+            bus: InMemoryEventBus::default(),
+        }
+    }
+
     /// The underlying event bus, for subscribing.
     pub fn bus(&self) -> &InMemoryEventBus {
         &self.bus
