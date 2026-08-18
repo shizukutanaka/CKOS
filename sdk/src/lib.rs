@@ -113,5 +113,5 @@ pub mod prelude {
 
     pub use ckos_workflow::{Dag, StepRef};
 
-    pub use ckos_plugins::{PluginKind, Tool, ToolMetadata, ToolRegistry, UppercaseTool};
+    pub use ckos_plugins::{Tool, ToolMetadata, ToolRegistry, UppercaseTool};
 }

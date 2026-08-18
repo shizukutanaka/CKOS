@@ -329,6 +329,25 @@ platform).
   by confidence descending, with the document id as a stable tie-break, so the
   best copy is kept and the run is reproducible.
 
+### Removed
+
+- **Dead scaffolding deleted** (Musk-algorithm step 2 — delete before you
+  optimise, because the most common error is refining a part that should not
+  exist). Each removal was measured, not guessed: a workspace scan for public
+  items with zero references outside their own definition and test module.
+  - `Event::topic()` — zero callers anywhere, tests included. §933 is satisfied
+    by a metrics sink, not by an unused label accessor.
+  - `PluginKind` — a §901 category enum that categorised nothing: no field
+    stored it, no function took or returned it. Add it back when a `Tool`
+    actually needs classifying.
+  - `Dag::roots()` — called only by its own assertions, i.e. a test justifying
+    the existence of the thing it tests. The engine orders steps with
+    `topological_order`.
+
+  Kept deliberately: `crypto::to_hex`, which is test-only today but has a named
+  near-term consumer — a 32-byte signature has to be rendered somehow to cross
+  the §902 JSON API.
+
 ### Added
 
 - **Known-answer tests pinning both FNV-1a hashes to the published vectors**:

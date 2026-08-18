@@ -187,16 +187,6 @@ impl Dag {
         s
     }
 
-    /// Steps with no dependencies — the initial parallel frontier.
-    pub fn roots(&self) -> Vec<StepRef> {
-        self.steps
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| s.deps.is_empty())
-            .map(|(i, _)| StepRef(i))
-            .collect()
-    }
-
     /// Kahn's algorithm: a valid execution order, or `None` if the graph cannot
     /// be ordered.
     ///
@@ -253,7 +243,6 @@ mod tests {
         let order = dag.topological_order().unwrap();
         assert_eq!(order.len(), 3);
         assert_eq!(order[0], a); // root first
-        assert_eq!(dag.roots(), vec![a]);
 
         // Dependency edges are copied into the task so the scheduler can gate on
         // them: step `b` depends on step `a`'s task id.
@@ -275,7 +264,6 @@ step report: reasoning <- summarize, search";
         let order = dag.topological_order().unwrap();
         assert_eq!(order.len(), 4);
         // search has no deps → it is a root.
-        assert_eq!(dag.roots().len(), 1);
     }
 
     #[test]
