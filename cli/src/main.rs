@@ -948,7 +948,11 @@ fn cmd_index(rest: &[String]) -> ExitCode {
             }
             chunks_written += 1;
         }
-        let report = bus.ingest_text(&text);
+        // Stamp the source file on every new concept (§947), matching the
+        // `kind:value` provenance convention used by `run:intent` elsewhere.
+        // Without this, `ckos kql … RETURN Sources` — a documented quickstart
+        // step — answered `<unknown>` for everything `ckos index` had loaded.
+        let report = bus.ingest_text_from(&text, Some(&format!("file:{file}")));
         added += report.nodes_added;
         reinforced += report.nodes_reinforced;
         println!(

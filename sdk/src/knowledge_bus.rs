@@ -62,14 +62,37 @@ impl KnowledgeBus {
         self.bus.publish(Event::GraphChanged(from.clone()));
     }
 
+    /// Ingest free document text with no recorded source.
+    ///
+    /// Prefer [`ingest_text_from`](Self::ingest_text_from) whenever the text
+    /// came from somewhere nameable. This form leaves every new concept
+    /// unsourced, so a later `RETURN Sources` query answers `<unknown>` — see
+    /// that method for why that mattered in practice.
+    pub fn ingest_text(&mut self, text: &str) -> ExtractReport {
+        self.ingest_text_from(text, None)
+    }
+
     /// Ingest free document text: heuristically extract concepts (§941) into the
     /// graph and announce every newly-created node so re-index subscribers pick
     /// them up (§938 index pipeline). Entities already present are reinforced in
     /// place and emit no event. Returns the [`ExtractReport`] from the pass.
-    pub fn ingest_text(&mut self, text: &str) -> ExtractReport {
+    ///
+    /// `source` stamps provenance (§947) on newly created nodes — e.g. the file
+    /// the text was read from. Reinforced nodes keep their original source, so
+    /// the answer to "where did this first come from" is stable across
+    /// re-ingestion.
+    ///
+    /// This exists because ingestion used to call the *non*-provenance
+    /// extraction path unconditionally. `ckos index` — the command whose entire
+    /// job is loading a corpus, and where provenance is most valuable because
+    /// the user wants to know which file a fact came from — was therefore the
+    /// one command that recorded no source at all. The README's own quickstart
+    /// runs `ckos index` and then queries `RETURN Sources`; every row came back
+    /// `src=<unknown>`.
+    pub fn ingest_text_from(&mut self, text: &str, source: Option<&str>) -> ExtractReport {
         use std::collections::HashSet;
         let before: HashSet<NodeId> = self.graph.nodes().map(|n| n.id.clone()).collect();
-        let report = self.graph.extract_concepts(text);
+        let report = self.graph.extract_concepts_with_provenance(text, source);
         let new_ids: Vec<NodeId> = self
             .graph
             .nodes()
@@ -210,6 +233,51 @@ mod tests {
         assert_eq!(drained[0], a);
         // The graph reflects the mutations.
         assert_eq!(kb.graph().len(), 2);
+    }
+
+    #[test]
+    fn ingestion_stamps_the_source_and_reinforcement_keeps_the_original() {
+        // Regression: `ingest_text` called the non-provenance extraction path,
+        // so every concept loaded by `ckos index` was unsourced and the
+        // README's own quickstart query (`RETURN Sources`) answered
+        // `src=<unknown>` for all of them — while §947 claimed extraction
+        // stamps the source.
+        let mut kb = KnowledgeBus::new();
+        kb.ingest_text_from("The Transformer uses Attention.", Some("file:paper.md"));
+        let sourced: Vec<_> = kb
+            .graph()
+            .nodes()
+            .map(|n| (n.label.clone(), n.provenance.clone()))
+            .collect();
+        assert!(!sourced.is_empty(), "expected concepts to be extracted");
+        for (label, provenance) in &sourced {
+            assert_eq!(
+                provenance.as_deref(),
+                Some("file:paper.md"),
+                "{label} was left unsourced"
+            );
+        }
+
+        // Re-ingesting the same entity from a *different* file reinforces the
+        // existing node rather than creating a second one, and must not
+        // rewrite where it first came from — otherwise "the source" silently
+        // becomes "the most recent source".
+        kb.ingest_text_from("The Transformer is fast.", Some("file:notes.md"));
+        let transformer = kb
+            .graph()
+            .nodes()
+            .find(|n| n.label.eq_ignore_ascii_case("transformer"))
+            .expect("Transformer node");
+        assert_eq!(
+            transformer.provenance.as_deref(),
+            Some("file:paper.md"),
+            "reinforcement must keep the original source"
+        );
+
+        // The no-source form stays available and honest about recording none.
+        let mut plain = KnowledgeBus::new();
+        plain.ingest_text("The Transformer uses Attention.");
+        assert!(plain.graph().nodes().all(|n| n.provenance.is_none()));
     }
 
     #[test]

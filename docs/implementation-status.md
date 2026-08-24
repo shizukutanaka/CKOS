@@ -75,7 +75,7 @@ drift from the code.
 | 944 | Embedding manager | ✅ | `memory::Embedder` / `HashingEmbedder` — a lexical hash, **not semantic**: cannot match paraphrases/synonyms (measured; see embedding.rs); real model ⏳ |
 | 945 | Cross-modal embedding | ⏳ | single-space design; modality encoders pending |
 | 946 | Temporal knowledge | ✅ | `graph::Node::date` + KQL `BEFORE`/`AFTER` |
-| 947 | Provenance engine | ✅ | `graph::Node::provenance`; extraction stamps source (`extract_concepts_with_provenance`); KQL `RETURN Sources` |
+| 947 | Provenance engine | ✅ | `graph::Node::provenance`; extraction stamps source (`extract_concepts_with_provenance`) on **both** ingest paths — `ckos run --session` records `run:intent`/`run:output`, `ckos index` records `file:<path>` via `KnowledgeBus::ingest_text_from`; reinforcement keeps a node's original source; KQL `RETURN Sources` |
 | 948 | Confidence score | ✅ | `Node::confidence`, `Document::confidence` |
 | 949 | Retrieval planner | ✅ | `retrieval::plan_retrieval` + `search_diverse`/`mmr_rerank` (MMR) + `expand_query`/`search_expanded` (PRF) + `sdk::synonyms::SynonymTable`/`expand_query_with_synonyms` (a priori domain-term expansion; mitigates the §944 lexical-only gap) |
 | 950 | Hybrid search | ✅ | `retrieval::Retriever` (BM25+ keyword [Lv & Zhai 2011 δ lower-bound] + vector + graph, Reciprocal Rank Fusion) |

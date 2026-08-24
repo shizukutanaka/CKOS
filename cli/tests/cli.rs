@@ -799,4 +799,30 @@ fn index_ingests_files_and_is_idempotent() {
         after.lines().next(),
         "re-indexing must not duplicate passages"
     );
+
+    // Regression: indexed concepts carried no provenance, because the ingest
+    // path called the non-provenance extraction. This is the README's own
+    // quickstart sequence — `ckos index` then a `RETURN Sources` query — and
+    // every row came back `src=<unknown>` while §947 claimed extraction stamps
+    // the source. Asserted through the CLI, not just the SDK, because that is
+    // where a user meets it.
+    let sources = stdout(&ckos(&[
+        "kql",
+        "--session",
+        d,
+        // `Concept`, and "Photon Accelerator" rather than "Vector Labs": the
+        // extractor classifies an `… Labs` entity as an Organization, so a
+        // `FIND Concept "Vector Labs"` matches nothing. That was a fixture
+        // error in the first draft of this assertion, not a code defect —
+        // verified by dumping graph.kg, where all four nodes carry `file:`.
+        "FIND Concept \"Photon Accelerator\" RETURN Graph + Sources",
+    ]));
+    assert!(
+        sources.contains("file:") && sources.contains("paper.md"),
+        "an indexed concept must report the file it came from, got: {sources}"
+    );
+    assert!(
+        !sources.contains("<unknown>"),
+        "no indexed concept should be unsourced: {sources}"
+    );
 }
