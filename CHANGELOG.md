@@ -7,7 +7,34 @@ platform).
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **`ckos index` recorded no provenance, so the README's own quickstart query
+  answered `<unknown>`.** `KnowledgeBus::ingest_text` called
+  `extract_concepts`, the *non*-provenance extraction path, unconditionally.
+  So the one command whose entire job is loading a corpus — and where
+  provenance matters most, because the user wants to know which file a fact
+  came from — was the only command that recorded no source. §947 meanwhile
+  claimed ✅ "extraction stamps source".
+  Found by running the documented quickstart end to end from a clean clone of
+  `main`, exactly as a new user would: `ckos index ./sess paper.md` followed by
+  `ckos kql --session ./sess 'FIND Concept "Transformer" RETURN Graph +
+  Sources'` printed `src=<unknown>`, and the persisted `graph.kg` showed an
+  empty provenance column on every node.
+  `ingest_text_from(text, source)` now carries it through; `ckos index` passes
+  `file:<path>`, matching the `kind:value` convention `run:intent` already
+  uses. `ingest_text` remains as the explicit no-source form. Reinforcement
+  deliberately keeps a node's *original* source rather than overwriting it,
+  so "the source" does not silently become "the most recent source" — asserted
+  by re-ingesting the same entity from a second file.
+  Two regression tests, each proven to fail against its own layer reverted:
+  one on the SDK API, one through the CLI, because the SDK test passes even
+  with the CLI wiring removed and the wiring is where the user meets this.
+  The CLI assertion's first draft used `FIND Concept "Vector Labs"` and matched
+  nothing — the extractor classifies an `… Labs` entity as an Organization.
+  That was a **fixture error, not a code defect**: dumping `graph.kg` confirmed
+  all four nodes carried `file:`. The fixture was corrected and the reason
+  recorded inline.
 
 ## [2.8.0] — 2026-08-24
 
