@@ -57,7 +57,18 @@ regressions:
    script, so a commit that breaks a gate cannot be created (verified: a
    deliberately misformatted file was refused). `git commit --no-verify`
    bypasses it for a genuine work-in-progress commit.
-5. **One logical fix per commit**, with a message that states the defect, the
+5. **Run the documented path, not just the tests.** Every gate passed while
+   `ckos index` recorded no provenance and the README's own quickstart printed
+   `src=<unknown>`. Unit and integration tests each verified their own layer;
+   nothing verified what a new user is told to type. `./scripts/verify-quickstart.sh`
+   is that check — a release build, every README command and route, plus the
+   session-confinement boundary from outside. Run it after touching the CLI,
+   the web routes, or the README. It is deliberately not in `check.sh`
+   (release build + real server is too slow for a per-commit gate).
+   When it *does* fail, check your own invocation first: a raw `+` in a
+   form-encoded body decodes to a space, which made `RETURN Graph + Sources`
+   look like a parser bug when the fault was the `curl` call.
+6. **One logical fix per commit**, with a message that states the defect, the
    reproduction, and the fix rationale. Update `CHANGELOG.md`'s Unreleased
    `### Fixed` section and the test count in the same commit.
 

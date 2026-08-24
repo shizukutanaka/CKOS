@@ -7,6 +7,22 @@ platform).
 
 ## [Unreleased]
 
+### Added
+
+- **`scripts/verify-quickstart.sh`** — runs the exact command sequence
+  `README.md` tells a new user to run, against a `--release` build, and
+  asserts each produces what the README says it does: every CLI command, every
+  HTTP route, and the session-confinement boundary probed from outside.
+  It exists because of the provenance bug below. Every gate in `check.sh`
+  passed while `ckos index` silently recorded no source — unit and integration
+  tests each verified their own layer, and nothing verified the documented user
+  path end to end. That bug was found by hand from a clean clone of `main`;
+  this is that check automated, and it is verified to catch it (reverting the
+  fix makes the script fail on exactly that assertion).
+  Deliberately *not* part of `check.sh`: a release build plus a real server is
+  far too slow for a per-commit gate. It is wired into `docs/releasing.md`
+  instead, and into the handbook's discipline list.
+
 ### Fixed
 
 - **`ckos index` recorded no provenance, so the README's own quickstart query
