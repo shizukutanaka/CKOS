@@ -29,11 +29,19 @@ five gates (`./scripts/check.sh`: format, clippy `-D warnings`, rustdoc
 
 ## Every release
 
-1. Confirm the tree is green at the release commit:
+1. Confirm the tree is green at the release commit, and that the documented
+   user path actually works:
 
    ```sh
-   ./scripts/check.sh
+   ./scripts/check.sh              # the per-commit gate
+   ./scripts/verify-quickstart.sh  # every README command + route, release build
    ```
+
+   The second one is not redundant. Every gate in `check.sh` passed while
+   `ckos index` silently recorded no provenance, because unit and integration
+   tests each verified their own layer and nothing verified the documented
+   path end to end. It is kept out of `check.sh` because it builds `--release`
+   and starts a real server.
 
 2. Tag the version that `Cargo.toml` declares, and push the tag:
 

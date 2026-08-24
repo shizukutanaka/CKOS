@@ -53,6 +53,8 @@ cargo run -p ckos-cli -- help    # list commands
 ./scripts/check.sh     # every gate CI runs: fmt, clippy -D warnings, rustdoc -D warnings, tests
 ./scripts/check.sh --fix   # reformat in place, then check
 ./scripts/install-hooks.sh # run those gates automatically before every commit
+
+./scripts/verify-quickstart.sh # run every command below against a release build
 ```
 
 `install-hooks.sh` points `core.hooksPath` at the version-controlled
