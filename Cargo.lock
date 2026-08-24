@@ -4,7 +4,7 @@ version = 3
 
 [[package]]
 name = "ckos-cli"
-version = "2.7.0"
+version = "2.8.0"
 dependencies = [
  "ckos-sdk",
  "ckos-web",
@@ -12,25 +12,25 @@ dependencies = [
 
 [[package]]
 name = "ckos-graph"
-version = "2.7.0"
+version = "2.8.0"
 dependencies = [
  "ckos-kernel",
 ]
 
 [[package]]
 name = "ckos-kernel"
-version = "2.7.0"
+version = "2.8.0"
 
 [[package]]
 name = "ckos-memory"
-version = "2.7.0"
+version = "2.8.0"
 dependencies = [
  "ckos-kernel",
 ]
 
 [[package]]
 name = "ckos-planner"
-version = "2.7.0"
+version = "2.8.0"
 dependencies = [
  "ckos-kernel",
  "ckos-workflow",
@@ -38,35 +38,35 @@ dependencies = [
 
 [[package]]
 name = "ckos-plugins"
-version = "2.7.0"
+version = "2.8.0"
 dependencies = [
  "ckos-kernel",
 ]
 
 [[package]]
 name = "ckos-policy"
-version = "2.7.0"
+version = "2.8.0"
 dependencies = [
  "ckos-kernel",
 ]
 
 [[package]]
 name = "ckos-runtime"
-version = "2.7.0"
+version = "2.8.0"
 dependencies = [
  "ckos-kernel",
 ]
 
 [[package]]
 name = "ckos-scheduler"
-version = "2.7.0"
+version = "2.8.0"
 dependencies = [
  "ckos-kernel",
 ]
 
 [[package]]
 name = "ckos-sdk"
-version = "2.7.0"
+version = "2.8.0"
 dependencies = [
  "ckos-graph",
  "ckos-kernel",
@@ -82,21 +82,21 @@ dependencies = [
 
 [[package]]
 name = "ckos-verifier"
-version = "2.7.0"
+version = "2.8.0"
 dependencies = [
  "ckos-kernel",
 ]
 
 [[package]]
 name = "ckos-web"
-version = "2.7.0"
+version = "2.8.0"
 dependencies = [
  "ckos-sdk",
 ]
 
 [[package]]
 name = "ckos-workflow"
-version = "2.7.0"
+version = "2.8.0"
 dependencies = [
  "ckos-kernel",
 ]

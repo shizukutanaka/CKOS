@@ -144,7 +144,7 @@ can do. They are the honest release blockers:
 | Item | State | Who unblocks it |
 |---|---|---|
 | §905 CI | `docs/ci-workflow.yml` is complete and runs the same `./scripts/check.sh` as the pre-commit hook | A maintainer copies it to `.github/workflows/ci.yml`. Automation lacks the `workflows` permission (verified: the push is rejected) |
-| Public release | Version tagged in `Cargo.toml`, `CHANGELOG.md` current | Repository owner: switch the default branch and cut the release. Verified unavailable to automation across eight channels; the GitHub gateway answers "GitHub access is not enabled for this session" |
+| Public release | Fully prepared: `Cargo.toml` at 2.8.0, `CHANGELOG.md` section dated, owner runbook at `docs/releasing.md` | Repository owner: follow `docs/releasing.md` (tag, release, default branch). Verified unavailable to automation across eight channels; the GitHub gateway answers "GitHub access is not enabled for this session" |
 
 ### Deliberate gaps inside delivered features
 

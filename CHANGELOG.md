@@ -5,7 +5,21 @@ All notable changes to CKOS are documented here. The format follows
 spec generations (v2.5 core kernel → v2.6 agent mesh → v2.7 knowledge
 platform).
 
-## [Unreleased] — v2.8 groundwork
+## [Unreleased]
+
+Nothing yet.
+
+## [2.8.0] — 2026-08-24
+
+Hardening and honesty release. Everything below was developed against the
+v2.7 knowledge platform: 20+ reproduced-then-fixed defects (each with a
+regression test proven to fail without its fix), IR/RAG improvements from the
+literature, an explicit v1 scope declaration in
+`docs/implementation-status.md`, and the removal of every subsystem that
+satisfied its spec section in name only. Breaking API changes are listed
+under Removed; no compatibility shims were kept because nothing external
+consumes these APIs yet (no tags, no published binaries, no crates.io
+release).
 
 ### Improved (from recent IR/Graph-RAG literature)
 
