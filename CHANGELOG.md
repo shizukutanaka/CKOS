@@ -9,6 +9,26 @@ platform).
 
 ### Fixed
 
+- **`ckos gc --now <garbage>` silently deleted documents that had not
+  expired.** The most serious defect found this cycle: destructive, silent,
+  and triggered by an ordinary typo. A document's `expires` metadata is
+  compared *lexicographically* against `--now`, so a malformed value did not
+  fail — it changed which documents counted as expired. Measured against a
+  document whose `expires` was `2999-12-31`:
+  `--now today` and `--now notadate` each **collected it, reported as
+  "Expired"**, because `"2999-12-31" < "today"`. Other typos (`2026-8-25`,
+  `08/25/2026`) happened to be harmless — they sort *below* the expiry rather
+  than above it — which is exactly the point: the outcome depended on where
+  the garbage sorted, not on any rule, and `gc` deletes files.
+  `--now` is now validated before anything is collected.
+  Found immediately after the KQL date fix below, by grepping for the sibling
+  of a class just fixed — the handbook's standing instruction. The validation
+  now lives once, in `graph::validate_iso_date`, next to the temporal model
+  both callers share, rather than being copied into the second site.
+  The regression test sweeps five malformed values, asserts the document
+  survives each, **and** asserts that a genuinely past expiry is still
+  collected — otherwise the test would pass by disabling the feature it
+  guards.
 - **KQL accepted any word as a `BEFORE`/`AFTER` date and compared it anyway.**
   The bound is compared lexicographically against a node's date, which equals
   chronological order *only* for well-formed `YYYY-MM-DD` — a precondition the

@@ -732,6 +732,85 @@ fn serve_binds_and_answers_a_real_http_request() {
 }
 
 #[test]
+fn a_malformed_gc_now_is_rejected_before_anything_is_deleted() {
+    // Regression, and the most serious kind: silent data loss from a typo.
+    // A document's `expires` metadata is compared *lexicographically* against
+    // `--now`, so a malformed value did not fail — it silently changed which
+    // documents counted as expired. Measured before the fix, with a document
+    // whose `expires` was `2999-12-31`:
+    //   --now today      -> collected 1 document, reported "Expired"
+    //   --now notadate   -> collected 1 document, reported "Expired"
+    //   --now 2026-8-25  -> collected 0   (harmless only by luck of sorting)
+    // `"2999-12-31" < "today"`, so a document expiring in the year 2999 was
+    // deleted. The typos that happened to be harmless were harmless because of
+    // where they sorted, not because of any rule — and `gc` deletes files.
+    struct TempDir(PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("ckos-gc-now-{}-{n}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _guard = TempDir(dir.clone());
+    let d = dir.to_str().unwrap();
+
+    let doc = dir.join("keep.doc");
+    let write_doc = || {
+        std::fs::write(
+            &doc,
+            "doc_type: note\ntitle: Important\nconfidence: 100\nmeta.expires: 2999-12-31\n\nMust survive.\n",
+        )
+        .unwrap();
+    };
+
+    for bad in ["today", "notadate", "2026-8-25", "08/25/2026", "yesterday"] {
+        write_doc();
+        let out = ckos(&["gc", d, "--now", bad]);
+        assert!(
+            !out.status.success(),
+            "gc --now {bad} must fail, not guess: {}",
+            stdout(&out)
+        );
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("ISO date"),
+            "the error should name the expected format for {bad}"
+        );
+        assert!(
+            doc.exists(),
+            "gc --now {bad} deleted a document that expires in 2999"
+        );
+    }
+
+    // A well-formed date still works, and still spares an unexpired document —
+    // otherwise this test would pass by disabling expiry altogether.
+    write_doc();
+    let ok = ckos(&["gc", d, "--now", "2026-08-25"]);
+    assert!(ok.status.success(), "a valid date must work: {ok:?}");
+    assert!(
+        doc.exists(),
+        "a document expiring in 2999 is not expired as of 2026"
+    );
+
+    // And expiry genuinely fires when the date really has passed, so the
+    // validation did not quietly break the feature it guards.
+    std::fs::write(
+        &doc,
+        "doc_type: note\ntitle: Stale\nconfidence: 100\nmeta.expires: 2020-01-01\n\nGone.\n",
+    )
+    .unwrap();
+    let expired = ckos(&["gc", d, "--now", "2026-08-25"]);
+    assert!(expired.status.success());
+    assert!(
+        !doc.exists(),
+        "a document past its expiry must still be collected: {}",
+        stdout(&expired)
+    );
+}
+
+#[test]
 fn index_ingests_files_and_is_idempotent() {
     // The §938 ingest path end to end: chunk a file into passages (§939), store
     // them embedded, extract concepts into the session graph (§941), and

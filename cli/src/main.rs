@@ -1116,6 +1116,24 @@ fn cmd_gc(rest: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // Validate before anything is deleted. `expires` is compared
+    // lexicographically against this value, so a malformed `--now` does not
+    // fail — it silently changes which documents count as expired. Measured:
+    // `--now today` collected a document whose `expires` was `2999-12-31`,
+    // reported as "Expired", because `"2999-12-31" < "today"`. `gc` deletes
+    // files, so guessing here loses data.
+    // Validate before anything is deleted. `expires` is compared
+    // lexicographically against this value, so a malformed `--now` does not
+    // fail — it silently changes which documents count as expired. Measured:
+    // `--now today` collected a document whose `expires` was `2999-12-31`,
+    // reported as "Expired", because `"2999-12-31" < "today"`. `gc` deletes
+    // files, so guessing here loses data.
+    if let Some(value) = &now {
+        if let Err(why) = validate_iso_date(value) {
+            eprintln!("error: --now {why}");
+            return ExitCode::FAILURE;
+        }
+    }
     let (min_conf, rest) = match take_value_flag(&rest, "--min-confidence") {
         Ok(v) => v,
         Err(e) => {
