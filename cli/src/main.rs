@@ -57,6 +57,21 @@ fn take_value_flag(
     Ok((value, rest))
 }
 
+/// Render every retrieval source that matched a hit, e.g. `Keyword+Graph`.
+///
+/// The set, not one label: fusion raises an item precisely because several
+/// legs corroborated it, and printing a single origin hid that. Every result
+/// used to read `[Keyword]` even when the vector and graph legs had matched
+/// too, which made the hybrid search this product is built around impossible
+/// to observe from its own output.
+fn render_sources(sources: &[HitSource]) -> String {
+    sources
+        .iter()
+        .map(|s| format!("{s:?}"))
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
 /// Warn (non-fatally) when a session store skipped unreadable `.doc` files on
 /// open — the session still works with the readable remainder, but the user
 /// should know some documents were not loaded.
@@ -575,8 +590,11 @@ fn cmd_search(rest: &[String]) -> ExitCode {
     println!("{} hit(s) for {query:?}:", hits.len());
     for h in &hits {
         println!(
-            "  [{:?} {:.2}] {} — {}",
-            h.source, h.score, h.title, h.snippet
+            "  [{} {:.2}] {} — {}",
+            render_sources(&h.sources),
+            h.score,
+            h.title,
+            h.snippet
         );
     }
     ExitCode::SUCCESS

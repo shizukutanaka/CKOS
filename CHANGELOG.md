@@ -7,6 +7,30 @@ platform).
 
 ## [Unreleased]
 
+### Changed
+
+- **`Hit` now reports every source that matched it, not one.** `Hit.source:
+  HitSource` became `Hit.sources: Vec<HitSource>` (sorted, deduplicated, never
+  empty), unioned across both fusion passes. `ckos search` renders it as
+  `Keyword+Vector+Graph`; `/api/search` returns a `sources` array in place of
+  the old `source` string.
+  Fusion was already *correct* — an item corroborated by several legs got the
+  combined RRF score and rose accordingly. What it did not do was say so, and
+  the representative it kept for display was whichever single leg scored
+  highest. So every result printed `[Keyword]`, and the hybrid BM25 + vector +
+  graph search this product is built around was invisible in its own output:
+  a user tuning relevance could not tell whether the graph or vector legs
+  contributed at all, and the README's headline claim was unverifiable from
+  the CLI. On the quickstart corpus the same query now reads
+  `[Keyword+Vector+Graph 0.05] Transformer` and `[Keyword+Vector 0.03]
+  paper.md#0` — the three legs had been fusing the whole time.
+  Deliberately a replacement rather than a second field beside `source`: two
+  collections that must agree is the exact bug class already fixed once here
+  (`RuntimeRegistry`'s order index desyncing from its map).
+  Two regression tests, each proven to fail against the branch it guards —
+  the identity merge and the graph-by-name fold union sources separately, and
+  reverting either leaves the other's test passing.
+
 ### Added
 
 - **`scripts/verify-quickstart.sh`** — runs the exact command sequence
