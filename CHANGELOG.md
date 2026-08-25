@@ -7,6 +7,39 @@ platform).
 
 ## [Unreleased]
 
+### Corrected — a "blocker" that was already done
+
+Re-tested the release path instead of trusting an earlier session's notes, and
+one inherited claim turned out to be **false**:
+
+- `docs/releasing.md` and `docs/agent-handbook.md` both listed "switch the
+  default branch to `main`" as outstanding owner work. It is not: the default
+  branch is already `main` (`git ls-remote --symref origin HEAD` →
+  `refs/heads/main`) and the repository is public. So a plain `git clone`
+  already yields the released state, which `scripts/verify-quickstart.sh`
+  confirms builds and works. **CKOS is distributed as source, so the software
+  is already available** — the outstanding items add a *named, citable
+  version*, not the delivery.
+- An older note claimed all GitHub access was denied. Also stale: pull
+  requests to `main` work fine. What *is* genuinely blocked, re-verified
+  directly this time: pushing a tag returns **HTTP 403**, and the MCP server
+  exposes no create-release and no repo-settings tool.
+- The handbook's "environment facts" section now says to test a claim before
+  writing "X is impossible here" into it, since two of its claims had been
+  inherited rather than measured.
+
+### Added (delivery)
+
+- **README `## Install` section** — `cargo install --path cli`, verified to
+  produce `ckos 2.8.0`, plus the no-install alternatives. For a
+  source-distributed tool the README *is* the storefront, and it previously
+  had no install instruction at all.
+- `verify-quickstart.sh` now asserts the version the README advertises matches
+  what the binary reports. A version hand-written in prose goes stale the
+  first time `Cargo.toml` is bumped, and a wrong number in the install
+  instructions is the first thing a new user sees. Verified by setting the
+  README back to 2.7.0, which fails the check by name.
+
 ### Changed
 
 - **`Hit` now reports every source that matched it, not one.** `Hit.source:
