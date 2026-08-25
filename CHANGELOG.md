@@ -13,7 +13,8 @@ platform).
   HitSource` became `Hit.sources: Vec<HitSource>` (sorted, deduplicated, never
   empty), unioned across both fusion passes. `ckos search` renders it as
   `Keyword+Vector+Graph`; `/api/search` returns a `sources` array in place of
-  the old `source` string.
+  the old `source` string, and the dashboard's results table joins it the same
+  way (that last part was initially missed — see the tripwire under Added).
   Fusion was already *correct* — an item corroborated by several legs got the
   combined RRF score and rose accordingly. What it did not do was say so, and
   the representative it kept for display was whichever single leg scored
@@ -33,6 +34,19 @@ platform).
 
 ### Added
 
+- **A response-shape tripwire for the dashboard** (`web/src/lib.rs`).
+  `dashboard.html` is a static string compiled into the binary that reads API
+  fields *by name*, and nothing linked the two: renaming a field in
+  `routes.rs` left the page silently rendering `undefined` with every test
+  still green. Not hypothetical — the `source` → `sources` rename in this same
+  section did exactly that to the search results table, and it was caught by
+  reading the HTML afterwards, not by the suite or by
+  `verify-quickstart.sh` (which checks the route answers, not that the page
+  can consume it). The new test pins the field names each route emits and
+  checks **both directions**, since either side can drift: the API dropping a
+  field the page reads, and the page being edited to read a field the API
+  never had. Verified by re-introducing the exact rename, which now fails with
+  a message naming the route, the field, and the file to update.
 - **`scripts/verify-quickstart.sh`** — runs the exact command sequence
   `README.md` tells a new user to run, against a `--release` build, and
   asserts each produces what the README says it does: every CLI command, every

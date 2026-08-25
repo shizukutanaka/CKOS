@@ -364,10 +364,12 @@ function renderSearch(out, data) {
   if (data.skipped) out.append(el("pre", { class: "err", text: `${data.skipped} unreadable document(s) skipped` }));
   if (!data.hits.length) return emptyState(out, "No hits.");
   const table = el("table");
-  table.append(el("thead", {}, el("tr", {}, el("th", { text: "title" }), el("th", { text: "snippet" }), el("th", { text: "score" }), el("th", { text: "source" }))));
+  table.append(el("thead", {}, el("tr", {}, el("th", { text: "title" }), el("th", { text: "snippet" }), el("th", { text: "score" }), el("th", { text: "sources" }))));
   const body = el("tbody");
   for (const h of data.hits) {
-    body.append(el("tr", {}, el("td", { text: h.title }), el("td", { text: h.snippet }), el("td", { text: h.score.toFixed(3) }), el("td", { text: h.source })));
+    // `sources`, plural: every retrieval leg that matched this hit, so the
+    // BM25 + vector + graph fusion is visible here the way it is in the CLI.
+    body.append(el("tr", {}, el("td", { text: h.title }), el("td", { text: h.snippet }), el("td", { text: h.score.toFixed(3) }), el("td", { text: (h.sources || []).join("+") })));
   }
   table.append(body);
   out.append(

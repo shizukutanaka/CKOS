@@ -538,6 +538,108 @@ mod tests {
     }
 
     #[test]
+    fn api_response_shapes_are_locked_to_what_the_dashboard_reads() {
+        // Tripwire, not a proof. `dashboard.html` is a static string compiled
+        // into this binary that reads response fields *by name*, and nothing
+        // links the two: renaming a field in `routes.rs` leaves the dashboard
+        // silently rendering `undefined`, with every existing test still
+        // green. That is not hypothetical — renaming `source` to `sources` on
+        // the search hit did exactly that to the results table, and it was
+        // caught by reading the HTML, not by the suite.
+        //
+        // So: pin the field names each route emits. Any change here fails
+        // loudly and the message tells you to check the dashboard. Both
+        // directions are checked, because either side can drift — the API can
+        // drop a field the page reads, and the page can be edited to read a
+        // field the API never had.
+        let root = temp_root("shape");
+        let addr = start_test_server_rooted(root.0.clone());
+        let page = crate::dashboard::PAGE;
+
+        // (route, response, field names the dashboard renders from it)
+        let cases: Vec<(&str, String, Vec<&str>)> = vec![
+            (
+                "/api/search",
+                {
+                    let body = "intent=study+the+Transformer&session=s";
+                    raw_request(addr, &format!(
+                        "POST /api/run HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\r\n{}",
+                        body.len(), body));
+                    raw_request(
+                        addr,
+                        "GET /api/search?session=s&q=Transformer HTTP/1.1\r\nHost: x\r\n\r\n",
+                    )
+                },
+                vec!["hits", "title", "snippet", "score", "sources"],
+            ),
+            (
+                "/api/history",
+                raw_request(
+                    addr,
+                    "GET /api/history?session=s HTTP/1.1\r\nHost: x\r\n\r\n",
+                ),
+                vec!["items", "title", "body", "confidence", "verified"],
+            ),
+            (
+                "/api/graph",
+                raw_request(
+                    addr,
+                    "GET /api/graph?text=CKOS%20uses%20a%20Scheduler. HTTP/1.1\r\nHost: x\r\n\r\n",
+                ),
+                vec![
+                    "nodes",
+                    "edges",
+                    "id",
+                    "kind",
+                    "label",
+                    "confidence",
+                    "from",
+                    "to",
+                ],
+            ),
+            (
+                "/api/status",
+                raw_request(addr, "GET /api/status HTTP/1.1\r\nHost: x\r\n\r\n"),
+                vec![
+                    "audit_records",
+                    "total_tokens",
+                    "mean_latency_ms",
+                    "cached_sessions",
+                ],
+            ),
+            (
+                "/api/verify",
+                raw_request(
+                    addr,
+                    "GET /api/verify?text=hello HTTP/1.1\r\nHost: x\r\n\r\n",
+                ),
+                vec!["passed", "checks", "name", "status", "reason"],
+            ),
+        ];
+
+        for (route, response, fields) in cases {
+            assert!(
+                response.starts_with("HTTP/1.1 200 OK"),
+                "{route} should answer 200: {response}"
+            );
+            for field in fields {
+                assert!(
+                    response.contains(&format!("\"{field}\"")),
+                    "{route} no longer emits `{field}`. If that rename was \
+                     deliberate, update web/src/dashboard.html — it reads this \
+                     field by name and will render `undefined` otherwise. \
+                     Response: {response}"
+                );
+                assert!(
+                    page.contains(field),
+                    "dashboard.html no longer mentions `{field}`, which {route} \
+                     emits — did a rename land on only one side?"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn kql_runs_against_the_demo_graph_with_no_session() {
         let addr = start_test_server();
         let body = "query=FIND+Concept+%22Transformer%22+RELATED+Algorithm";
