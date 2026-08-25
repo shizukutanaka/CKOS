@@ -354,8 +354,8 @@ pub fn parse(input: &str) -> Result<KqlQuery, KqlError> {
                 }
             }
             "FILTER" => q.filters.push(parse_filter(&mut p)?),
-            "BEFORE" => q.before = Some(p.next_word()?),
-            "AFTER" => q.after = Some(p.next_word()?),
+            "BEFORE" => q.before = Some(parse_date(&mut p, "BEFORE")?),
+            "AFTER" => q.after = Some(parse_date(&mut p, "AFTER")?),
             "ORDER" => q.order = Some(parse_order(&mut p)?),
             "LIMIT" => q.limit = Some(parse_limit(&mut p)?),
             "RETURN" => q.returns = parse_returns(&mut p)?,
@@ -449,6 +449,56 @@ fn parse_order(p: &mut Parser) -> Result<SortDir, KqlError> {
         p.eat_keyword("DESC");
         Ok(SortDir::Desc)
     }
+}
+
+/// Parse and validate a `BEFORE`/`AFTER` date literal (§946).
+///
+/// The bound is compared **lexicographically** against a node's date, which is
+/// exactly chronological *only for well-formed `YYYY-MM-DD`*. Nothing used to
+/// enforce that, so any word was accepted and silently produced a meaningless
+/// comparison: `BEFORE notadate` matched a 2017 node (digits sort before
+/// letters), `AFTER notadate` matched nothing, and `BEFORE 99` matched
+/// everything. A user who typed `2017/06/12`, or a date in their own locale's
+/// format, got a plausible-looking answer that meant nothing — with no error.
+///
+/// So the precondition the field has always documented is now checked, the way
+/// `LIMIT` and `ORDER BY` already reject their malformed inputs rather than
+/// guessing.
+///
+/// Deliberately *not* full calendar validation: `2017-02-30` is rejected only
+/// as far as the coarse day range goes, and leap years are not considered.
+/// Ordering is the only thing this value is used for, and a well-formed date
+/// that happens not to exist still orders correctly against every other ISO
+/// date — so calendar arithmetic would add complexity with no gain in
+/// correctness. The coarse month/day ranges are here to catch transpositions
+/// like `2017-31-06`, not to validate history.
+fn parse_date(p: &mut Parser, clause: &str) -> Result<String, KqlError> {
+    let raw = p.next_word()?;
+    let bad = || {
+        KqlError(format!(
+            "{clause} needs an ISO date (YYYY-MM-DD), found {raw:?}"
+        ))
+    };
+    let bytes = raw.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return Err(bad());
+    }
+    let digits = |r: std::ops::Range<usize>| {
+        if raw[r].chars().all(|c| c.is_ascii_digit()) {
+            Ok(())
+        } else {
+            Err(bad())
+        }
+    };
+    digits(0..4)?;
+    digits(5..7)?;
+    digits(8..10)?;
+    let month: u8 = raw[5..7].parse().map_err(|_| bad())?;
+    let day: u8 = raw[8..10].parse().map_err(|_| bad())?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return Err(bad());
+    }
+    Ok(raw)
 }
 
 fn parse_limit(p: &mut Parser) -> Result<usize, KqlError> {
@@ -898,6 +948,56 @@ mod tests {
     fn rejects_bad_order_and_limit() {
         assert!(parse("FIND Concept ORDER BY Label").is_err()); // only Confidence
         assert!(parse("FIND Concept LIMIT abc").is_err()); // non-numeric
+    }
+
+    #[test]
+    fn a_malformed_date_bound_is_rejected_not_silently_compared() {
+        // Regression: BEFORE/AFTER took any word. The bound is compared
+        // lexicographically, which equals chronological order *only* for
+        // well-formed YYYY-MM-DD — so garbage produced a confident, meaningless
+        // answer instead of an error. Measured against the demo graph
+        // (Transformer dated 2017-06-12) before the fix:
+        //   BEFORE notadate -> 1 hit  (digits sort before letters)
+        //   AFTER  notadate -> 0 hits
+        //   BEFORE 99       -> 1 hit
+        // A user typing a date in any non-ISO format got a plausible result
+        // that meant nothing, with no indication anything was wrong. LIMIT and
+        // ORDER BY already rejected their malformed inputs; this did not.
+        for bad in [
+            "notadate",
+            "99",
+            "2017/06/12", // wrong separator — the common typo
+            "17-06-12",   // two-digit year: sorts before every 4-digit one
+            "2017-6-12",  // unpadded month: sorts after 2017-12-31
+            "2017-31-06", // transposed month/day
+            "2017-00-10", // month 0
+            "2017-06-00", // day 0
+            "2017-06-1x", // non-digit inside a well-shaped date
+        ] {
+            for clause in ["BEFORE", "AFTER"] {
+                let q = format!("FIND Concept \"x\" {clause} {bad}");
+                let err = parse(&q).expect_err(&format!("{q} must be rejected"));
+                assert!(
+                    err.to_string().contains("ISO date"),
+                    "{q}: error should name the expected format, got {err}"
+                );
+            }
+        }
+
+        // Well-formed dates still parse, including the boundary values the
+        // range check must not exclude.
+        for good in ["2017-06-12", "0001-01-01", "9999-12-31"] {
+            let q = format!("FIND Concept \"x\" BEFORE {good}");
+            let parsed = parse(&q).unwrap_or_else(|e| panic!("{q} should parse: {e}"));
+            assert_eq!(parsed.before.as_deref(), Some(good));
+        }
+
+        // Deliberately allowed: well-formed but non-existent. Ordering is the
+        // only use, and these order correctly against every real ISO date, so
+        // rejecting them would mean calendar arithmetic for no correctness
+        // gain. Documented on `parse_date` — asserted so the choice is
+        // explicit rather than an accident of the range check.
+        assert!(parse("FIND Concept \"x\" BEFORE 2017-02-30").is_ok());
     }
 
     #[test]
