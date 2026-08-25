@@ -32,6 +32,37 @@ platform).
   the identity merge and the graph-by-name fold union sources separately, and
   reverting either leaves the other's test passing.
 
+### Fixed (deployment)
+
+- **The Kubernetes manifest could never have run, and the Compose stack
+  started three databases nothing connects to.** §931–932 was marked ✅.
+  - `deploy/k8s/ckos.yaml` ran `args: ["help"]`. `ckos help` prints and exits
+    0 (verified locally), and a Deployment restarts a container that exits —
+    so the pod would sit in **CrashLoopBackOff** permanently. There was also
+    no `Service`, making it unreachable even if it had run, and no probes; the
+    HPA scaled on the CPU of a workload that never started. It now runs
+    `serve` (the only long-running mode CKOS has) with `--host 0.0.0.0`
+    (127.0.0.1 is unreachable from outside a pod's network namespace),
+    readiness/liveness probes on `/api/status`, a **ClusterIP** Service —
+    deliberately not LoadBalancer, since the gateway has no TLS or auth — and
+    an `emptyDir` for sessions, with a note on why a shared PVC would be wrong
+    while the HPA can run several replicas over uncoordinated session files.
+  - `docker-compose.yml` started Neo4j, Qdrant and Redis, described as "the
+    real public images that back the §935 data layer". They backed nothing:
+    there is no driver for any of them anywhere in the workspace, CKOS having
+    zero external dependencies by design — and `docs/implementation-status.md`
+    already places those backends outside v1. Deleted. The one remaining
+    service runs the gateway and publishes it on **loopback only**.
+  - `Dockerfile` now defaults to the gateway rather than `help`, declares the
+    session volume (without it, every session dies with the container),
+    exposes the port, and creates `/data` owned by the non-root user.
+  - **`scripts/check-deploy.sh`** (wired into `scripts/check.sh`) asserts the
+    properties that make these deployable, because YAML that no test reads is
+    just prose. Verified by re-introducing both original defects, which it
+    reports by name. It checks *structure*, not behaviour, and says so — no
+    cluster or container runtime is available to this automation, so
+    `kubectl apply` and `docker build` remain unverified here.
+
 ### Added
 
 - **A response-shape tripwire for the dashboard** (`web/src/lib.rs`).

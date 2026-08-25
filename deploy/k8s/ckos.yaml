@@ -1,12 +1,18 @@
-# Kubernetes manifests for CKOS (§931).
-#
-# Each agent role (planner, reasoner, verifier) is the same `ckos` image run
-# with a different command; this manifest deploys the kernel image with a
-# HorizontalPodAutoscaler for the "autoscale" the spec calls for. The data
-# layer (Neo4j / Qdrant / Redis, see docker-compose.yml) is expected to be
-# provided by managed services or their respective operators in-cluster.
+# Kubernetes manifests for CKOS (§931): the §902 gateway, with a Service and
+# a HorizontalPodAutoscaler for the autoscale the spec calls for.
 #
 # Apply with: kubectl apply -f deploy/k8s/ckos.yaml
+#
+# This manifest previously ran `args: ["help"]`. That could never work: `ckos
+# help` prints and exits 0 (verified locally), and a Deployment restarts a
+# container that exits — so the pod sat in CrashLoopBackOff permanently, with
+# no Service in front of it and an HPA scaling on the CPU of a workload that
+# never ran. `serve` is the only long-running mode CKOS has, so it is what a
+# Deployment can host.
+#
+# The data layer stays out: CKOS is std-only with zero external dependencies,
+# so there is no database client to point at a managed service. Sessions live
+# on the pod's own volume — see the note on `emptyDir` below.
 ---
 apiVersion: v1
 kind: Namespace
@@ -37,7 +43,35 @@ spec:
         - name: ckos
           image: ckos:dev
           imagePullPolicy: IfNotPresent
-          args: ["help"]
+          # --host 0.0.0.0 so the kubelet and the Service can reach the port;
+          # the CLI default of 127.0.0.1 is unreachable from outside the pod's
+          # network namespace. This widens the listen address, not the trust
+          # model: the gateway has no TLS and no authentication, so the
+          # Service below is deliberately ClusterIP — do not change it to
+          # LoadBalancer without putting an authenticating proxy in front.
+          args:
+            ["serve", "--host", "0.0.0.0", "--port", "8080", "--session-root", "/data"]
+          ports:
+            - name: http
+              containerPort: 8080
+          # Without probes the Deployment reports Ready the moment the
+          # container starts, so a server that failed to bind would still take
+          # traffic. `/api/status` is a cheap in-memory read.
+          readinessProbe:
+            httpGet:
+              path: /api/status
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/status
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          volumeMounts:
+            - name: sessions
+              mountPath: /data
           resources:
             requests:
               cpu: "100m"
@@ -45,6 +79,35 @@ spec:
             limits:
               cpu: "500m"
               memory: "256Mi"
+      volumes:
+        # emptyDir, deliberately: session state is per-pod and does not
+        # survive rescheduling. Anything durable needs a PersistentVolumeClaim
+        # *and* a decision about what happens when the HPA runs several
+        # replicas — sessions are plain files with no cross-replica
+        # coordination, so a shared volume would let two pods write one
+        # session. Scale past one replica only for stateless use
+        # (`/api/plan`, `/api/verify`, try-it mode).
+        - name: sessions
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ckos-kernel
+  namespace: ckos
+  labels:
+    app: ckos
+    component: kernel
+spec:
+  # ClusterIP on purpose — see the note on the container args above.
+  type: ClusterIP
+  selector:
+    app: ckos
+    component: kernel
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
