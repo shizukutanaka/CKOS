@@ -7,6 +7,35 @@ platform).
 
 ## [Unreleased]
 
+### Fixed
+
+- **KQL accepted any word as a `BEFORE`/`AFTER` date and compared it anyway.**
+  The bound is compared lexicographically against a node's date, which equals
+  chronological order *only* for well-formed `YYYY-MM-DD` — a precondition the
+  field's own doc has always stated (`ISO date, lexicographically comparable`)
+  and nothing enforced. Garbage therefore produced a confident, meaningless
+  answer rather than an error. Measured against the demo graph (Transformer
+  dated 2017-06-12):
+  `BEFORE notadate` → 1 hit (digits sort before letters), `AFTER notadate` → 0
+  hits, `BEFORE 99` → 1 hit, `BEFORE 2017-13-45` → 1 hit. A user typing
+  `2017/06/12`, or a date in their locale's format, got a plausible result that
+  meant nothing, with nothing to indicate anything was wrong — on input
+  reachable from both `ckos kql` and `POST /api/kql`.
+  `LIMIT` and `ORDER BY` already rejected their malformed inputs loudly; the
+  date clauses were the one place that guessed. They now validate the format
+  and report `BEFORE needs an ISO date (YYYY-MM-DD), found "…"`.
+  Full calendar validation is deliberately *not* done, and the reason is
+  recorded on `parse_date`: ordering is the only use of this value, and a
+  well-formed but non-existent date such as `2017-02-30` still orders
+  correctly against every real ISO date, so leap-year arithmetic would add
+  complexity for no gain in correctness. The coarse month/day ranges exist to
+  catch transpositions like `2017-31-06`, not to validate history — asserted
+  in the test so the boundary is an explicit choice rather than an accident.
+  Found by throwing adversarial input at the parser (no panics, but this
+  silently wrong acceptance); the test sweeps nine malformed shapes across
+  both clauses, plus the boundary values `0001-01-01` and `9999-12-31` that
+  the range check must not exclude.
+
 ### Corrected — a "blocker" that was already done
 
 Re-tested the release path instead of trusting an earlier session's notes, and
