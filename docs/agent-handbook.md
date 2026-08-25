@@ -94,12 +94,25 @@ Standing principles (each has already prevented or caught real bugs here):
   panicking thread cannot cascade — pattern used in audit, telemetry, event
   bus, reindex queue, and `web::AppState`.
 
-Environment facts (verified, do not re-litigate): pushes are restricted to the
-designated work branch; pushing tags, `.github/workflows/` files, direct
-GitHub REST calls, release/tag creation, and repo-settings changes are all
-permission-denied (eight channels tested; the REST gateway answers "GitHub
-access is not enabled for this session"). CI therefore stays staged at `docs/ci-workflow.yml` until a
-maintainer copies it to `.github/workflows/ci.yml` by hand.
+Environment facts — **re-verified this generation, since the earlier version
+of this paragraph was partly wrong.** What actually holds:
+
+- Pull requests to `main` *do* work through the GitHub MCP tools (this
+  generation merged a dozen). An earlier note claiming all GitHub access was
+  denied was stale; do not repeat it without testing.
+- `git push` of a **tag** returns HTTP 403 (tested directly, this generation).
+- There is **no** create-release and **no** repo-settings tool in the MCP
+  server (searched). So a tag, a GitHub Release, and settings changes are
+  genuinely owner-only.
+- `.github/workflows/` pushes are denied, so CI stays staged at
+  `docs/ci-workflow.yml` until a maintainer copies it by hand.
+- **The repository is already public and its default branch is already
+  `main`** (`git ls-remote --symref origin HEAD`). Earlier notes listed
+  "switch the default branch" as outstanding work. It is not, and repeating
+  that sends the owner after a setting that needs no change.
+
+Before writing "X is impossible here" into this file, test X. Two of the
+claims above were inherited rather than measured, and one of them was false.
 
 ---
 

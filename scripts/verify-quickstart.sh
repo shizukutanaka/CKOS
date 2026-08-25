@@ -32,6 +32,16 @@ bold "build (release)"
 cargo build --release -q
 CKOS="$PWD/target/release/ckos"
 
+bold "README install claim"
+# README.md's install block shows `ckos version   # -> ckos X.Y.Z`. A version
+# written by hand in prose goes stale the first time Cargo.toml is bumped, and
+# a wrong number in the install instructions is the very first thing a new
+# user sees. Checked here, where documented outputs are already asserted.
+declared="$("$CKOS" version)"
+readme_version="$(grep -oE 'ckos [0-9]+\.[0-9]+\.[0-9]+' README.md | head -1)"
+expect "$declared" "$readme_version" \
+  "README.md advertises \"$readme_version\" but the binary reports \"$declared\""
+
 WORK="$(mktemp -d)"
 SERVER_PID=""
 cleanup() {

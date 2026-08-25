@@ -43,6 +43,23 @@ crates mirror the module layout in §890 of the spec.
 | `web`           | §902 | `std`-only HTTP/JSON API gateway + embedded browser dashboard (`ckos serve`) |
 | `cli`           | §902, §906 | `ckos` command-line interface |
 
+## Install
+
+CKOS is distributed as source and has **zero external dependencies**, so a
+Rust toolchain is the only prerequisite — no network access is needed after
+the clone, and there is nothing to configure.
+
+```sh
+git clone https://github.com/shizukutanaka/CKOS.git
+cd CKOS
+cargo install --path cli   # puts `ckos` on your PATH
+ckos version               # -> ckos 2.8.0
+```
+
+Prefer not to install? `cargo run -p ckos-cli -- <command>` works from the
+clone, and `docker compose up --build` starts the browser dashboard on
+<http://127.0.0.1:8080>.
+
 ## Build & test
 
 ```sh

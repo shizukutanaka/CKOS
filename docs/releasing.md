@@ -8,8 +8,22 @@ approval gate: nothing becomes a release until you act.
 
 The release itself is already prepared. `Cargo.toml` carries the version,
 `CHANGELOG.md` has the dated section, and every commit on `main` passed the
-five gates (`./scripts/check.sh`: format, clippy `-D warnings`, rustdoc
-`-D warnings`, status-doc symbol check, full test suite).
+gates (`./scripts/check.sh`: format, clippy `-D warnings`, rustdoc
+`-D warnings`, status-doc symbols, deploy manifests, full test suite).
+
+**Note what is already true, so nothing below reads as a blocker it isn't.**
+The repository is public, its default branch is `main`, and `main` builds and
+passes the documented quickstart from a clean clone. CKOS is distributed as
+source, so *the software is already available to anyone*:
+
+```sh
+git clone https://github.com/shizukutanaka/CKOS.git
+cd CKOS && cargo install --path cli   # verified: yields `ckos 2.8.0`
+```
+
+What the steps below add is a **named, citable version** — a tag, a release
+page and its notes — plus CI. Those are discoverability and process, not the
+delivery mechanism.
 
 ## One-time setup (first release only)
 
@@ -24,8 +38,12 @@ five gates (`./scripts/check.sh`: format, clippy `-D warnings`, rustdoc
    git push
    ```
 
-2. **Make `main` the default branch** (Settings → General → Default branch),
-   so the repository landing page shows the released state.
+2. ~~Make `main` the default branch~~ — **already done.** Verified:
+   `git ls-remote --symref origin HEAD` reports `refs/heads/main`, and the
+   repository metadata reads `"default_branch": "main"`. Kept here, struck
+   through rather than deleted, because earlier revisions of this file listed
+   it as outstanding and someone following those notes would otherwise go
+   looking for a setting that needs no change.
 
 ## Every release
 
