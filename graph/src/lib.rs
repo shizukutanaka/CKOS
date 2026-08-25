@@ -15,6 +15,47 @@ pub use extract::ExtractReport;
 pub use store::GraphStore;
 pub use versioning::{GraphRepo, MergeConflict, MergeReport, MergeStrategy, VersionId};
 
+/// Validate an ISO `YYYY-MM-DD` date, returning it unchanged or naming what
+/// was wrong (§946).
+///
+/// Every date in CKOS is compared **lexicographically** — [`Node::date`]
+/// against KQL's `BEFORE`/`AFTER` bounds, and a document's `expires` metadata
+/// against `ckos gc --now`. That equals chronological order *only* for
+/// well-formed `YYYY-MM-DD`, so an unvalidated date does not fail: it produces
+/// a confident, arbitrary answer decided by where the garbage happens to sort.
+///
+/// It lives here, next to the temporal model, because it was previously
+/// enforced in neither place and then in only one. `ckos gc --now today`
+/// **deleted a document whose `expires` was `2999-12-31`**, reported as
+/// "Expired", because `"2999-12-31" < "today"`. Other typos (`2026-8-25`,
+/// `08/25/2026`) happened to be harmless — sorting *below* the expiry rather
+/// than above it — which is precisely why guessing is unacceptable here: the
+/// outcome depended on luck, not on a rule, and the operation is destructive.
+///
+/// Deliberately not a full calendar check: ordering is the only use, and a
+/// well-formed but non-existent date like `2017-02-30` still orders correctly
+/// against every real one, so leap-year arithmetic would add complexity with
+/// no correctness gain. The month/day ranges catch transpositions such as
+/// `2017-31-06`, not bad history.
+pub fn validate_iso_date(raw: &str) -> Result<&str, String> {
+    let bad = || format!("expected an ISO date (YYYY-MM-DD), found {raw:?}");
+    let bytes = raw.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return Err(bad());
+    }
+    for range in [0..4, 5..7, 8..10] {
+        if !raw[range].chars().all(|c| c.is_ascii_digit()) {
+            return Err(bad());
+        }
+    }
+    let month: u8 = raw[5..7].parse().map_err(|_| bad())?;
+    let day: u8 = raw[8..10].parse().map_err(|_| bad())?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return Err(bad());
+    }
+    Ok(raw)
+}
+
 /// Node categories from §897.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeKind {

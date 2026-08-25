@@ -453,52 +453,21 @@ fn parse_order(p: &mut Parser) -> Result<SortDir, KqlError> {
 
 /// Parse and validate a `BEFORE`/`AFTER` date literal (§946).
 ///
-/// The bound is compared **lexicographically** against a node's date, which is
-/// exactly chronological *only for well-formed `YYYY-MM-DD`*. Nothing used to
-/// enforce that, so any word was accepted and silently produced a meaningless
+/// The bound is compared lexicographically against a node's date, which is
+/// chronological *only* for well-formed `YYYY-MM-DD`. Nothing used to enforce
+/// that, so any word was accepted and silently produced a meaningless
 /// comparison: `BEFORE notadate` matched a 2017 node (digits sort before
-/// letters), `AFTER notadate` matched nothing, and `BEFORE 99` matched
-/// everything. A user who typed `2017/06/12`, or a date in their own locale's
-/// format, got a plausible-looking answer that meant nothing — with no error.
+/// letters), `AFTER notadate` matched nothing, `BEFORE 99` matched everything.
 ///
-/// So the precondition the field has always documented is now checked, the way
-/// `LIMIT` and `ORDER BY` already reject their malformed inputs rather than
-/// guessing.
-///
-/// Deliberately *not* full calendar validation: `2017-02-30` is rejected only
-/// as far as the coarse day range goes, and leap years are not considered.
-/// Ordering is the only thing this value is used for, and a well-formed date
-/// that happens not to exist still orders correctly against every other ISO
-/// date — so calendar arithmetic would add complexity with no gain in
-/// correctness. The coarse month/day ranges are here to catch transpositions
-/// like `2017-31-06`, not to validate history.
+/// The rule itself lives in [`ckos_graph::validate_iso_date`], shared with
+/// `ckos gc --now` — the other place a date reaches a lexicographic
+/// comparison, and where the same gap silently deleted an unexpired document.
 fn parse_date(p: &mut Parser, clause: &str) -> Result<String, KqlError> {
     let raw = p.next_word()?;
-    let bad = || {
-        KqlError(format!(
-            "{clause} needs an ISO date (YYYY-MM-DD), found {raw:?}"
-        ))
-    };
-    let bytes = raw.as_bytes();
-    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
-        return Err(bad());
+    match ckos_graph::validate_iso_date(&raw) {
+        Ok(_) => Ok(raw),
+        Err(why) => Err(KqlError(format!("{clause} {why}"))),
     }
-    let digits = |r: std::ops::Range<usize>| {
-        if raw[r].chars().all(|c| c.is_ascii_digit()) {
-            Ok(())
-        } else {
-            Err(bad())
-        }
-    };
-    digits(0..4)?;
-    digits(5..7)?;
-    digits(8..10)?;
-    let month: u8 = raw[5..7].parse().map_err(|_| bad())?;
-    let day: u8 = raw[8..10].parse().map_err(|_| bad())?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-        return Err(bad());
-    }
-    Ok(raw)
 }
 
 fn parse_limit(p: &mut Parser) -> Result<usize, KqlError> {
