@@ -578,7 +578,10 @@ fn search_response(hits: &[Hit], skipped: usize, cached: bool) -> Response {
                 ("title", h.title.clone().into()),
                 ("snippet", h.snippet.clone().into()),
                 ("score", h.score.into()),
-                ("source", format!("{:?}", h.source).into()),
+                (
+                    "sources",
+                    Json::Array(h.sources.iter().map(|s| format!("{s:?}").into()).collect()),
+                ),
             ])
         })
         .collect();

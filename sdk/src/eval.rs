@@ -277,14 +277,14 @@ mod tests {
                 title: "a".into(),
                 snippet: String::new(),
                 score: 2.0,
-                source: HitSource::Keyword,
+                sources: vec![HitSource::Keyword],
             },
             Hit {
                 id: None,
                 title: "z".into(),
                 snippet: String::new(),
                 score: 1.0,
-                source: HitSource::Keyword,
+                sources: vec![HitSource::Keyword],
             },
         ];
         let scores = evaluate_hits(&hits, &set(&["a"]), 2);

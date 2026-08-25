@@ -52,8 +52,20 @@ pub struct Hit {
     pub snippet: String,
     /// Relevance score (higher is better).
     pub score: f32,
-    /// Where the hit originated.
-    pub source: HitSource,
+    /// Every source that matched this item, sorted and deduplicated.
+    ///
+    /// A set, not a single label, because fusion is the whole point: a hit
+    /// corroborated by keyword *and* vector *and* graph is a materially
+    /// stronger result than one found by keyword alone, and that is exactly
+    /// what lifts it up the ranking. Reporting only one origin threw that
+    /// information away — every result of `ckos search` printed `[Keyword]`
+    /// even when all three legs had matched, so the product's central claim
+    /// ("hybrid BM25 + vector + graph, RRF-fused") was invisible in its own
+    /// output and a user tuning relevance could not tell whether the graph or
+    /// vector legs contributed at all.
+    ///
+    /// Invariant: never empty. Before fusion it holds exactly one entry.
+    pub sources: Vec<HitSource>,
 }
 
 impl Hit {
@@ -397,6 +409,15 @@ pub fn mmr_rerank(hits: &[Hit], lambda: f32, k: usize) -> Vec<Hit> {
     selected
 }
 
+/// Union `extra` into `into`, keeping it sorted and deduplicated so
+/// [`Hit::sources`] holds each source once in a stable order (two searches
+/// that matched the same legs must render identically).
+fn merge_sources(into: &mut Vec<HitSource>, extra: &[HitSource]) {
+    into.extend_from_slice(extra);
+    into.sort_by_key(|s| *s as u8);
+    into.dedup();
+}
+
 /// Combine per-source ranked lists with **Reciprocal Rank Fusion**: each item's
 /// fused score is `sum over sources of 1/(RRF_K + rank)`. Because it uses ranks,
 /// not raw scores, the wildly different score scales of BM25, cosine and graph
@@ -429,9 +450,14 @@ fn fuse_rrf(lists: Vec<Vec<Hit>>, limit: usize) -> Vec<Hit> {
                 .entry(hit.identity())
                 .or_insert_with(|| (0.0, hit.clone()));
             entry.0 += contrib;
+            // Carry the matching sources across, whichever representative
+            // wins: the set is the record of *what corroborated this item*,
+            // so it must survive the representative being swapped out.
+            let matched = hit.sources.clone();
             if hit.score > entry.1.score {
                 entry.1 = hit; // best representative for display
             }
+            merge_sources(&mut entry.1.sources, &matched);
         }
     }
 
@@ -463,11 +489,15 @@ fn fuse_rrf(lists: Vec<Vec<Hit>>, limit: usize) -> Vec<Hit> {
             continue; // zero or ambiguous: leave the graph hit standing alone
         };
         let target = target.clone();
-        let Some((gscore, _)) = acc.remove(&gk) else {
+        let Some((gscore, ghit)) = acc.remove(&gk) else {
             continue;
         };
+        let gsources = ghit.sources;
         if let Some(entry) = acc.get_mut(&target) {
             entry.0 += gscore;
+            // The graph corroborated this document — record it, or the merge
+            // would silently drop the very evidence that raised the score.
+            merge_sources(&mut entry.1.sources, &gsources);
         }
     }
 
@@ -645,7 +675,7 @@ impl<'a> Retriever<'a> {
                     title: doc.title.clone(),
                     snippet: doc.body.chars().take(80).collect(),
                     score,
-                    source: HitSource::Keyword,
+                    sources: vec![HitSource::Keyword],
                 });
             }
         }
@@ -667,7 +697,7 @@ impl<'a> Retriever<'a> {
                     title: doc.title.clone(),
                     snippet: doc.body.chars().take(80).collect(),
                     score: sim * VECTOR_WEIGHT * (doc.confidence as f32 / 100.0),
-                    source: HitSource::Vector,
+                    sources: vec![HitSource::Vector],
                 });
             }
         }
@@ -712,7 +742,7 @@ impl<'a> Retriever<'a> {
                 title: node.label.clone(),
                 snippet: format!("{:?}", node.kind),
                 score: base,
-                source: HitSource::Graph,
+                sources: vec![HitSource::Graph],
             });
         }
 
@@ -748,7 +778,7 @@ impl<'a> Retriever<'a> {
                         title: node.label.clone(),
                         snippet: format!("{:?} (graph-related)", node.kind),
                         score: (mass / max_mass) * ceiling,
-                        source: HitSource::GraphHop,
+                        sources: vec![HitSource::GraphHop],
                     });
                 }
             }
@@ -836,7 +866,7 @@ mod tests {
             title: title.into(),
             snippet: String::new(),
             score: 1.0,
-            source: HitSource::Keyword,
+            sources: vec![HitSource::Keyword],
         };
         let mut cache = SearchCache::new(2);
         assert!(cache.get("a").is_none()); // miss
@@ -1257,7 +1287,7 @@ mod tests {
             title: title.into(),
             snippet: snippet.into(),
             score,
-            source: HitSource::Keyword,
+            sources: vec![HitSource::Keyword],
         };
         // h2 is a near-duplicate of h1; h3 is distinct but slightly less relevant.
         let hits = vec![
@@ -1368,7 +1398,7 @@ mod tests {
             3,
             "ambiguous name must not be merged away: {:?}",
             hits.iter()
-                .map(|h| (&h.title, h.source))
+                .map(|h| (&h.title, h.sources.clone()))
                 .collect::<Vec<_>>()
         );
     }
@@ -1397,6 +1427,57 @@ mod tests {
             .score;
         // Two corroborating sources (keyword + graph) outrank one.
         assert!(c > s, "corroborated {c} should exceed single-source {s}");
+
+        // …and the hit must *say so*. The score boost above was already
+        // correct, but fusion reported a single origin, so every result of
+        // `ckos search` printed `[Keyword]` even when the graph and vector
+        // legs had matched too — making the hybrid search this crate is built
+        // around impossible to observe from its own output.
+        let corroborated = with_graph.iter().find(|h| h.title == "Graphlib").unwrap();
+        assert!(
+            corroborated.sources.contains(&HitSource::Keyword)
+                && corroborated.sources.contains(&HitSource::Graph),
+            "a hit corroborated by keyword and graph must record both, got {:?}",
+            corroborated.sources
+        );
+        // The single-source hit stays honest about being single-source.
+        let alone = keyword_only.iter().find(|h| h.title == "Graphlib").unwrap();
+        assert_eq!(
+            alone.sources,
+            vec![HitSource::Keyword],
+            "a keyword-only hit must not claim corroboration"
+        );
+    }
+
+    #[test]
+    fn fused_sources_are_deduplicated_and_stably_ordered() {
+        // The set is rendered straight into CLI and API output, so a source
+        // must appear once, in the same order every time — two searches that
+        // matched the same legs have to look identical. Duplicates are
+        // reachable in principle because a document can rank in more than one
+        // list, and the union runs on every merge.
+        let hit = |title: &str, score: f32, src: HitSource| Hit {
+            id: Some(format!("d-{title}")),
+            title: title.to_string(),
+            snippet: String::new(),
+            score,
+            sources: vec![src],
+        };
+        let fused = fuse_rrf(
+            vec![
+                vec![hit("a", 0.9, HitSource::Graph)],
+                vec![hit("a", 0.5, HitSource::Keyword)],
+                vec![hit("a", 0.7, HitSource::Keyword)],
+                vec![hit("a", 0.3, HitSource::Vector)],
+            ],
+            10,
+        );
+        assert_eq!(fused.len(), 1, "one document, one fused hit");
+        assert_eq!(
+            fused[0].sources,
+            vec![HitSource::Keyword, HitSource::Vector, HitSource::Graph],
+            "sources must be deduplicated and in declaration order"
+        );
     }
 
     #[test]
@@ -1415,7 +1496,7 @@ mod tests {
         let retriever = Retriever::with_embedder(&store, &graph, &embedder);
         let hits = retriever.search("kernel priority", 10);
         // No keyword/graph match exists, so the surviving hit is vector-sourced.
-        assert!(hits.iter().any(|h| h.source == HitSource::Vector));
+        assert!(hits.iter().any(|h| h.sources.contains(&HitSource::Vector)));
 
         // Without an embedder the same query finds nothing.
         let plain = Retriever::new(&store, &graph);
@@ -1436,10 +1517,10 @@ mod tests {
         let retriever = Retriever::new(&store, &graph);
         // Relational question → 2 hops, so the scheduler is reached via CKOS.
         let hits = retriever.search("what does CKOS depend on", 10);
-        assert!(hits.iter().any(|h| h.source == HitSource::Keyword));
+        assert!(hits.iter().any(|h| h.sources.contains(&HitSource::Keyword)));
         assert!(hits.iter().any(|h| h.title == "CKOS"));
         assert!(hits
             .iter()
-            .any(|h| h.title == "scheduler" && h.source == HitSource::GraphHop));
+            .any(|h| h.title == "scheduler" && h.sources.contains(&HitSource::GraphHop)));
     }
 }
