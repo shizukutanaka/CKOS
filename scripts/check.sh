@@ -44,6 +44,9 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps || fail "rustdoc"
 step "status-doc symbols"
 ./scripts/check-status-doc.sh || fail "docs/implementation-status.md cites a symbol that no longer exists"
 
+step "deploy manifests"
+./scripts/check-deploy.sh || fail "deployment manifests are not deployable"
+
 step "tests"
 # Capture so the total can be reported; stream it too, so a hang is visible.
 out=$(mktemp)

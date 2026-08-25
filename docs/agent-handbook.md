@@ -35,7 +35,7 @@ regressions:
    runs them and names the first failure:
 
    ```sh
-   ./scripts/check.sh          # format, clippy, rustdoc, status-doc symbols, tests
+   ./scripts/check.sh          # format, clippy, rustdoc, status-doc, deploy manifests, tests
    ./scripts/check.sh --fix    # reformat in place first
    ```
 
@@ -168,6 +168,8 @@ module is clean:
 | `RuntimeRegistry::register` desynced its order index from its map (this round) | two parallel collections that must agree, where only one deduplicates — grep for a `Vec` index beside a `HashMap` |
 | `ckos serve`'s `session` parameter was an unconstrained filesystem path (this round) | a *documented* scope limitation ("no auth, use a proxy") mistaken for covering an *undocumented* one (unbounded filesystem reach) — when a module doc waives one property, check it does not silently waive a different one. Grep for request-supplied strings reaching `Path`/`fs` |
 | 413/400 replies were RST away by their own connection close (this round) | a hazard *correctly handled in one place* (the 503 path's drain) and omitted from its siblings — when you find a subtle guard with a long comment, grep for the other sites that need it before assuming it is the only one. Its test also passed only because it avoided the very input that triggers the bug |
+| Deployment manifests marked ✅ while undeployable (this round) | config that no test reads is just prose — a Deployment ran `args: ["help"]`, which exits, so the pod CrashLoopBackOff'd forever with no Service and an HPA scaling nothing. Grep for YAML/TOML/Dockerfiles asserted by nothing |
+| A renamed API field broke the dashboard silently (this round) | two artifacts coupled *by name* with no link between them — `dashboard.html` reads response fields the Rust code emits. Whenever you rename across a string boundary, grep the other side |
 | Atomic writes shared one scratch path per destination (this round) | a safety mechanism whose own *intermediate state* is not unique — the rename was atomic, the temp file it renamed was not. Grep for a temp/lock/scratch name derived purely from its target |
 | `Event::TaskStarted` fired before a runtime was selected (this round) | an event published at the *start of the function* rather than at the moment its own documented claim becomes true. Check where each event is emitted against what its variant's doc says it means |
 

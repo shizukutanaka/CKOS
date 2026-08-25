@@ -56,7 +56,7 @@ drift from the code.
 | 928 | Enterprise identity | 🟡 | `policy::IdentityProvider` + `StaticTokenProvider`, with a real caller: `ckos tool`/`run`/`workflow --token <token>` authenticates against a demo provider (`cli::demo_identity_provider`), producing an `Identity` with roles *and* attributes. OIDC/LDAP verification ⏳ |
 | 929 | Authorization (RBAC + ABAC) | ✅ | `policy` — RBAC+ABAC authorize `ckos tool` and `Engine`'s sensitive capabilities (finance/medical/legal/robotics) via opt-in `Engine::with_identity`/`with_policy` + `ckos run`/`ckos workflow`/`ckos tool --role\|--token`; denials emit `Event::PolicyViolation`. `--token` (§928) carries real ABAC attributes end-to-end — `Engine::with_identity` + `Identity::request` — proven by a demo rule that denies `capability.medical` for a `region=restricted` attribute even though the RBAC role alone would allow it; `--role` remains a bare-roles convenience with no attributes |
 | 930 | Distributed security | 🟡 | `sdk::security` (signing + replay; mTLS/cert rotation ⏳) |
-| 931–932 | Kubernetes / Docker Compose | ✅ | `Dockerfile` + `docker-compose.yml` (dev stack) + `deploy/k8s/ckos.yaml` (Deployment + HPA autoscale) |
+| 931–932 | Kubernetes / Docker Compose | ✅ | `Dockerfile` (multi-stage, non-root, gateway by default) + `docker-compose.yml` (one service — CKOS is one binary) + `deploy/k8s/ckos.yaml` (Namespace + Deployment running `serve` with probes + ClusterIP Service + HPA). Structure is gated by `scripts/check-deploy.sh`; behaviour is **not** verified against a real cluster or container runtime, neither being available to this automation |
 | 933 | Observability | 🟡 | `audit` + `telemetry`; OpenTelemetry/Prometheus export ⏳ |
 | 934 | Positioning | — | narrative |
 

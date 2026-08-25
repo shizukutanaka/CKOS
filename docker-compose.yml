@@ -1,34 +1,35 @@
-# Minimal development environment (§932).
+# Development stack (§932): one service, because CKOS is one binary.
 #
-# `ckos` is the kernel/CLI image built from the Dockerfile; the planner,
-# reasoner and verifier agents (§932) are the same binary run in different
-# roles, so they are represented here as one service for the dev stack. The
-# data services use the real public images that back the §935 data layer:
-# Neo4j (graph DB), Qdrant (vector DB) and Redis (cache).
+# This file used to also start Neo4j, Qdrant and Redis, described as "the real
+# public images that back the §935 data layer". They backed nothing. CKOS is
+# std-only with zero external dependencies — there is no Neo4j driver, no
+# Qdrant client and no Redis client anywhere in the workspace (verified: no
+# match for any of them, or for their ports, outside comments). Bringing the
+# stack up started three databases that nothing ever connected to, while
+# implying an integration that does not exist and that
+# `docs/implementation-status.md` explicitly places outside v1 (§936: SQL and
+# vector backends need a driver, which the dependency policy forbids).
+#
+# If a persistent backend is ever added behind the `memory::Storage` or
+# `graph::GraphStore` seams, add its service back *together with* the code
+# that talks to it.
+#
+#   docker compose up --build     # then open http://127.0.0.1:8080
 services:
   ckos:
     build: .
     image: ckos:dev
-    command: ["help"]
-    depends_on:
-      - graph-db
-      - vector-db
-      - redis
-
-  graph-db: # §897 knowledge graph backend
-    image: neo4j:5
-    environment:
-      NEO4J_AUTH: neo4j/ckos-dev
+    # The image already defaults to the gateway; stated here so the port
+    # mapping below is obviously connected to something that listens.
+    command: ["serve", "--host", "0.0.0.0", "--port", "8080", "--session-root", "/data"]
     ports:
-      - "7474:7474" # HTTP
-      - "7687:7687" # Bolt
+      # Published on the loopback interface only. The gateway has no TLS and
+      # no authentication (see the `ckos_web` crate docs), so binding it to
+      # 0.0.0.0 on the host would expose an unauthenticated control surface to
+      # the local network.
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - sessions:/data
 
-  vector-db: # §944/§950 vector search backend
-    image: qdrant/qdrant:latest
-    ports:
-      - "6333:6333"
-
-  redis: # §958 search/result cache backend
-    image: redis:7
-    ports:
-      - "6379:6379"
+volumes:
+  sessions:
