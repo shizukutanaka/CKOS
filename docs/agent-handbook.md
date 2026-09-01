@@ -183,6 +183,7 @@ module is clean:
 | `RuntimeRegistry::register` desynced its order index from its map (this round) | two parallel collections that must agree, where only one deduplicates — grep for a `Vec` index beside a `HashMap` |
 | `ckos serve`'s `session` parameter was an unconstrained filesystem path (this round) | a *documented* scope limitation ("no auth, use a proxy") mistaken for covering an *undocumented* one (unbounded filesystem reach) — when a module doc waives one property, check it does not silently waive a different one. Grep for request-supplied strings reaching `Path`/`fs` |
 | 413/400 replies were RST away by their own connection close (this round) | a hazard *correctly handled in one place* (the 503 path's drain) and omitted from its siblings — when you find a subtle guard with a long comment, grep for the other sites that need it before assuming it is the only one. Its test also passed only because it avoided the very input that triggers the bug |
+| §929 was fail-open in `run`/`workflow` but fail-closed in `tool` (this round) | **a security default that differs between sibling commands — the fail-open sibling is the bug.** Also: it was pinned by a test asserting the old behaviour on purpose, so "a test covers it" did not mean "it is right". When a default protects something, check every command that shares the mechanism, and read what the test *claims* rather than that it passes |
 | `gc --now <garbage>` deleted unexpired documents (this round) | the same unvalidated-date class as the KQL row below, in a **destructive** command — found by grepping for the sibling right after fixing the first. When a class turns up, sweep for every other input of that shape before moving on; here the second instance was the one that lost data |
 | KQL took any word as a date and compared it lexicographically (this round) | a *documented precondition* that nothing enforces — the field's doc said "ISO date, lexicographically comparable" and the parser accepted anything. Grep for doc comments stating a format, then check the parser actually rejects violations |
 | Deployment manifests marked ✅ while undeployable (this round) | config that no test reads is just prose — a Deployment ran `args: ["help"]`, which exits, so the pod CrashLoopBackOff'd forever with no Service and an HPA scaling nothing. Grep for YAML/TOML/Dockerfiles asserted by nothing |
@@ -197,6 +198,15 @@ module is clean:
 These are NOT bugs. Each is parked with a reason; do not wire them up without
 meeting the stated condition (that would be label-moving, §1):
 
+- **The library's `Engine` still defaults to no policy** (`access: None`,
+  sdk/src/engine.rs) while every CLI command now defaults to `guest`. That
+  split is intentional and each half says so where it is made: attaching a
+  policy is an explicit decision for an embedder who may have their own
+  authorization layer, whereas the CLI is a product surface with a user typing
+  flags, where the safe default is the one that denies. Lift only if `Engine`
+  gains a caller that is itself a product surface — and then by making the
+  policy a constructor argument, not by silently defaulting one, which would
+  hide an authorization decision inside a library.
 - **`graph::GraphRepo` (§942/§943) and `messaging::ServiceMesh` (§912) are
   SDK-level, with no CLI surface — deliberately, and this was decided, not
   drifted into.** The test applied when auditing every dormant part was: *can a

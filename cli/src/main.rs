@@ -252,7 +252,7 @@ fn cmd_plan(rest: &[String]) -> ExitCode {
 
 fn cmd_run(rest: &[String]) -> ExitCode {
     if wants_help(rest) {
-        println!("usage: ckos run [--session <dir>] [--role <role> | --token <token>] <intent…>\n  Plan and execute end-to-end; --session persists the run and grows its graph.\n  --role/--token attach RBAC+ABAC authorization (§929) for finance/medical/\n  legal/robotics steps. --role is bare roles (admin, guest), no attributes.\n  --token authenticates via a demo identity provider (§928: tok-admin-hq,\n  tok-admin-restricted, tok-guest), carrying real ABAC attributes. CAUTION:\n  the built-in planner never classifies free text into those capabilities (a\n  keyword classifier was tested and rejected as unsafe — see planner's docs),\n  so neither flag has effect here in practice; use `ckos workflow` with an\n  explicit `step x: medical` (etc.) to actually reach a gated capability.");
+        println!("usage: ckos run [--session <dir>] [--role <role> | --token <token>] <intent…>\n  Plan and execute end-to-end; --session persists the run and grows its graph.\n  --role/--token select the identity RBAC+ABAC authorization (§929) runs as,\n  for finance/medical/legal/robotics steps. Authorization is ALWAYS on:\n  without either flag you run as `guest`, which is denied those capabilities\n  — omitting the flag lowers your privileges, it does not disable the gate. --role is bare roles (admin, guest), no attributes.\n  --token authenticates via a demo identity provider (§928: tok-admin-hq,\n  tok-admin-restricted, tok-guest), carrying real ABAC attributes. CAUTION:\n  the built-in planner never classifies free text into those capabilities (a\n  keyword classifier was tested and rejected as unsafe — see planner's docs),\n  so neither flag has effect here in practice; use `ckos workflow` with an\n  explicit `step x: medical` (etc.) to actually reach a gated capability.");
         return ExitCode::SUCCESS;
     }
     // Optional flags in any position; the remainder is the intent.
@@ -277,7 +277,7 @@ fn cmd_run(rest: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let identity = match resolve_identity(role, token, None) {
+    let identity = match resolve_identity(role, token, "guest") {
         Ok(v) => v,
         Err(e) => {
             eprintln!("error: {e}");
@@ -306,9 +306,7 @@ fn cmd_run(rest: &[String]) -> ExitCode {
     let mut engine = Engine::new(runtimes, agents, verifier);
     // Authorization (§929) is opt-in: without --role/--token, every
     // capability runs unrestricted, exactly as before this existed.
-    if let Some(identity) = identity {
-        engine = engine.with_identity(demo_policy(), identity);
-    }
+    engine = engine.with_identity(demo_policy(), identity);
 
     println!("intent : {intent}");
     println!("workflow: {} ({} step(s))\n", dag.name(), dag.len());
@@ -683,7 +681,7 @@ fn cmd_eval(rest: &[String]) -> ExitCode {
 
 fn cmd_workflow(rest: &[String]) -> ExitCode {
     if wants_help(rest) {
-        println!("usage: ckos workflow [--role <role> | --token <token>] <file>\n  Load and execute a workflow definition file. --role/--token attach RBAC+ABAC\n  authorization (§929) for finance/medical/legal/robotics steps — the only\n  reachable way to author such a step today, since the heuristic planner\n  behind `ckos plan`/`ckos run` never classifies free text into them. --token\n  authenticates via a demo identity provider (§928: tok-admin-hq,\n  tok-admin-restricted, tok-guest), carrying real ABAC attributes.");
+        println!("usage: ckos workflow [--role <role> | --token <token>] <file>\n  Load and execute a workflow definition file. Definition format:\n    workflow: <name>\n    step <name>: <capability> [<- dep, …]\n  --role/--token select the identity RBAC+ABAC authorization (§929) runs as,\n  for finance/medical/legal/robotics steps. Authorization is ALWAYS on:\n  without either flag you run as `guest`, which is denied those capabilities.\n  This is the only reachable way to author such a step today, since the heuristic planner\n  behind `ckos plan`/`ckos run` never classifies free text into them. --token\n  authenticates via a demo identity provider (§928: tok-admin-hq,\n  tok-admin-restricted, tok-guest), carrying real ABAC attributes.");
         return ExitCode::SUCCESS;
     }
     let (role, rest) = match take_value_flag(rest, "--role") {
@@ -700,7 +698,7 @@ fn cmd_workflow(rest: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let identity = match resolve_identity(role, token, None) {
+    let identity = match resolve_identity(role, token, "guest") {
         Ok(v) => v,
         Err(e) => {
             eprintln!("error: {e}");
@@ -738,9 +736,7 @@ fn cmd_workflow(rest: &[String]) -> ExitCode {
         agents,
         Verifier::new().with_check(Box::new(NonEmptyCheck)),
     );
-    if let Some(identity) = identity {
-        engine = engine.with_identity(demo_policy(), identity);
-    }
+    engine = engine.with_identity(demo_policy(), identity);
 
     println!("workflow: {} ({} step(s))\n", dag.name(), dag.len());
     match engine.run_workflow(&dag) {
@@ -1339,23 +1335,39 @@ fn demo_identity_provider() -> StaticTokenProvider {
 /// `--token` authenticates through [`demo_identity_provider`] (§928),
 /// producing an identity with real ABAC attributes; `--role` is a bare-roles
 /// convenience carrying no attributes. The two flags are mutually exclusive.
-/// `default_role` applies when neither is given — callers that always
-/// authorize (`ckos tool`) pass `Some("guest")`; callers where authorization
-/// is opt-in (`ckos run`/`ckos workflow`) pass `None` and skip attaching a
-/// policy at all when the result is `None`.
+/// `default_role` applies when neither is given.
+///
+/// **Every command that can execute a task defaults to `guest`**, so §929
+/// authorization is always attached. `ckos run`/`ckos workflow` used to pass
+/// no default and skip the policy entirely, which meant omitting the flag did
+/// not run as a low-privilege user — it disabled the gate. A workflow with a
+/// `medical` step (one of `SENSITIVE_CAPABILITIES`) ran unauthorized:
+/// `--role guest` was denied, and no flag at all was allowed. `ckos tool`
+/// already defaulted to `guest` and failed closed, so the same mechanism in
+/// the same binary had opposite defaults. A gate you bypass by not asking for
+/// it is not a gate.
+///
+/// Returning a bare `Identity` rather than an `Option` is part of the fix:
+/// with every caller supplying a default, "no identity" became unreachable,
+/// and an `Option` that is never `None` invites a reader to assume the
+/// unauthenticated path still exists.
+///
+/// Note this is the *CLI's* choice, not the library's: `Engine`'s `access`
+/// stays `None` by default (see its field doc) because attaching a policy is
+/// an explicit decision for an embedder. The CLI is a product surface with a
+/// user typing flags, and there the safe default is the one that denies.
 fn resolve_identity(
     role: Option<String>,
     token: Option<String>,
-    default_role: Option<&str>,
-) -> std::result::Result<Option<Identity>, String> {
+    default_role: &str,
+) -> std::result::Result<Identity, String> {
     match (role, token) {
         (Some(_), Some(_)) => Err("--role and --token are mutually exclusive".into()),
-        (Some(role), None) => Ok(Some(Identity::new("cli-user").with_role(role))),
+        (Some(role), None) => Ok(Identity::new("cli-user").with_role(role)),
         (None, Some(token)) => demo_identity_provider()
             .authenticate(&token)
-            .map(Some)
             .map_err(|e| format!("token authentication failed: {e}")),
-        (None, None) => Ok(default_role.map(|r| Identity::new("cli-user").with_role(r))),
+        (None, None) => Ok(Identity::new("cli-user").with_role(default_role)),
     }
 }
 
@@ -1387,9 +1399,8 @@ fn cmd_tool(rest: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let identity = match resolve_identity(role, token, Some("guest")) {
-        Ok(Some(v)) => v,
-        Ok(None) => unreachable!("default_role always yields Some"),
+    let identity = match resolve_identity(role, token, "guest") {
+        Ok(v) => v,
         Err(e) => {
             eprintln!("error: {e}");
             return ExitCode::FAILURE;

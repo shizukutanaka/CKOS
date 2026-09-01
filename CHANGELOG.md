@@ -9,6 +9,51 @@ platform).
 
 ### Fixed
 
+- **§929 authorization was fail-open in `ckos run` and `ckos workflow`:
+  omitting `--role`/`--token` disabled the gate rather than lowering
+  privileges.** Both passed no default role to `resolve_identity`, which meant
+  *no policy was attached at all*, so `Engine::execute`'s check was skipped
+  entirely. Measured on a workflow with a gated `medical` step — one of the
+  four `SENSITIVE_CAPABILITIES` the gate exists for:
+
+  | Invocation | Before |
+  |---|---|
+  | `--role admin` / `--token tok-admin-hq` | 2/2 verified (correct) |
+  | `--role guest` / `--token tok-guest` | denied (correct) |
+  | **(no flag)** | **2/2 verified — the gate was absent** |
+
+  `ckos tool` already defaulted to `guest` and failed closed, so one binary
+  shipped both defaults for the same mechanism — the third sibling-divergence
+  found this cycle, after the RST drain and the date validators. The
+  `workflow` help said the flags "attach authorization" without saying that
+  omitting them ran gated steps unauthorized.
+
+  **This reverses a deliberate prior decision, not an oversight.** The
+  behaviour was pinned by an assertion in
+  `sensitive_capability_requires_an_authorized_role` reading *"the engine has
+  no policy attached: unrestricted, as it always was before this authorization
+  gate existed"*. That backward compatibility is compatibility with the
+  ungated state the gate exists to end, and nothing external depends on it —
+  no tags, no releases, not on crates.io. The assertion is flipped in place
+  with the reversal recorded beside it, rather than deleted.
+
+  All three commands now default to `guest`. Since no caller can any longer
+  produce "no identity", `resolve_identity` returns a bare `Identity` instead
+  of an `Option` and the two `if let Some(identity)` attach sites collapse —
+  an `Option` that is never `None` invites a reader to assume the
+  unauthenticated path still exists. `cmd_tool` had already needed an
+  `unreachable!("default_role always yields Some")` there, which was the type
+  system saying so out loud.
+
+  Deliberately unchanged: the library's `Engine::access` stays `None` by
+  default. Attaching a policy is an explicit decision for an embedder; the CLI
+  is a product surface where a user types flags, and there the safe default is
+  the one that denies. Both positions are now stated where they are made.
+
+  The `workflow` help also gained the definition-file format, which it never
+  documented — awkward for the command the help itself calls "the only
+  reachable way" to author a gated step.
+
 - **`ckos gc --now <garbage>` silently deleted documents that had not
   expired.** The most serious defect found this cycle: destructive, silent,
   and triggered by an ordinary typo. A document's `expires` metadata is

@@ -529,10 +529,38 @@ fn sensitive_capability_requires_an_authorized_role() {
     std::fs::write(&path, "workflow: clinic\nstep diagnose: medical\n").unwrap();
     let _guard = TempFile(path.clone());
 
-    // Without --role, the engine has no policy attached: unrestricted, as
-    // it always was before this authorization gate existed.
+    // Without --role you are `guest`, so a medical step is denied.
+    //
+    // This assertion is REVERSED from what it said before. It used to read
+    // "the engine has no policy attached: unrestricted, as it always was
+    // before this authorization gate existed" — a deliberate
+    // backward-compatibility choice, not an oversight, locked in right here.
+    // It is reversed anyway, because compatibility with "before the gate
+    // existed" is compatibility with the ungated state the gate exists to
+    // end: omitting a flag lowered nothing, it switched authorization off.
+    // `ckos tool` had already made the opposite choice for the same §929
+    // mechanism, so one binary shipped both defaults. Nothing external
+    // depends on the old behaviour — no tags, no releases, not on crates.io.
     let unrestricted = ckos(&["workflow", path.to_str().unwrap()]);
-    assert!(unrestricted.status.success());
+    assert!(
+        !unrestricted.status.success(),
+        "a medical step must not run unauthorized: {}",
+        stdout(&unrestricted)
+    );
+    assert!(String::from_utf8_lossy(&unrestricted.stderr).contains("denied"));
+
+    // A token grant authorizes it too, not just a bare role (§928 path).
+    let by_token = ckos(&[
+        "workflow",
+        "--token",
+        "tok-admin-hq",
+        path.to_str().unwrap(),
+    ]);
+    assert!(
+        by_token.status.success(),
+        "--token tok-admin-hq should authorize: {}",
+        String::from_utf8_lossy(&by_token.stderr)
+    );
 
     // guest has no RBAC grant for the medical capability: denied.
     let denied = ckos(&["workflow", "--role", "guest", path.to_str().unwrap()]);
@@ -557,6 +585,19 @@ fn sensitive_capability_requires_an_authorized_role() {
         ordinary_path.to_str().unwrap(),
     ]);
     assert!(ordinary.status.success());
+
+    // …and with no flag at all, which is the case the new `guest` default
+    // actually changed. Without this, tightening the default could have
+    // quietly broken every unauthenticated run.
+    let ordinary_bare = ckos(&["workflow", ordinary_path.to_str().unwrap()]);
+    assert!(
+        ordinary_bare.status.success(),
+        "an ordinary workflow must still run without a role: {}",
+        String::from_utf8_lossy(&ordinary_bare.stderr)
+    );
+    assert!(ckos(&["run", "research the Transformer paper"])
+        .status
+        .success());
 }
 
 #[test]
