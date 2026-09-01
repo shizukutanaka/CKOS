@@ -920,6 +920,20 @@ fn index_ingests_files_and_is_idempotent() {
         "re-indexing must not duplicate passages"
     );
 
+    // A concept result must say something. Its document body used to be its
+    // own title repeated, so `search` returned "Vector Labs — Vector Labs":
+    // top-ranked (an empty doc matches every retrieval leg) and informative
+    // to nobody.
+    let concept_hit = stdout(&ckos(&["search", d, "Vector Labs"]));
+    assert!(
+        !concept_hit.contains("Vector Labs — Vector Labs\n"),
+        "a concept snippet must carry more than its own label: {concept_hit}"
+    );
+    assert!(
+        concept_hit.contains("organization") || concept_hit.contains("file:"),
+        "a concept snippet should carry what the graph knows: {concept_hit}"
+    );
+
     // Regression: indexed concepts carried no provenance, because the ingest
     // path called the non-provenance extraction. This is the README's own
     // quickstart sequence — `ckos index` then a `RETURN Sources` query — and
