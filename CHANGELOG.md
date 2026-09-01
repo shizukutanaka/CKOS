@@ -7,6 +7,59 @@ platform).
 
 ## [Unreleased]
 
+### Improved
+
+- **A re-indexed concept now carries what the graph knows about it, instead of
+  repeating its own name.** Found by measuring the product's headline feature
+  rather than assuming it: a 4-document corpus scored with `ckos eval` gave
+  MRR/nDCG@5 of 1.000 for `attention`, `starvation` and `diversity`, but
+  **0.500 / 0.631 for `LSTM`** — a *literal* match, the best case this design
+  has. The reason:
+
+  ```
+  [Keyword+Vector+Graph 0.05] LSTM — LSTM              ← contentless stub
+  [Keyword 0.02] corpus/rnn.md#0 — Recurrent neural…   ← the passage explaining it
+  ```
+
+  `Reindexer::process` built the document as
+  `Document::new("graph_node", label, label)` — the body *was* the title — and
+  embedded only the label. **The stub outranked real content precisely because
+  it was empty**: a one-word document is an exact keyword match, embeds to a
+  single-token vector that cosines ~1.0 against that word, and *is* a graph
+  node, so it scored on all three retrieval legs while authored prose scored on
+  one, and RRF's corroboration bonus did the rest. Systematic, not incidental —
+  every extracted concept returned its stub first, all at an identical 0.05,
+  and stubs outnumbered passages 12:4 in the store. Meanwhile the graph knew
+  the node's kind, confidence, date, provenance (`file:corpus/rnn.md`, added
+  in the provenance fix below) and its edges, and none of it reached the
+  document.
+
+  The body is now a deterministic summary — `LSTM — concept (confidence 45),
+  source file:corpus/rnn.md, related to Recurrent` — and *that* is what gets
+  embedded. Neighbours are sorted, deduplicated and capped at 8, so the output
+  is stable across re-indexing and a hub node cannot produce an unbounded body
+  (the same "bound every resource" rule as audit/telemetry retention).
+  Provenance and date also go into metadata, so they are filterable rather than
+  only searchable — a concept becomes findable by its source file or by a
+  related concept, which it was not before.
+
+  **Reported honestly: nDCG@5 for `LSTM` is unchanged at 0.631.** RRF is
+  rank-based, so a document present in three ranked lists still outranks one
+  present in a single list regardless of how much content it gained. What
+  changed is that the top result now *says something* — the defect was a
+  useless first hit, and that is fixed and demonstrable. Whether an entity card
+  should outrank the prose explaining it is a relevance judgement (a search
+  engine showing a knowledge panel above web results makes the same choice),
+  not a measured miss; the eval's judgement counts only the passage as
+  relevant, which is arguable now that the card is informative. Tuning RRF or
+  down-weighting `graph_node` until the number moved would have treated a
+  symptom and silently shifted every other ranking.
+
+  Persisted `graph_node` embeddings from an earlier build are now inconsistent
+  with freshly computed ones. Per handbook §4 this is acceptable pre-release —
+  `ckos index` regenerates them — and that rule is cited rather than
+  re-litigated.
+
 ### Fixed
 
 - **§929 authorization was fail-open in `ckos run` and `ckos workflow`:

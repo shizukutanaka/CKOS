@@ -157,6 +157,12 @@ impl ReindexQueue {
     }
 }
 
+/// How many neighbour labels a `graph_node` summary lists. Bounded so a hub
+/// node — one every extracted document mentions — cannot produce an unbounded
+/// document body, the same "bound every resource" rule applied to audit and
+/// telemetry retention.
+const MAX_SUMMARIZED_NEIGHBOURS: usize = 8;
+
 /// Drains a [`ReindexQueue`] and (re-)embeds the changed graph nodes into a
 /// document store, making them vector-searchable (§923 → §938). Document type
 /// `graph_node`; the node id is kept in metadata so re-indexing the same node
@@ -180,7 +186,8 @@ impl<'a> Reindexer<'a> {
             let Some(node) = self.graph.node(&id) else {
                 continue; // node was deleted before re-indexing
             };
-            let mut doc = Document::new("graph_node", node.label.clone(), node.label.clone());
+            let mut doc =
+                Document::new("graph_node", node.label.clone(), self.summarize(node, &id));
             // `Document::new` always mints a fresh id; reuse the existing
             // `graph_node` document's id for this node, if one is already
             // stored, so writing actually replaces it in place. Without this,
@@ -200,13 +207,72 @@ impl<'a> Reindexer<'a> {
                 }
             }
             doc.confidence = node.confidence;
-            doc.embedding = Some(self.embedder.embed(&node.label));
+            // Embed the summary, not the bare label. A single-token embedding
+            // cosines ~1.0 against a one-word query, which is how an empty
+            // stub used to out-score the passage that explains it.
+            doc.embedding = Some(self.embedder.embed(&doc.body));
             doc.metadata.insert("node_id".to_string(), id.to_string());
+            // Filterable, not merely searchable.
+            if let Some(src) = &node.provenance {
+                doc.metadata.insert("provenance".to_string(), src.clone());
+            }
+            if let Some(date) = &node.date {
+                doc.metadata.insert("date".to_string(), date.clone());
+            }
             if store.write(doc).is_ok() {
                 written += 1;
             }
         }
         written
+    }
+
+    /// Render what the graph knows about a node into the searchable body of
+    /// its `graph_node` document.
+    ///
+    /// This body used to be the node's own label, repeated. That was both
+    /// useless to read and actively harmful to ranking: a document whose title
+    /// and body are one word is an exact keyword match, embeds to a
+    /// single-token vector that cosines ~1.0 against that word, and *is* a
+    /// graph node — so it scored on all three retrieval legs and RRF's
+    /// corroboration bonus lifted it above authored prose matching on one.
+    /// Measured before the change, `LSTM` returned the stub first and the
+    /// passage explaining LSTM second (MRR 0.500, nDCG 0.631) — on a literal
+    /// match, this product's best case. Every extracted concept behaved the
+    /// same way, all at an identical fused score.
+    ///
+    /// Fixing the ranking directly (down-weighting `graph_node`, retuning RRF)
+    /// would have treated the symptom and silently moved every other result.
+    /// The cause is that the record carried none of what was known about it.
+    ///
+    /// Deterministic by construction: neighbours are sorted and capped, so
+    /// re-indexing an unchanged graph rewrites an identical body rather than
+    /// churning the store, and a hub node cannot produce an unbounded one.
+    fn summarize(&self, node: &ckos_graph::Node, id: &NodeId) -> String {
+        let mut out = format!(
+            "{} — {} (confidence {})",
+            node.label,
+            node.kind.as_token(),
+            node.confidence
+        );
+        if let Some(date) = &node.date {
+            out.push_str(&format!(", dated {date}"));
+        }
+        if let Some(src) = &node.provenance {
+            out.push_str(&format!(", source {src}"));
+        }
+        let mut related: Vec<&str> = self
+            .graph
+            .neighbors(id)
+            .into_iter()
+            .map(|n| n.label.as_str())
+            .collect();
+        related.sort_unstable();
+        related.dedup();
+        related.truncate(MAX_SUMMARIZED_NEIGHBOURS);
+        if !related.is_empty() {
+            out.push_str(&format!(", related to {}", related.join(", ")));
+        }
+        out
     }
 }
 
@@ -356,6 +422,88 @@ mod tests {
             docs.len(),
             1,
             "re-indexing the same node must replace its document, not duplicate it: {docs:?}"
+        );
+    }
+
+    #[test]
+    fn a_reindexed_concept_carries_what_the_graph_knows() {
+        // Regression: the document was `Document::new("graph_node", label,
+        // label)` — its body *was* its own title — and only the label was
+        // embedded. Everything the graph knew about the node (kind,
+        // provenance, date, edges) was dropped.
+        //
+        // That made the result useless *and* top-ranked. Measured on a
+        // 4-document corpus: searching `LSTM` returned
+        //   [Keyword+Vector+Graph 0.05] LSTM — LSTM          (the stub)
+        //   [Keyword 0.02] corpus/rnn.md#0 — Recurrent…      (the explanation)
+        // for MRR 0.500 / nDCG 0.631 on a *literal* match, the best case this
+        // product has. The stub wins precisely because it is empty: an exact
+        // keyword match, a single-token embedding that cosines ~1.0 against
+        // the query, and a graph node — three legs, so RRF's corroboration
+        // bonus lifts it over authored content matching on one. Every
+        // extracted concept behaved identically, all scoring 0.05.
+        //
+        // Built on a bare graph rather than a KnowledgeBus: setting
+        // provenance/date needs mutable graph access, and widening the bus's
+        // API for a test's convenience would be the wrong trade.
+        let mut graph = KnowledgeGraph::new();
+        let lstm = graph.add_node(NodeKind::Concept, "LSTM", 45);
+        let rnn = graph.add_node(NodeKind::Concept, "Recurrent", 40);
+        graph.connect(&lstm, &rnn, EdgeKind::RelatedTo);
+        graph.set_provenance(&lstm, "file:corpus/rnn.md");
+        graph.set_date(&lstm, "2017-06-12");
+
+        let embedder = HashingEmbedder::new(64);
+        let mut store = InMemoryStore::new();
+        let queue = ReindexQueue::default();
+        queue.push(lstm.clone());
+        Reindexer::new(&graph, &embedder).process(&queue, &mut store);
+
+        let fetch = |store: &InMemoryStore| {
+            store
+                .search(&Query {
+                    doc_type: Some("graph_node".into()),
+                    ..Default::default()
+                })
+                .unwrap()
+                .into_iter()
+                .find(|d| d.title == "LSTM")
+                .expect("LSTM document")
+        };
+        let doc = fetch(&store);
+
+        assert_ne!(
+            doc.body.trim(),
+            "LSTM",
+            "the body must carry more than the label it repeats"
+        );
+        assert!(
+            doc.body.contains("file:corpus/rnn.md"),
+            "the source the graph knows must reach the document: {}",
+            doc.body
+        );
+        assert!(
+            doc.body.contains("Recurrent"),
+            "a related concept must reach the document: {}",
+            doc.body
+        );
+        // Provenance is filterable, not merely searchable.
+        assert_eq!(
+            doc.metadata.get("provenance").map(String::as_str),
+            Some("file:corpus/rnn.md")
+        );
+
+        // Deterministic: re-indexing the same graph must produce a
+        // byte-identical body, or the store churns on every pass and the
+        // idempotence `ckos index` claims becomes false. Neighbour order out
+        // of a map is not stable by itself.
+        let queue2 = ReindexQueue::default();
+        queue2.push(lstm.clone());
+        Reindexer::new(&graph, &embedder).process(&queue2, &mut store);
+        assert_eq!(
+            doc.body,
+            fetch(&store).body,
+            "body must be stable across re-index"
         );
     }
 
