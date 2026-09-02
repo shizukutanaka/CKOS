@@ -9,6 +9,25 @@ platform).
 
 ### Corrected — a ✅ that overstated what works
 
+- **`docs/ci-workflow.yml` is now verified, not merely labelled ready.** The
+  dashboard defect above taught the general lesson — *an artifact no test
+  executes is unverified however green the suite is* — so the same question was
+  put to the one file standing between this repository and working CI, which
+  nothing runs either.
+
+  It holds up: the YAML parses; all five smoke-test commands pass verbatim
+  (`version`, `run`, `kql`, and the `index` + `search` ingest pair on a
+  throwaway session); and `./scripts/check.sh` is green under the workflow's own
+  `RUSTFLAGS="-D warnings"` after touching a source file to force a full
+  rebuild — the one setting local runs do not use, and the likeliest cause of a
+  red first run.
+
+  No change to the workflow: this is a negative result, recorded so it is not
+  re-derived and so the remaining manual step can be taken with confidence. One
+  trap noted in the handbook: a YAML 1.1 parser reads the `on:` key as the
+  boolean `true`, but GitHub's parser does not — it is correct as written and
+  must not be "fixed".
+
 - **§946 temporal knowledge is now 🟡.** `graph::Node::date` and KQL
   `BEFORE`/`AFTER` are implemented and correct — the demo graph sets dates and
   queries them right. But **nothing populates `date` on a graph built by
