@@ -209,6 +209,10 @@ function emptyState(container, text) {
 }
 
 function verdictBadge(v) {
+  // null/undefined means the record carries no verdict at all (a reflection is
+  // not a verification); that is not a failure, so it gets its own neutral
+  // badge rather than being lumped in with "fail".
+  if (v === null || v === undefined) return el("span", { class: "badge skip", text: "—" });
   const cls = v === "pass" || v === true ? "ok" : v === "skip" ? "skip" : "fail";
   const label = v === "pass" || v === true ? "ok" : v === "skip" ? "skip" : "fail";
   return el("span", { class: "badge " + cls, text: label });

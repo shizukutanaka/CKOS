@@ -484,8 +484,7 @@ fn cmd_history(rest: &[String]) -> ExitCode {
             recalled.len()
         );
         for doc in &recalled {
-            let verified = doc.metadata.get("verified").map(String::as_str) == Some("true");
-            let mark = if verified { "ok" } else { "FAIL" };
+            let mark = verdict_mark(doc);
             println!("  [{mark}] {} -> {}", doc.title, doc.body);
         }
         return ExitCode::SUCCESS;
@@ -505,8 +504,7 @@ fn cmd_history(rest: &[String]) -> ExitCode {
     }
     println!("session {dir}: {} recorded step(s)", history.len());
     for doc in &history {
-        let verified = doc.metadata.get("verified").map(String::as_str) == Some("true");
-        let mark = if verified { "ok" } else { "FAIL" };
+        let mark = verdict_mark(doc);
         println!("  [{mark}] {} -> {}", doc.title, doc.body);
     }
     ExitCode::SUCCESS
@@ -688,6 +686,20 @@ fn cmd_eval(rest: &[String]) -> ExitCode {
     println!("  nDCG@{:<6} {:.3}", scores.k, scores.ndcg);
     println!("  MAP         {:.3}", scores.average_precision);
     ExitCode::SUCCESS
+}
+
+/// How to label a stored record in `history`.
+///
+/// Three states, not two. Only an execution carries a `verified` flag; a
+/// reflection has none, and rendering "no verdict" as `FAIL` told the user that
+/// a successful reflection had failed. Absence of a verdict is not a negative
+/// verdict — the same rule the telemetry rates follow.
+fn verdict_mark(doc: &Document) -> &'static str {
+    match doc.metadata.get("verified").map(String::as_str) {
+        Some("true") => "ok",
+        Some(_) => "FAIL",
+        None => "—",
+    }
 }
 
 fn cmd_workflow(rest: &[String]) -> ExitCode {

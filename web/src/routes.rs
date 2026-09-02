@@ -480,8 +480,15 @@ fn history(state: &AppState, req: &Request) -> Response {
                 ("body", d.body.clone().into()),
                 ("confidence", d.confidence.into()),
                 (
+                    // `null`, not `false`, when the record carries no verdict:
+                    // only an execution has one, and reporting a reflection as
+                    // unverified rendered it in the dashboard as a failure.
                     "verified",
-                    (d.metadata.get("verified").map(String::as_str) == Some("true")).into(),
+                    match d.metadata.get("verified").map(String::as_str) {
+                        Some("true") => Json::Bool(true),
+                        Some(_) => Json::Bool(false),
+                        None => Json::Null,
+                    },
                 ),
             ])
         })

@@ -87,6 +87,29 @@ platform).
 
 ### Fixed
 
+- **`ckos history` reported every reflection as `[FAIL]`.** Found by reading
+  the output of an unaudited command rather than its code:
+
+  ```
+  [FAIL] reflection for task-… -> result accepted; cache for reuse
+  ```
+
+  A record saying *"result accepted"*, stored with `confidence: 95`, displayed
+  as a failure. The marker came from `metadata["verified"] == "true"`, and only
+  an **execution** carries that key — a reflection is not a verification, so its
+  absence was read as a negative verdict. The same mistake as the telemetry
+  rates: **absence is not a negative value.**
+
+  Fixed in all four places that rendered it: both `history` paths, `/api/history`
+  (now sends `null` rather than `false`), and the dashboard badge (a neutral
+  `—` instead of a red *fail*). Three states, not two.
+
+  The first version of the regression test **passed against the broken code** —
+  reflections rank below executions, so a default-`k` recall never reaches one.
+  It needed `--k 10`, and now asserts that a reflection was actually seen, so it
+  cannot silently stop exercising the case. Same trap as the 413-drain test
+  recorded in the handbook.
+
 - **`ckos eval` reported `nDCG@10 -0.000` for a query that found nothing**,
   while every sibling metric printed `0.000` on the same input. Rust's
   `Sum for f32` folds from `-0.0` — the true additive identity, chosen so signed
