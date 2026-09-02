@@ -14,7 +14,7 @@ mod file_store;
 pub use chunk::{chunk, chunk_with_overlap, ChunkStrategy};
 mod maintenance;
 mod memory_score;
-pub use embedding::{cosine, Embedder, HashingEmbedder};
+pub use embedding::{cosine, is_scriptio_continua, terms_of, Embedder, HashingEmbedder};
 pub use file_store::FileStore;
 pub use maintenance::{
     collect, compress_document, consolidate, keywords, summarize, GcPolicy, GcReason, GcReport,

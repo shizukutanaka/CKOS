@@ -172,11 +172,20 @@ pub(crate) fn s_stem(word: &str) -> String {
 /// tokens. Used for *both* documents and queries so the two sides normalize
 /// identically — the only property stemming needs in order to help matching.
 fn tokens(text: &str) -> Vec<String> {
-    text.to_lowercase()
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|t| !t.is_empty())
-        .map(s_stem)
-        .filter(|t| t.chars().count() > 1)
+    // `terms_of` is the workspace's single definition of a term, shared with
+    // the vector leg so the two cannot disagree about what a word is. Stemming
+    // and the length filter are this leg's own policy, and neither applies to a
+    // CJK gram: there is nothing to stem, and one character is a whole word.
+    ckos_memory::terms_of(text)
+        .into_iter()
+        .map(|t| {
+            if t.chars().all(ckos_memory::is_scriptio_continua) {
+                t
+            } else {
+                s_stem(&t)
+            }
+        })
+        .filter(|t| t.chars().count() > 1 || t.chars().all(ckos_memory::is_scriptio_continua))
         .collect()
 }
 
@@ -979,7 +988,51 @@ mod tests {
         assert_eq!(s_stem("スケジューラ"), "スケジューラ");
         // A CJK word with an ASCII plural s still slices safely.
         assert_eq!(s_stem("日本語s"), "日本語");
-        assert_eq!(tokens("日本語のカーネル"), vec!["日本語のカーネル"]);
+        // This line used to assert `tokens("日本語のカーネル")` was the single
+        // token `"日本語のカーネル"`. That was the defect, pinned as a
+        // contract: a whole clause as one term meant no Japanese query could
+        // ever match it (measured MRR 0.143 over a 7-query corpus). The
+        // property the test is actually named for — no byte-boundary slicing,
+        // no panic — is what is asserted now.
+        let t = tokens("日本語のカーネル");
+        assert!(
+            t.contains(&"カー".to_string()),
+            "expected CJK grams, got {t:?}"
+        );
+        assert!(t.iter().all(|g| g.chars().count() <= 2));
+        assert!(t.iter().all(|g| !g.is_empty()));
+    }
+
+    #[test]
+    fn a_japanese_query_reaches_the_keyword_leg() {
+        // Before: the keyword leg fired only if the query happened to
+        // reproduce an entire punctuation-delimited run, so Japanese search
+        // was vector-only and mostly returned nothing (measured MRR 0.143 over
+        // a 7-query corpus; one query returned the wrong document).
+        let mut store = InMemoryStore::new();
+        store
+            .write(Document::new(
+                "note",
+                "猫",
+                "猫は独立心が強い動物で、家庭で飼われる人気のペットです。",
+            ))
+            .unwrap();
+        store
+            .write(Document::new(
+                "note",
+                "犬",
+                "犬は忠実な動物として知られ、番犬として働きます。",
+            ))
+            .unwrap();
+        let graph = KnowledgeGraph::new();
+        let hits = Retriever::new(&store, &graph).search("ペット", 5);
+        assert!(!hits.is_empty(), "a Japanese query returned nothing");
+        assert_eq!(hits[0].title, "猫");
+        assert!(
+            hits[0].sources.contains(&HitSource::Keyword),
+            "the keyword leg did not fire: {:?}",
+            hits[0].sources
+        );
     }
 
     #[test]
