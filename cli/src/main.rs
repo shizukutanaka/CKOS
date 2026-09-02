@@ -339,10 +339,13 @@ fn cmd_run(rest: &[String]) -> ExitCode {
             // Telemetry (§904): latency / token throughput.
             let tel = engine.telemetry();
             println!(
-                "telemetry: {} tokens, mean latency {:.1}ms, {:.0} tok/s",
+                "telemetry: {} tokens, mean latency {}, {} tok/s",
                 tel.total_tokens(),
-                tel.mean_latency_ms().unwrap_or(0.0),
-                tel.mean_tokens_per_sec()
+                format_latency(tel.mean_latency_ms()),
+                match tel.mean_tokens_per_sec() {
+                    Some(rate) => format!("{rate:.0}"),
+                    None => "n/a".to_string(),
+                }
             );
 
             // Collective reflection over the run (§921–§922).
@@ -1231,6 +1234,23 @@ fn cmd_gc(rest: &[String]) -> ExitCode {
         println!("swept {swept} orphaned graph node(s)");
     }
     ExitCode::SUCCESS
+}
+
+/// Render a mean latency in whatever unit keeps it readable. A local runtime
+/// answers in hundreds of nanoseconds, and a fixed `{:.1}ms` printed every such
+/// figure as `0.0` — the number the telemetry fix exists to stop reporting.
+/// `None` (no samples, or nothing measurable) prints `n/a`, never `0`.
+fn format_latency(ms: Option<f64>) -> String {
+    let Some(ms) = ms else {
+        return "n/a".to_string();
+    };
+    if ms >= 1.0 {
+        format!("{ms:.1}ms")
+    } else if ms >= 0.001 {
+        format!("{:.1}\u{00b5}s", ms * 1_000.0)
+    } else {
+        format!("{:.0}ns", ms * 1_000_000.0)
+    }
 }
 
 fn cmd_verify(rest: &[String]) -> ExitCode {

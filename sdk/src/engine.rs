@@ -265,7 +265,9 @@ impl Engine {
         // Record latency/token telemetry for scheduler optimisation (§904, §913).
         self.telemetry.record(TaskMetrics {
             runtime: runtime_name.clone(),
-            latency_ms: started.elapsed().as_millis() as u64,
+            // Nanoseconds: a local runtime serves a task in hundreds of them,
+            // and `as_millis` recorded every such task as zero.
+            latency_ns: started.elapsed().as_nanos().try_into().unwrap_or(u64::MAX),
             tokens: response.tokens,
         });
 
@@ -442,9 +444,13 @@ impl Engine {
     /// closing the §904 → §913 loop: a runtime whose mean latency beats
     /// `target_latency_ms` gets a higher `runtime_fit`, so future tasks on it
     /// score higher. With no telemetry yet, returns optimistic defaults.
+    ///
+    /// The target stays in milliseconds for the caller; the comparison happens
+    /// in microseconds, the unit the samples are recorded in.
     pub fn recommended_factors(&self, runtime: &str, target_latency_ms: u64) -> ScoreFactors {
-        let fit = match self.telemetry.mean_latency_for(runtime) {
-            Some(latency) => runtime_fit(latency.round() as u64, target_latency_ms),
+        let target_ns = target_latency_ms.saturating_mul(1_000_000);
+        let fit = match self.telemetry.mean_latency_ns_for(runtime) {
+            Some(latency_ns) => runtime_fit(latency_ns.round() as u64, target_ns),
             None => 1.0,
         };
         ScoreFactors::default().with_runtime_fit(fit)
@@ -520,7 +526,7 @@ mod tests {
         // Telemetry captured one sample per step (§904).
         assert_eq!(engine.telemetry().len(), 5);
         assert!(engine.telemetry().total_tokens() > 0);
-        assert!(engine.telemetry().mean_latency_for("echo").is_some());
+        assert!(engine.telemetry().mean_latency_ns_for("echo").is_some());
 
         // Closed loop (§904→§913): the fast echo runtime earns a high
         // runtime_fit; an unseen runtime falls back to the optimistic default.
@@ -592,6 +598,33 @@ mod tests {
         let mut task = Task::new("look", Capability::Vision);
         assert!(engine.execute(&mut task).is_err());
         assert_eq!(task.state(), TaskState::Queued);
+    }
+
+    #[test]
+    fn telemetry_measures_sub_millisecond_work_instead_of_recording_zero() {
+        // A local runtime finishes in microseconds. Recording latency in whole
+        // milliseconds truncated every such task to 0, so telemetry reported a
+        // *measured* zero latency and zero throughput for work that did run.
+        let mut runtimes = RuntimeRegistry::new();
+        runtimes.register(Box::new(EchoRuntime::new(vec![Capability::Reasoning])));
+        let engine = Engine::new(runtimes, CapabilityRegistry::new(), Verifier::new());
+        let mut task = Task::new("answer the scheduling question", Capability::Reasoning);
+        engine.execute(&mut task).expect("task runs");
+
+        let tel = engine.telemetry();
+        let mean = tel.mean_latency_ms().expect("a sample was recorded");
+        assert!(mean > 0.0, "sub-millisecond work recorded as {mean}ms");
+        let rate = tel
+            .mean_tokens_per_sec()
+            .expect("measurable elapsed time yields a rate");
+        assert!(rate > 0.0, "throughput reported as {rate} tok/s");
+
+        // The scheduler loop sees the real figure rather than the "unknown"
+        // branch every sub-millisecond runtime used to fall into.
+        let observed = tel
+            .mean_latency_ns_for("echo")
+            .expect("the echo runtime has samples");
+        assert!(observed > 0.0, "runtime latency recorded as {observed} ns");
     }
 
     #[test]
@@ -973,10 +1006,10 @@ mod tests {
             }));
         }
         let engine = Engine::new(runtimes, CapabilityRegistry::new(), Verifier::new());
-        for (rt, latency) in [("slow-rt", 500), ("fast-rt", 1)] {
+        for (rt, latency_ms) in [("slow-rt", 500), ("fast-rt", 1)] {
             engine.telemetry().record(TaskMetrics {
                 runtime: rt.into(),
-                latency_ms: latency,
+                latency_ns: latency_ms * 1_000_000,
                 tokens: 1,
             });
         }

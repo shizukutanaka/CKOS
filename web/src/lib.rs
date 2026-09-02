@@ -604,6 +604,7 @@ mod tests {
                     "audit_records",
                     "total_tokens",
                     "mean_latency_ms",
+                    "mean_tokens_per_sec",
                     "cached_sessions",
                 ],
             ),

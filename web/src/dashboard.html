@@ -648,7 +648,8 @@ function panelSystem() {
         ["audit records", s.audit_records],
         ["audit errors", s.audit_errors],
         ["total tokens", s.total_tokens],
-        ["mean latency (ms)", s.mean_latency_ms.toFixed(1)],
+        ["mean latency (ms)", s.mean_latency_ms == null ? "—" : s.mean_latency_ms.toPrecision(3)],
+        ["mean throughput (tok/s)", s.mean_tokens_per_sec == null ? "—" : s.mean_tokens_per_sec.toFixed(0)],
         ["cached sessions", s.cached_sessions],
         ["cached queries", s.cached_queries],
       ];
