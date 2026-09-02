@@ -101,10 +101,12 @@ pub fn ndcg_at_k(ranked: &[String], relevant: &HashSet<String>, k: usize) -> f32
     let ideal_hits = relevant.len().min(k);
     let idcg: f32 = (0..ideal_hits).map(|i| 1.0 / ((i + 2) as f32).log2()).sum();
     if idcg == 0.0 {
-        0.0
-    } else {
-        dcg / idcg
+        return 0.0;
     }
+    // `+ 0.0` normalises a signed zero: `Sum for f32` folds from -0.0, so an
+    // empty ranking yields -0.0 here and the report read "nDCG  -0.000" while
+    // every other metric on the same input read "0.000".
+    dcg / idcg + 0.0
 }
 
 /// **Average precision** over the full ranking (Manning, Raghavan & Schütze,
@@ -421,6 +423,34 @@ mod tests {
         ];
         assert!((mean_average_precision(&queries) - 0.75).abs() < 1e-6);
         assert_eq!(mean_average_precision(&[]), 0.0);
+    }
+
+    #[test]
+    fn a_zero_score_is_never_reported_as_negative_zero() {
+        // `ckos eval` printed "nDCG@10  -0.000" for a query that found nothing,
+        // while every sibling metric printed "0.000" on the same input.
+        // Rust's `Sum for f32` folds from -0.0 (the true additive identity, so
+        // that signed zeros survive), so an *empty* ranking sums to -0.0 while
+        // a non-empty one reaches +0.0 via -0.0 + 0.0. Harmless arithmetically,
+        // but a measuring tool that reports a negative score for a metric
+        // defined on [0,1] invites doubt about the numbers that matter.
+        let relevant = set(&["x"]);
+        for ranked in [Vec::new(), list(&["a", "b"])] {
+            let s = evaluate(&ranked, &relevant, 10);
+            for (name, v) in [
+                ("precision", s.precision),
+                ("recall", s.recall),
+                ("reciprocal_rank", s.reciprocal_rank),
+                ("ndcg", s.ndcg),
+                ("average_precision", s.average_precision),
+            ] {
+                assert_eq!(v, 0.0, "{name} should be zero here");
+                assert!(
+                    !v.is_sign_negative(),
+                    "{name} reported negative zero for ranked={ranked:?}"
+                );
+            }
+        }
     }
 
     #[test]
