@@ -50,10 +50,67 @@ pub fn chunk_with_overlap(text: &str, strategy: ChunkStrategy, overlap: usize) -
     for i in 1..base.len() {
         let prev: Vec<char> = base[i - 1].chars().collect();
         let take = overlap.min(prev.len());
-        let tail: String = prev[prev.len() - take..].iter().collect();
-        out.push(format!("{tail} {}", base[i]));
+        let start = prev.len() - take;
+        let tail: String = prev[overlap_start(&prev, start, overlap)..]
+            .iter()
+            .collect();
+        let tail = tail.trim_start();
+        if tail.is_empty() {
+            out.push(base[i].clone());
+        } else {
+            out.push(format!("{tail} {}", base[i]));
+        }
     }
     out
+}
+
+/// Where the overlap window should really begin, given that it wants to start
+/// at `start`.
+///
+/// Indexing tokenises on runs of alphanumerics (`memory::embedding`,
+/// `memory::maintenance::keywords`), so a window opening inside a word yields a
+/// fragment that is a *term of its own*: `triphosphate` cut into `triphosp` and
+/// `hate` put the word "hate" into the index for a passage about cellular
+/// respiration, and lost `triphosphate` — the very continuity the overlap
+/// exists to provide. The boundary therefore has to use the same definition of
+/// a token the indexer does, not whitespace.
+///
+/// The boundary is moved *backwards*, to the start of the word the window
+/// opened inside, so the word is carried whole — losing it is the failure this
+/// exists to prevent. That spends at most one word beyond the requested
+/// `overlap`; a "word" with no boundary at all (a long base64 blob, or a
+/// space-less script) would spend an unbounded amount, so the reach back is
+/// capped at `overlap` characters and the boundary otherwise moves forwards
+/// instead, dropping the fragment.
+///
+/// Scripts written without spaces (Han, Kana) are a single alphanumeric run, so
+/// moving forwards would consume the whole window. There the raw start is kept:
+/// some overlap beats none, and it is what those scripts already got.
+fn overlap_start(prev: &[char], start: usize, overlap: usize) -> usize {
+    if start == 0 || !prev[start - 1].is_alphanumeric() {
+        return start; // already at a boundary
+    }
+    // Backwards to the start of the partial word, within budget.
+    let mut back = start;
+    while back > 0 && prev[back - 1].is_alphanumeric() {
+        back -= 1;
+        if start - back > overlap {
+            break; // too far: this is not a word, fall through
+        }
+    }
+    if start - back <= overlap && (back == 0 || !prev[back - 1].is_alphanumeric()) {
+        return back;
+    }
+    // Otherwise forwards, past the fragment.
+    let mut fwd = start;
+    while fwd < prev.len() && prev[fwd].is_alphanumeric() {
+        fwd += 1;
+    }
+    if fwd >= prev.len() {
+        start // nothing would be left; keep the window as-is
+    } else {
+        fwd
+    }
 }
 
 fn paragraphs(text: &str) -> Vec<String> {
@@ -202,6 +259,53 @@ fn recursive(text: &str, target: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlap_does_not_begin_mid_token() {
+        // Regression: the overlap window was `overlap` raw characters of the
+        // previous chunk, so it could open inside a word. Indexing tokenises on
+        // runs of alphanumerics, so the fragment became a term that appears
+        // nowhere in the source — `triphosphate` split as `triphosp`/`hate`
+        // put the real English word "hate" into a document about cellular
+        // respiration, and lost the term the overlap existed to preserve.
+        let text = "alpha beta gamma\n\ndelta epsilon";
+        let out = chunk_with_overlap(text, ChunkStrategy::Paragraph, 8);
+        assert_eq!(out.len(), 2);
+        let second = &out[1];
+        // The carried-over context starts at a whole word.
+        assert!(
+            second.starts_with("beta gamma "),
+            "overlap began mid-token: {second:?}"
+        );
+        // And no token exists in the chunk that is absent from the source.
+        for token in second.split(|c: char| !c.is_alphanumeric()) {
+            if token.is_empty() {
+                continue;
+            }
+            assert!(
+                text.contains(token),
+                "token {token:?} is not in the source text"
+            );
+        }
+    }
+
+    #[test]
+    fn overlap_survives_a_script_without_spaces() {
+        // Japanese has no word spaces and Han characters are alphanumeric, so
+        // the whole tail is a single token. Dropping a "partial token" would
+        // delete the overlap entirely; the raw window is kept instead, which
+        // is the behaviour these scripts already had.
+        let text = "日本語のテキストです\n\n次の段落";
+        let out = chunk_with_overlap(text, ChunkStrategy::Paragraph, 4);
+        assert_eq!(out.len(), 2);
+        // Assert the property, not a hand-counted prefix: the second chunk
+        // carries context from the first in addition to its own text.
+        assert!(
+            out[1].ends_with("次の段落") && out[1].chars().count() > "次の段落".chars().count(),
+            "overlap was dropped for a space-less script: {:?}",
+            out[1]
+        );
+    }
 
     #[test]
     fn paragraph_strategy_splits_on_blank_lines() {
