@@ -7,6 +7,29 @@ platform).
 
 ## [Unreleased]
 
+### Corrected — a ✅ that overstated what works
+
+- **§946 temporal knowledge is now 🟡.** `graph::Node::date` and KQL
+  `BEFORE`/`AFTER` are implemented and correct — the demo graph sets dates and
+  queries them right. But **nothing populates `date` on a graph built by
+  `ckos index`**: `graph::extract` never calls `set_date`, so every temporal
+  query against a user's own session returns 0 results, silently. Found by
+  running the documented KQL examples and asking why `BEFORE 2030-01-01`
+  matched nothing when `FIND *` matched six nodes.
+
+  No date heuristic was added, and the reason is recorded in handbook §4: the
+  obvious rule — attach a year found in a sentence to the entities in it — is
+  ambiguous *by construction*, since in "Vector Labs published the Transformer
+  paper in 2017" the year belongs to the publication, not to the organisation.
+  That is different from a merely imprecise heuristic: the katakana entity rule
+  shipped because it measured precision 1.00, whereas here no version is right
+  in principle. The lift condition (an explicit `meta.date` on ingested
+  documents, needing no heuristic at all) is written down instead.
+
+  Every other documented KQL construct was exercised and works: `FIND`,
+  quoted-text and kind selectors, `RELATED … VIA`, nested `FILTER` with
+  `AND`/`OR`/`NOT`, `ORDER BY … DESC`, `LIMIT`, and all three `RETURN` shapes.
+
 ### Added
 
 - **Generated-input invariant tests for the retrieval metrics.** Musk's last
