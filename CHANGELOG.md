@@ -87,6 +87,18 @@ platform).
 
 ### Fixed
 
+- **`ckos eval` reported `nDCG@10 -0.000` for a query that found nothing**,
+  while every sibling metric printed `0.000` on the same input. Rust's
+  `Sum for f32` folds from `-0.0` — the true additive identity, chosen so signed
+  zeros survive — so an *empty* ranking sums to `-0.0`, whereas a non-empty one
+  reaches `+0.0` via `-0.0 + 0.0`. Arithmetically harmless, and invisible to the
+  range invariants added above because `-0.0 == 0.0` compares true.
+
+  Fixed where the ratio is formed, with a test asserting no metric is a negative
+  zero. Small, but this is the measuring instrument: a tool that prints a
+  negative score for a quantity defined on `[0, 1]` invites doubt about the
+  numbers that do matter.
+
 - **`keywords` returned whole Japanese sentences as "keywords".** The third and
   last consumer of "what is a term" still using its own rule. `compress_document`
   recorded them as a document's extracted concepts:
