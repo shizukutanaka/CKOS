@@ -87,6 +87,46 @@ platform).
 
 ### Fixed
 
+- **Chunk overlap cut words in half, putting terms into the index that appear
+  nowhere in the corpus.** `chunk_with_overlap` prefixed each chunk with the
+  trailing *N characters* of its predecessor, with no regard for where words
+  end. Indexing tokenises on runs of alphanumerics, so a fragment becomes a
+  term in its own right.
+
+  Reproduced end-to-end with `ckos index --chunk 240 --overlap 40`, where
+  `adenosine triphosphate` split as `triphosp` / `hate`:
+
+  ```
+  $ ckos search . hate
+  1 hit(s): corpus/doc.md#4 — hate for cellular respiration processes…
+  $ grep -c hate corpus/doc.md
+  0
+  ```
+
+  Two harms. The index gained **`hate`** — a real English word, with an
+  unrelated meaning, attached to a passage about cellular respiration; and
+  `triphosphate` was lost from the chunk that continues its sentence, which is
+  precisely the continuity the overlap exists to provide.
+
+  Fixed by moving the window boundary to the start of the word it opened
+  inside, so the word is carried whole — using the *tokeniser's* definition of a
+  word (`is_alphanumeric`) rather than whitespace, since that is what the index
+  will split on. The reach back is capped at `overlap` characters so a
+  boundary-less run (a base64 blob) cannot spend an unbounded amount; beyond the
+  cap the boundary moves forwards and drops the fragment instead. Scripts
+  written without spaces (Han, Kana) are one long alphanumeric run, where moving
+  forwards would consume the whole window — those keep the raw window, the
+  behaviour they already had, and a test pins it.
+
+  | | before | after |
+  |---|---|---|
+  | chunk #4 begins | `hate for cellular…` | `triphosphate for cellular…` |
+  | `search hate` | 1 hit | no results |
+  | `search triphosphate` | 1 hit (#3) | 2 hits (#3, #4) |
+
+  So the fix removes a false positive *and* improves recall — the overlap now
+  does the job it was documented to do.
+
 - **`--lambda NaN` silently switched off the diversification it was asking
   for, and `--lambda 5` was accepted despite the flag promising `0.0..=1.0`.**
   Third instance of the NaN class, found by sweeping every remaining bounded
