@@ -3,6 +3,13 @@
 //! Collects per-task execution metrics — latency, tokens, derived token rate —
 //! and aggregates them so the scheduler can optimise (§913): e.g. bias
 //! `runtime_fit` toward the runtime with the best observed latency.
+//!
+//! Latency is stored in **nanoseconds** — the resolution `Instant` actually
+//! provides. A local runtime serves a task in hundreds of nanoseconds, so
+//! millisecond storage truncated every such sample to zero and the aggregates
+//! then reported a *measured* 0 ms / 0 tok/s for work that had really run.
+//! Rates are `Option`: `None` means "nothing to divide by", which is not the
+//! same statement as a throughput of zero.
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -24,19 +31,27 @@ const DEFAULT_MAX_SAMPLES: usize = 10_000;
 pub struct TaskMetrics {
     /// Runtime that served the task (§900).
     pub runtime: String,
-    /// Wall-clock latency in milliseconds.
-    pub latency_ms: u64,
+    /// Wall-clock latency in nanoseconds. Finer than the millisecond the
+    /// display uses, because sub-millisecond work is still work.
+    pub latency_ns: u64,
     /// Tokens produced.
     pub tokens: usize,
 }
 
 impl TaskMetrics {
-    /// Tokens per second; 0.0 when latency is unknown.
-    pub fn tokens_per_sec(&self) -> f64 {
-        if self.latency_ms == 0 {
-            0.0
+    /// Latency in milliseconds, for display. Fractional: 83 µs is `0.083`.
+    pub fn latency_ms(&self) -> f64 {
+        self.latency_ns as f64 / 1_000_000.0
+    }
+
+    /// Tokens per second, or `None` when the elapsed time is too small to
+    /// measure (a zero denominator). Reporting `0.0` there would state the
+    /// opposite of the truth — that instant work was infinitely slow.
+    pub fn tokens_per_sec(&self) -> Option<f64> {
+        if self.latency_ns == 0 {
+            None
         } else {
-            self.tokens as f64 * 1000.0 / self.latency_ms as f64
+            Some(self.tokens as f64 * 1_000_000_000.0 / self.latency_ns as f64)
         }
     }
 }
@@ -101,18 +116,20 @@ impl InMemoryTelemetry {
         if g.is_empty() {
             return None;
         }
-        let sum: u64 = g.iter().map(|m| m.latency_ms).sum();
-        Some(sum as f64 / g.len() as f64)
+        let sum: u64 = g.iter().map(|m| m.latency_ns).sum();
+        Some(sum as f64 / g.len() as f64 / 1_000_000.0)
     }
 
-    /// Mean latency for a specific runtime, or `None` if it has no samples.
-    /// Lets the scheduler bias `runtime_fit` toward faster runtimes (§913).
-    pub fn mean_latency_for(&self, runtime: &str) -> Option<f64> {
+    /// Mean latency **in nanoseconds** for a specific runtime, or `None` if it
+    /// has no samples. Lets the scheduler bias `runtime_fit` toward faster
+    /// runtimes (§913) — in the unit the samples are stored in, so two
+    /// sub-millisecond runtimes remain distinguishable.
+    pub fn mean_latency_ns_for(&self, runtime: &str) -> Option<f64> {
         let g = lock_recover(&self.samples);
         let matching: Vec<u64> = g
             .iter()
             .filter(|m| m.runtime == runtime)
-            .map(|m| m.latency_ms)
+            .map(|m| m.latency_ns)
             .collect();
         if matching.is_empty() {
             return None;
@@ -120,15 +137,18 @@ impl InMemoryTelemetry {
         Some(matching.iter().sum::<u64>() as f64 / matching.len() as f64)
     }
 
-    /// Aggregate tokens-per-second across all samples.
-    pub fn mean_tokens_per_sec(&self) -> f64 {
+    /// Aggregate tokens-per-second across all samples, or `None` when there is
+    /// nothing to divide by (no samples, or no measurable elapsed time). Same
+    /// contract as [`InMemoryTelemetry::mean_latency_ms`]: absence of data is
+    /// reported as absence, not as the number zero.
+    pub fn mean_tokens_per_sec(&self) -> Option<f64> {
         let g = lock_recover(&self.samples);
-        let total_ms: u64 = g.iter().map(|m| m.latency_ms).sum();
+        let total_ns: u64 = g.iter().map(|m| m.latency_ns).sum();
         let total_tokens: usize = g.iter().map(|m| m.tokens).sum();
-        if total_ms == 0 {
-            0.0
+        if total_ns == 0 {
+            None
         } else {
-            total_tokens as f64 * 1000.0 / total_ms as f64
+            Some(total_tokens as f64 * 1_000_000_000.0 / total_ns as f64)
         }
     }
 }
@@ -152,10 +172,59 @@ mod tests {
     fn token_rate_is_computed() {
         let m = TaskMetrics {
             runtime: "echo".into(),
-            latency_ms: 500,
+            latency_ns: 500_000_000,
             tokens: 10,
         };
-        assert_eq!(m.tokens_per_sec(), 20.0);
+        assert_eq!(m.tokens_per_sec(), Some(20.0));
+        assert_eq!(m.latency_ms(), 500.0);
+    }
+
+    #[test]
+    fn sub_millisecond_work_is_measured_not_truncated() {
+        // Regression: latency was stored in whole milliseconds, so a task that
+        // really took 83 µs was recorded as 0 — and the aggregates then stated
+        // a *measured* zero latency and zero throughput. Both are now real
+        // numbers, and an unmeasurable sample says so instead of claiming 0.
+        let m = TaskMetrics {
+            runtime: "echo".into(),
+            latency_ns: 83_000,
+            tokens: 10,
+        };
+        assert!((m.latency_ms() - 0.083).abs() < 1e-9);
+        let rate = m.tokens_per_sec().expect("83 µs is measurable");
+        assert!(rate > 100_000.0, "10 tokens in 83 µs is fast: {rate}");
+
+        let unmeasurable = TaskMetrics {
+            runtime: "echo".into(),
+            latency_ns: 0,
+            tokens: 10,
+        };
+        assert_eq!(unmeasurable.tokens_per_sec(), None, "no denominator");
+
+        // Two sub-millisecond runtimes stay distinguishable, which whole
+        // milliseconds could not express (both would have been 0).
+        let t = InMemoryTelemetry::new();
+        t.record(TaskMetrics {
+            runtime: "quick".into(),
+            latency_ns: 4_000,
+            tokens: 1,
+        });
+        t.record(TaskMetrics {
+            runtime: "slower".into(),
+            latency_ns: 830_000,
+            tokens: 1,
+        });
+        assert_eq!(t.mean_latency_ns_for("quick"), Some(4_000.0));
+        assert_eq!(t.mean_latency_ns_for("slower"), Some(830_000.0));
+    }
+
+    #[test]
+    fn an_empty_aggregator_reports_absence_not_zero() {
+        // `mean_latency_ms` always said `None` for "no samples"; the rate said
+        // `0.0`, which reads as a measurement. They now agree.
+        let t = InMemoryTelemetry::new();
+        assert_eq!(t.mean_latency_ms(), None);
+        assert_eq!(t.mean_tokens_per_sec(), None);
     }
 
     #[test]
@@ -164,7 +233,7 @@ mod tests {
         for latency in [1, 2, 3] {
             t.record(TaskMetrics {
                 runtime: "echo".into(),
-                latency_ms: latency,
+                latency_ns: latency * 1_000_000,
                 tokens: 1,
             });
         }
@@ -178,18 +247,20 @@ mod tests {
         let t = InMemoryTelemetry::new();
         t.record(TaskMetrics {
             runtime: "fast".into(),
-            latency_ms: 10,
+            latency_ns: 10_000_000,
             tokens: 5,
         });
         t.record(TaskMetrics {
             runtime: "slow".into(),
-            latency_ms: 90,
+            latency_ns: 90_000_000,
             tokens: 5,
         });
         assert_eq!(t.len(), 2);
         assert_eq!(t.total_tokens(), 10);
         assert_eq!(t.mean_latency_ms(), Some(50.0));
-        assert_eq!(t.mean_latency_for("fast"), Some(10.0));
-        assert_eq!(t.mean_latency_for("missing"), None);
+        assert_eq!(t.mean_latency_ns_for("fast"), Some(10_000_000.0));
+        assert_eq!(t.mean_latency_ns_for("missing"), None);
+        // 10 tokens over 100 ms total.
+        assert_eq!(t.mean_tokens_per_sec(), Some(100.0));
     }
 }

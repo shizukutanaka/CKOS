@@ -249,14 +249,23 @@ fn status(state: &AppState) -> Response {
             "total_tokens",
             state.engine.telemetry().total_tokens().into(),
         ),
+        // `null`, not 0, when there is nothing to report — the dashboard
+        // renders that as "—" instead of claiming a measured zero.
         (
             "mean_latency_ms",
             state
                 .engine
                 .telemetry()
                 .mean_latency_ms()
-                .unwrap_or(0.0)
-                .into(),
+                .map_or(Json::Null, Json::from),
+        ),
+        (
+            "mean_tokens_per_sec",
+            state
+                .engine
+                .telemetry()
+                .mean_tokens_per_sec()
+                .map_or(Json::Null, Json::from),
         ),
         ("cached_sessions", cached_sessions.into()),
         ("cached_queries", cached_queries.into()),

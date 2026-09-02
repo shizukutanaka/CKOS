@@ -52,15 +52,19 @@ impl Default for ScoreFactors {
 /// Map an observed runtime latency to a `runtime_fit` factor in `0.0..=1.0`
 /// (closing the telemetry → scheduler loop, §904 → §913).
 ///
-/// At or below `target_latency_ms` the runtime is a perfect fit (1.0); fit
-/// degrades proportionally as observed latency exceeds the target. An unknown
-/// (zero) latency optimistically returns 1.0.
-pub fn runtime_fit(observed_latency_ms: u64, target_latency_ms: u64) -> f32 {
-    if observed_latency_ms == 0 {
+/// At or below `target_latency_ns` the runtime is a perfect fit (1.0); fit
+/// degrades proportionally as observed latency exceeds the target. An
+/// unmeasurably fast (zero) latency optimistically returns 1.0.
+///
+/// **Nanoseconds**, matching `TaskMetrics::latency_ns`. In milliseconds every
+/// local runtime rounded to 0 and took the "unknown" branch, so the loop could
+/// not tell a 4 µs runtime from an 830 µs one against a sub-millisecond target.
+pub fn runtime_fit(observed_latency_ns: u64, target_latency_ns: u64) -> f32 {
+    if observed_latency_ns == 0 {
         return 1.0;
     }
-    let target = target_latency_ms.max(1) as f32;
-    (target / observed_latency_ms as f32).min(1.0)
+    let target = target_latency_ns.max(1) as f32;
+    (target / observed_latency_ns as f32).min(1.0)
 }
 
 impl ScoreFactors {
@@ -208,9 +212,13 @@ mod tests {
 
     #[test]
     fn latency_maps_to_runtime_fit() {
-        assert_eq!(runtime_fit(0, 100), 1.0); // unknown → optimistic
+        assert_eq!(runtime_fit(0, 100), 1.0); // unmeasurable → optimistic
         assert_eq!(runtime_fit(50, 100), 1.0); // faster than target → perfect
         assert_eq!(runtime_fit(200, 100), 0.5); // 2x slower → half fit
+                                                // Sub-millisecond latencies are now separable; in milliseconds both of
+                                                // these were 0 and scored an identical, uninformative 1.0.
+        assert_eq!(runtime_fit(830, 415), 0.5);
+        assert_eq!(runtime_fit(4, 415), 1.0);
     }
 
     #[test]

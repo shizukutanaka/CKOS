@@ -62,6 +62,43 @@ platform).
 
 ### Fixed
 
+- **Telemetry reported `0.0ms` and `0 tok/s` for work that had really run.**
+  Found by interrogating the run summary rather than trusting it: token counts
+  moved with the input (1→9), so the pipeline was live, yet throughput was `0
+  tok/s` on every query. A task's real duration is **3.6 µs – 83 µs** (measured;
+  a 22× spread between samples), and `latency_ms` stored whole milliseconds via
+  `as_millis()`, so every sample truncated to `0`.
+
+  Two defects with one root — the layer could not represent what it measured:
+
+  1. **Truncation.** All sub-millisecond work — which is *all* local-runtime
+     work — recorded as zero.
+  2. **Sentinel conflation.** `tokens_per_sec`/`mean_tokens_per_sec` returned a
+     bare `0.0` for "nothing to divide by", while the sibling
+     `mean_latency_ms()` in the same `impl` honestly returned `Option`. So
+     `mean_latency_ms()` answered `Some(0.0)` — asserting a *measured* zero —
+     and the CLI and dashboard printed it as fact.
+
+  Fix: record **nanoseconds** (`latency_ns`, the resolution `Instant` already
+  provides), keep milliseconds as the display unit via `latency_ms()`, and
+  return `Option` from both rate methods so absence is stated as absence.
+  `runtime_fit` and `mean_latency_ns_for` move to the same unit — in
+  milliseconds every local runtime hit the function's "unknown latency → 1.0"
+  branch, so the §904→§913 loop could not separate a 4 µs runtime from an
+  830 µs one. `recommended_factors` keeps its millisecond argument and converts
+  at the boundary. The CLI now picks a readable unit (`623ns`, `1.4µs`,
+  `5.3ms`) instead of printing `0.0ms`, and `/api/status` sends `null` — with
+  the dashboard rendering `—` — rather than a zero it did not measure. It also
+  gained `mean_tokens_per_sec`, locked into the dashboard-contract test.
+
+  Before: `telemetry: 3 tokens, mean latency 0.0ms, 0 tok/s`.
+  After: `telemetry: 3 tokens, mean latency 623ns, 4815409 tok/s`.
+
+  Also examined and found **honest**: the constant `consensus score 95/100`.
+  `HeuristicReflector` scores structural properties (verified / has agent /
+  non-empty), so identically-shaped runs *should* score identically; making it
+  vary with content would be label-moving, not a fix.
+
 - **`CitationCheck` rejected code: `argv[0]` was an "undefined citation".**
   Found by measuring the other headline claim, §899 independent verification,
   the way retrieval was measured: a 27-case battery through `ckos verify`
