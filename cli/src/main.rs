@@ -387,36 +387,27 @@ fn cmd_run(rest: &[String]) -> ExitCode {
                 let graph_path = Path::new(dir).join(GRAPH_FILE);
                 // If an existing graph can't be read, skip the update rather than
                 // clobber a possibly-recoverable file with a fresh one.
-                match GraphStore::load(&graph_path) {
-                    Ok(mut graph) => {
-                        // Extract from the intent (which carries the proper nouns
-                        // the user named) as well as the step outputs.
-                        let mut text = intent.clone();
-                        for r in &results {
-                            text.push('\n');
-                            text.push_str(&r.output);
-                        }
-                        // Record where this knowledge came from (§947) so KQL
-                        // `RETURN Sources` is meaningful on the session graph.
-                        let report = graph.extract_concepts_with_provenance(
-                            &text,
-                            Some(&format!("run:{intent}")),
-                        );
-                        match GraphStore::save(&graph_path, &graph) {
-                            Ok(()) => println!(
-                                "graph updated: +{} concept(s), +{} relation(s) ({} total node(s))",
-                                report.nodes_added,
-                                report.edges_added,
-                                graph.len()
-                            ),
-                            Err(e) => eprintln!(
-                                "warning: could not save graph to {}: {e}",
-                                graph_path.display()
-                            ),
-                        }
+                match GraphStore::update(&graph_path, |graph| {
+                    // Extract from the intent (which carries the proper nouns
+                    // the user named) as well as the step outputs.
+                    let mut text = intent.clone();
+                    for r in &results {
+                        text.push('\n');
+                        text.push_str(&r.output);
                     }
+                    // Record where this knowledge came from (§947) so KQL
+                    // `RETURN Sources` is meaningful on the session graph.
+                    let report = graph
+                        .extract_concepts_with_provenance(&text, Some(&format!("run:{intent}")));
+                    (report, graph.len())
+                }) {
+                    Ok((report, total)) => println!(
+                        "graph updated: +{} concept(s), +{} relation(s) ({total} total node(s))",
+                        report.nodes_added, report.edges_added
+                    ),
                     Err(e) => eprintln!(
-                        "warning: could not load existing graph ({e}); skipping graph update"
+                        "warning: could not update graph at {} ({e}); skipping graph update",
+                        graph_path.display()
                     ),
                 }
             }
@@ -931,6 +922,17 @@ fn cmd_index(rest: &[String]) -> ExitCode {
     // Accumulate into any graph already saved, exactly as `ckos run --session`
     // and `ckos graph --session` do — never start empty and clobber it.
     let graph_path = Path::new(dir.as_str()).join(GRAPH_FILE);
+    // Held until this function returns, so the load below and the save at the
+    // end are one critical section. Loading and saving without it let two
+    // concurrent `ckos index` runs clobber each other: measured, six runs on
+    // one session kept as few as 2 of 12 concepts.
+    let _graph_lock = match GraphLock::acquire(&graph_path) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("error: could not lock {}: {e}", graph_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
     let existing = match GraphStore::load(&graph_path) {
         Ok(g) => g,
         Err(e) => {
@@ -1073,6 +1075,19 @@ fn cmd_graph(rest: &[String]) -> ExitCode {
     // from-scratch extraction over only the session's *documents*, which
     // discards any concepts `ckos run --session` had already added from
     // intents/outputs never themselves persisted as documents.
+    // Held for the rest of the function so this load and the save below are one
+    // critical section, as in `index`: without it a concurrent writer's nodes
+    // are lost when whichever finishes last writes the whole file.
+    let _graph_lock = match session_dir {
+        Some(dir) => match GraphLock::acquire(Path::new(dir).join(GRAPH_FILE)) {
+            Ok(l) => Some(l),
+            Err(e) => {
+                eprintln!("error: could not lock the session graph: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
+    };
     let mut graph = match session_dir {
         Some(dir) => GraphStore::load(Path::new(dir).join(GRAPH_FILE)).unwrap_or_else(|e| {
             eprintln!("warning: could not load existing graph ({e}); starting fresh");
@@ -1237,20 +1252,15 @@ fn cmd_gc(rest: &[String]) -> ExitCode {
     // persisted knowledge graph (nodes with no edges in either direction).
     let graph_path = Path::new(dir.as_str()).join(GRAPH_FILE);
     if graph_path.exists() {
-        let mut graph = match GraphStore::load(&graph_path) {
-            Ok(g) => g,
+        // Under the lock: sweeping is a read-modify-write like every other
+        // graph mutation, and an interleaved writer would lose its nodes.
+        let swept = match GraphStore::update(&graph_path, |graph| graph.remove_orphans()) {
+            Ok(n) => n,
             Err(e) => {
-                eprintln!("error: could not load {}: {e}", graph_path.display());
+                eprintln!("error: could not update {}: {e}", graph_path.display());
                 return ExitCode::FAILURE;
             }
         };
-        let swept = graph.remove_orphans();
-        if swept > 0 {
-            if let Err(e) = GraphStore::save(&graph_path, &graph) {
-                eprintln!("error: could not save {}: {e}", graph_path.display());
-                return ExitCode::FAILURE;
-            }
-        }
         println!("swept {swept} orphaned graph node(s)");
     }
     ExitCode::SUCCESS

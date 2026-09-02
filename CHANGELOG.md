@@ -129,6 +129,37 @@ platform).
 
 ### Fixed
 
+- **Concurrent writers silently destroyed most of a session's knowledge graph.**
+  Persisting the graph is a read-modify-write — load the file, extract concepts
+  into it, save the whole thing — and the two halves were separate calls at
+  every site. Interleaved writers therefore lost each other's work: the last
+  save wins and discards the rest, with no error anywhere.
+
+  Measured, not theorised. Six requests to one session:
+
+  | | concepts kept | expected |
+  |---|---|---|
+  | 6 concurrent `POST /api/run` | **6** | 12 |
+  | 6 concurrent `ckos index` | **2, 2, 4** (three runs) | 12 |
+  | the same six, sequentially | 12 ✓ | 12 |
+
+  The HTTP figure is the serious one: `ckos serve` is explicitly
+  multi-connection, so **two browser tabs clicking Run were enough** to throw
+  away half the graph.
+
+  Fixed with `GraphStore::update`, which holds a new `GraphLock` across
+  load-mutate-save, and every persisting site now goes through it or holds the
+  lock for its own critical section (`/api/run`, `ckos run --session`,
+  `ckos index`, `ckos graph --session`, `ckos gc`). A lock **file** rather than
+  a `Mutex`, because the writers are separate processes as often as separate
+  threads — a CLI run against a session while `ckos serve` is up is the ordinary
+  case, and no in-process lock can see it. `create_new` is the atomic primitive
+  std offers; a lock older than a minute is treated as abandoned by a killed
+  process and broken, so a crash cannot wedge a session permanently.
+
+  After: 12/12 concepts on every concurrent run, HTTP and CLI, with no lock file
+  left behind.
+
 - **The browser dashboard rendered one tab button and nothing else — it threw
   on every page load.** Found by doing the one thing no test in this repository
   does: opening the page in a browser.

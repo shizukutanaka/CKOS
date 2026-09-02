@@ -24,6 +24,81 @@ use std::path::Path;
 
 const HEADER: &str = "# CKOS knowledge graph v1";
 
+/// An advisory cross-process lock over one session's graph file.
+///
+/// Persisting the graph is a read-modify-write: load, extract concepts into it,
+/// save the whole file. Two writers that interleave therefore lose each other's
+/// work — the last save wins and silently discards everything the other added.
+/// Measured before this existed: six concurrent `POST /api/run` calls against
+/// one session left **6 of 12** concepts, and six concurrent `ckos index` runs
+/// left as few as **2 of 12**.
+///
+/// A lock *file* rather than a `Mutex`, because the writers are separate
+/// processes as often as separate threads: a CLI run while `ckos serve` is up
+/// on the same session is the ordinary case, and no in-process lock can see
+/// that. `create_new` is the atomic primitive std offers for this.
+///
+/// A lock older than one minute is treated as abandoned by a killed process and
+/// broken, so a crash cannot wedge a session permanently.
+pub struct GraphLock {
+    path: std::path::PathBuf,
+}
+
+/// How long to wait for another writer before giving up.
+const LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// A lock file older than this is assumed to be from a process that died.
+const STALE_LOCK: std::time::Duration = std::time::Duration::from_secs(60);
+
+impl GraphLock {
+    /// Take the lock guarding `graph_path`, waiting for a concurrent writer.
+    pub fn acquire(graph_path: impl AsRef<Path>) -> io::Result<GraphLock> {
+        let graph_path = graph_path.as_ref();
+        let path = match graph_path.parent() {
+            Some(dir) => dir.join(".graph.lock"),
+            None => std::path::PathBuf::from(".graph.lock"),
+        };
+        let start = std::time::Instant::now();
+        loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(_) => return Ok(GraphLock { path }),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                    if Self::is_stale(&path) {
+                        // Best effort: if another waiter removes it first, the
+                        // next create_new simply succeeds for one of us.
+                        let _ = std::fs::remove_file(&path);
+                        continue;
+                    }
+                    if start.elapsed() >= LOCK_TIMEOUT {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            format!("another writer holds {}", path.display()),
+                        ));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(15));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    fn is_stale(path: &Path) -> bool {
+        std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .map(|t| t.elapsed().map(|age| age > STALE_LOCK).unwrap_or(false))
+            .unwrap_or(false)
+    }
+}
+
+impl Drop for GraphLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 /// File-based persistence for a [`KnowledgeGraph`].
 pub struct GraphStore;
 
@@ -117,6 +192,22 @@ impl GraphStore {
         std::fs::rename(&tmp, path)
     }
 
+    /// Load, mutate and save under [`GraphLock`], so two writers cannot lose
+    /// each other's work. Every persisted mutation should go through this
+    /// rather than pairing `load` and `save` by hand — the gap between them is
+    /// exactly where the updates were lost.
+    pub fn update<F, T>(path: impl AsRef<Path>, f: F) -> io::Result<T>
+    where
+        F: FnOnce(&mut KnowledgeGraph) -> T,
+    {
+        let path = path.as_ref();
+        let _lock = GraphLock::acquire(path)?;
+        let mut graph = Self::load(path)?;
+        let out = f(&mut graph);
+        Self::save(path, &graph)?;
+        Ok(out)
+    }
+
     /// Load a graph from `path`. A missing file yields an empty graph, so callers
     /// can load unconditionally on startup.
     pub fn load(path: impl AsRef<Path>) -> io::Result<KnowledgeGraph> {
@@ -182,6 +273,50 @@ fn non_empty(s: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_writers_do_not_lose_each_others_nodes() {
+        // Persisting the graph is load-modify-write, and the two halves used to
+        // be called separately: interleaved writers lost each other's work
+        // silently. Measured through the HTTP API before the fix, six
+        // concurrent runs against one session left 6 of 12 concepts; six
+        // concurrent `ckos index` runs left as few as 2 of 12.
+        let dir = std::env::temp_dir().join(format!("ckos-graphlock-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("graph.kg");
+
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    GraphStore::update(&path, |g| {
+                        g.add_node(NodeKind::Concept, format!("Node{i:02}"), 50);
+                    })
+                    .expect("update under lock")
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+
+        let final_graph = GraphStore::load(&path).unwrap();
+        let labels: Vec<String> = final_graph.nodes().map(|n| n.label.clone()).collect();
+        assert_eq!(
+            labels.len(),
+            8,
+            "writers lost each other's nodes: {labels:?}"
+        );
+        for i in 0..8 {
+            assert!(
+                labels.iter().any(|l| l == &format!("Node{i:02}")),
+                "{labels:?}"
+            );
+        }
+        // The lock file must not survive its guard.
+        assert!(!dir.join(".graph.lock").exists(), "lock file leaked");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     use std::sync::atomic::{AtomicU32, Ordering};
 
     /// A temp path removed on drop.

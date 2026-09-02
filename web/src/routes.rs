@@ -357,18 +357,17 @@ fn run(state: &AppState, req: &Request) -> Response {
                     warnings.push(format!("failed to persist session: {e}").into());
                 }
 
+                // Under `GraphStore::update`, so two requests touching one
+                // session cannot lose each other's concepts: load and save used
+                // to be separate calls, and six concurrent runs left 6 of 12.
                 let graph_path = dir.join(GRAPH_FILE);
-                match GraphStore::load(&graph_path) {
-                    Ok(mut graph) => {
-                        graph.extract_concepts_with_provenance(intent, Some("run:intent"));
-                        for r in &results {
-                            graph.extract_concepts_with_provenance(&r.output, Some("run:output"));
-                        }
-                        if let Err(e) = GraphStore::save(&graph_path, &graph) {
-                            warnings.push(format!("failed to save graph: {e}").into());
-                        }
+                if let Err(e) = GraphStore::update(&graph_path, |graph| {
+                    graph.extract_concepts_with_provenance(intent, Some("run:intent"));
+                    for r in &results {
+                        graph.extract_concepts_with_provenance(&r.output, Some("run:output"));
                     }
-                    Err(e) => warnings.push(format!("failed to load graph: {e}").into()),
+                }) {
+                    warnings.push(format!("failed to update graph: {e}").into());
                 }
             }
             Err(e) => {
