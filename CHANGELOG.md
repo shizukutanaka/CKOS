@@ -62,6 +62,37 @@ platform).
 
 ### Fixed
 
+- **`CitationCheck` rejected code: `argv[0]` was an "undefined citation".**
+  Found by measuring the other headline claim, §899 independent verification,
+  the way retrieval was measured: a 27-case battery through `ckos verify`
+  (15 outputs that must fail, 12 that must pass), judged on the exit code and
+  the per-check `FAIL` rows. 14/15 bad outputs failed on the right check (the
+  one pass, `1,000 + 1 = 1,000`, is the documented grouped-number skip, not a
+  defect). 11/12 good outputs passed. The twelfth:
+
+  ```
+  $ ckos verify 'Use the { key } syntax :) and array[0].'
+    citations        FAIL — undefined citation(s): [0]
+  ```
+
+  `citation_markers` took any `[digits]` as a citation, so every subscript —
+  `argv[0]`, `items[1]`, `m[0][1]`; this repository's own sources contain 41
+  — was a dangling reference and the whole output was rejected.
+  `ArithmeticCheck` in the same file already has the token-boundary rule
+  ("only a digit that begins a token, not mid-identifier"); its sibling never
+  got it. Consequential because `CitationCheck` is one of the two checks
+  gating every step of `ckos run` and the dashboard's `/api/run`: a runtime
+  answering a coding question with `sys.argv[0]` had its step marked `Failed`.
+  A verifier that rejects valid output is the failure mode the module's own
+  rules call worse than skipping. Fix: a `[` directly after a token character
+  (alphanumeric, `_`, `]`, `)`) is a subscript and is not a marker; citation
+  markers follow whitespace, punctuation or line start, which is also how
+  definition lines were already found, so nothing else moves. Detection is
+  unchanged — the battery re-run is 14/15 bad → FAIL, **12/12** good → PASS —
+  and `argv[0] proves it [2]` still fails, naming only `[2]`. Regression tests
+  at both layers (`subscripts_are_not_citation_markers`; the CLI verify test
+  now includes a code sample that must exit 0).
+
 - **§929 authorization was fail-open in `ckos run` and `ckos workflow`:
   omitting `--role`/`--token` disabled the gate rather than lowering
   privileges.** Both passed no default role to `resolve_identity`, which meant

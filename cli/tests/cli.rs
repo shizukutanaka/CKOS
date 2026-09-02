@@ -403,6 +403,15 @@ fn verify_fails_on_bad_content() {
 
     let bad = ckos(&["verify", "dangling [9] and password=secret"]);
     assert!(!bad.status.success()); // non-zero exit on verification failure
+
+    // Code is not a citation: a subscript such as `argv[0]` must not be
+    // rejected as an undefined reference (it was, once).
+    let code = ckos(&["verify", "print sys.argv[0] to show the program name"]);
+    assert!(
+        code.status.success(),
+        "subscript rejected: {}",
+        String::from_utf8_lossy(&code.stdout)
+    );
 }
 
 #[test]

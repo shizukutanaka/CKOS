@@ -176,15 +176,28 @@ impl Check for JsonBalanceCheck {
 /// Citation validity (§899): every `[n]` reference in the text must have a
 /// matching definition line (a line whose trimmed start is `[n]`). Output with
 /// no citation markers is skipped.
+///
+/// A `[` glued to the token before it — `argv[0]`, `items[1]`, `m[0][1]` — is
+/// a subscript, not a citation, and is ignored; a marker follows whitespace,
+/// punctuation or the start of a line. Same token-boundary rule as
+/// [`ArithmeticCheck`] (a digit mid-identifier is not an operand): without it
+/// any code in an answer was rejected as an "undefined citation".
 pub struct CitationCheck;
 
-/// Extract the integer inside every `[n]` marker in `text`.
+/// Whether byte `b` can end a token that a following `[` subscripts:
+/// identifier characters and the closers of a preceding index/call.
+fn ends_token(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b']' | b')')
+}
+
+/// Extract the integer inside every `[n]` marker in `text`, skipping
+/// subscripts (a `[` immediately preceded by a token character).
 fn citation_markers(text: &str) -> Vec<u32> {
     let mut out = Vec::new();
     let bytes = text.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'[' {
+        if bytes[i] == b'[' && !(i > 0 && ends_token(bytes[i - 1])) {
             let mut j = i + 1;
             while j < bytes.len() && bytes[j].is_ascii_digit() {
                 j += 1;
@@ -582,6 +595,34 @@ mod tests {
         assert_eq!(report.failures()[0].0, "citations");
         // No citations → skipped.
         assert!(v.verify("plain prose").passed());
+    }
+
+    #[test]
+    fn subscripts_are_not_citation_markers() {
+        // Regression: any `[digits]` was read as a citation marker, so code
+        // such as `argv[0]` or `items[1]` was rejected as an "undefined
+        // citation" — the check refused valid output, the one failure mode
+        // this module's own rules call worse than skipping. A `[` glued to a
+        // token character is a subscript; a citation marker follows
+        // whitespace, punctuation or the start of a line.
+        let v = Verifier::new().with_check(Box::new(CitationCheck));
+        let r = v.verify("Read sys.argv[0] and items[1].");
+        assert_eq!(r.results[0].1, Verdict::Skip, "subscripts only: {r:?}");
+        let r = v.verify("matrix[0][1] is the corner");
+        assert_eq!(r.results[0].1, Verdict::Skip, "chained subscript: {r:?}");
+        // Detection power preserved.
+        assert!(!v.verify("as shown in [2]").passed());
+        assert!(v.verify("see [1].\n[1] Smith").passed());
+        // A subscript beside a genuine dangling marker: only the marker is
+        // reported.
+        let r = v.verify("argv[0] proves it [2]");
+        match &r.results[0].1 {
+            Verdict::Fail(why) => {
+                assert!(why.contains("[2]"), "{why}");
+                assert!(!why.contains('0'), "subscript reported as citation: {why}");
+            }
+            other => panic!("expected Fail, got {other:?}"),
+        }
     }
 
     #[test]
