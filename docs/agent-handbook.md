@@ -212,6 +212,26 @@ module is clean:
 These are NOT bugs. Each is parked with a reason; do not wire them up without
 meeting the stated condition (that would be label-moving, §1):
 
+- **Extraction never dates a node, so KQL `BEFORE`/`AFTER` are empty on real
+  sessions.** `graph::Node::date` and the temporal clauses work — the demo
+  graph sets dates and queries them correctly — but `graph::extract` has no
+  producer for `date`, so a graph built by `ckos index` has none and every
+  temporal query returns 0 results. Status doc §946 is 🟡 for this reason.
+
+  **Not fixed on purpose.** The obvious heuristic — take a year found in the
+  sentence and attach it to the entities there — is ambiguous *by construction*,
+  not merely imprecise: in "Vector Labs published the Transformer paper in
+  2017" the year belongs to the publication event, arguably to `Transformer`,
+  and not to the organisation. Any rule assigns it to all three. Contrast the
+  katakana entity heuristic, which shipped because it measured precision 1.00;
+  here there is no version to measure that is right in principle.
+
+  **Lift condition:** a relation-aware extractor that can attach a date to an
+  *edge* or event rather than to every co-occurring node — or an explicit
+  `meta.date` on ingested documents, which would be exact and needs no
+  heuristic at all. The second is the cheaper half and is the one to do first
+  if a user asks for temporal queries.
+
 - **The library's `Engine` still defaults to no policy** (`access: None`,
   sdk/src/engine.rs) while every CLI command now defaults to `guest`. That
   split is intentional and each half says so where it is made: attaching a
