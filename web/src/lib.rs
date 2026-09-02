@@ -538,6 +538,34 @@ mod tests {
     }
 
     #[test]
+    fn the_dashboard_builds_its_tabs_after_the_builders_they_need() {
+        // Regression: the tab-building loop sat at the top of the script while
+        // `const BUILDERS` was declared ~450 lines below. A `const` is hoisted
+        // but unusable until its declaration is evaluated, so the first
+        // `buildPanel()` threw `ReferenceError: Cannot access 'BUILDERS' before
+        // initialization`, which killed the whole top-level script: the page
+        // rendered one tab button, no panels, and no data. Every Rust test
+        // passed throughout, because none of them execute this file — it was
+        // found by loading the page in a browser.
+        //
+        // A tripwire, not a proof: this pins the one ordering that broke rather
+        // than validating the script. Executing it would need a browser in the
+        // test path, which this workspace deliberately does not take on.
+        let page = crate::dashboard::PAGE;
+        let builders = page
+            .find("const BUILDERS")
+            .expect("dashboard defines a BUILDERS table");
+        let build_loop = page
+            .find("for (const t of TABS)")
+            .expect("dashboard builds its tab bar from TABS");
+        assert!(
+            builders < build_loop,
+            "the tab-building loop runs before `const BUILDERS` is initialised, \
+             so the dashboard will throw on load and render nothing"
+        );
+    }
+
+    #[test]
     fn api_response_shapes_are_locked_to_what_the_dashboard_reads() {
         // Tripwire, not a proof. `dashboard.html` is a static string compiled
         // into this binary that reads response fields *by name*, and nothing

@@ -234,15 +234,7 @@ const TABS = [
 
 const tabsNav = $("#tabs");
 const panels = $("#panels");
-for (const t of TABS) {
-  const btn = el("button", {
-    text: t.label,
-    onclick: () => selectTab(t.id),
-  });
-  btn.dataset.tab = t.id;
-  tabsNav.append(btn);
-  panels.append(buildPanel(t.id));
-}
+// The tab bar is built at the bottom of this script, not here — see buildTabs().
 
 function selectTab(id) {
   for (const b of tabsNav.children) b.classList.toggle("active", b.dataset.tab === id);
@@ -703,6 +695,22 @@ const BUILDERS = {
   verify: panelVerify,
   system: panelSystem,
 };
+
+// Build the tab bar and its panels. This must run *after* `BUILDERS` above:
+// it used to sit at the top of the script, where a `const` declared further
+// down is still in its temporal dead zone, so the very first `buildPanel()`
+// threw `ReferenceError: Cannot access 'BUILDERS' before initialization` and
+// killed the rest of the script — the page rendered one tab button and nothing
+// else. No Rust test noticed, because none of them execute this file.
+for (const t of TABS) {
+  const btn = el("button", {
+    text: t.label,
+    onclick: () => selectTab(t.id),
+  });
+  btn.dataset.tab = t.id;
+  tabsNav.append(btn);
+  panels.append(buildPanel(t.id));
+}
 
 selectTab(TABS.some((t) => t.id === location.hash.slice(1)) ? location.hash.slice(1) : "run");
 </script>

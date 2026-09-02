@@ -110,6 +110,41 @@ platform).
 
 ### Fixed
 
+- **The browser dashboard rendered one tab button and nothing else — it threw
+  on every page load.** Found by doing the one thing no test in this repository
+  does: opening the page in a browser.
+
+  ```
+  PAGEERROR: Cannot access 'BUILDERS' before initialization
+      at buildPanel (:255)
+  ```
+
+  The tab-building loop ran at the top of the script; `const BUILDERS`, the
+  table mapping each tab to its panel builder, is declared ~450 lines below. A
+  `const` is hoisted but unusable until its declaration is evaluated, so the
+  first `buildPanel()` threw — and an uncaught throw at top level **abandons the
+  rest of the script**. Result: one tab button, no panels, no data, on every
+  visit. Six of the seven tabs (Search, History, KQL, Graph, Verify, System)
+  never existed in the DOM.
+
+  Pre-existing, not a regression from this round's dashboard edits: the same
+  ordering is present in every commit that has touched the file.
+
+  Fixed by moving the loop to the bottom, beside the `selectTab()` call that
+  already initialises the page. Verified in headless Chromium: all seven tabs
+  and all seven panels now render, with no page errors.
+
+  **Why no test caught it.** `verify-quickstart.sh` checks that the routes
+  answer, and `api_response_shapes_are_locked_to_what_the_dashboard_reads`
+  checks that the JSON keys the page reads still exist — but nothing *executes*
+  the page. Added a tripwire asserting `const BUILDERS` precedes the loop; it is
+  a pin on the one ordering that broke, not script validation, because putting a
+  browser in the test path is a dependency this workspace deliberately avoids.
+
+  (The accompanying console 404 was checked and is the browser's automatic
+  `/favicon.ico` request — no page impact, and inventing a favicon to silence it
+  would be noise.)
+
 - **`ckos history` reported every reflection as `[FAIL]`.** Found by reading
   the output of an unaudited command rather than its code:
 
