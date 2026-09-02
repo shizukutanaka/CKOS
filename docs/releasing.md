@@ -6,10 +6,16 @@ repository settings (verified — each channel is permission-denied). The
 working branch prepares a release; a human publishes it. That split is the
 approval gate: nothing becomes a release until you act.
 
-The release itself is already prepared. `Cargo.toml` carries the version,
-`CHANGELOG.md` has the dated section, and every commit on `main` passed the
-gates (`./scripts/check.sh`: format, clippy `-D warnings`, rustdoc
-`-D warnings`, status-doc symbols, deploy manifests, full test suite).
+Every commit on `main` passed the gates (`./scripts/check.sh`: format, clippy
+`-D warnings`, rustdoc `-D warnings`, status-doc symbols, deploy manifests,
+full test suite).
+
+**A release is not automatically ready to tag.** Work lands under
+`## [Unreleased]` in `CHANGELOG.md`, and step 3 below builds the release body by
+extracting the `## [<version>]` section — so tagging while entries are still
+stranded under `[Unreleased]` publishes notes that *omit exactly the work being
+released*. Step 1 closes that gap and `./scripts/check-release-ready.sh`
+enforces it.
 
 **Note what is already true, so nothing below reads as a blocker it isn't.**
 The repository is public, its default branch is `main`, and `main` builds and
@@ -47,7 +53,22 @@ delivery mechanism.
 
 ## Every release
 
-1. Confirm the tree is green at the release commit, and that the documented
+1. **Settle the version and close the changelog.** Decide what this release is
+   (patch/minor/major) from what accumulated under `## [Unreleased]`, set that
+   version in the workspace `Cargo.toml` if it differs, then rename the
+   `## [Unreleased]` heading to `## [X.Y.Z] — YYYY-MM-DD`. Commit it.
+
+   ```sh
+   ./scripts/check-release-ready.sh
+   ```
+
+   This refuses to proceed unless the version in `Cargo.toml` has a **dated**
+   changelog section with entries, nothing is left under `[Unreleased]`, and the
+   tag does not already exist. It is not in `check.sh`, because `[Unreleased]`
+   is supposed to have entries during ordinary development — it is a release-time
+   check only.
+
+2. Confirm the tree is green at the release commit, and that the documented
    user path actually works:
 
    ```sh
@@ -61,7 +82,7 @@ delivery mechanism.
    path end to end. It is kept out of `check.sh` because it builds `--release`
    and starts a real server.
 
-2. Tag the version that `Cargo.toml` declares, and push the tag:
+3. Tag the version that `Cargo.toml` declares, and push the tag:
 
    ```sh
    V=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
@@ -69,7 +90,7 @@ delivery mechanism.
    git push origin "v$V"
    ```
 
-3. Create the GitHub release from that tag, using the matching `CHANGELOG.md`
+4. Create the GitHub release from that tag, using the matching `CHANGELOG.md`
    section as the body:
 
    ```sh
@@ -85,4 +106,4 @@ story — there is no artifact whose provenance would need attesting.
 ## After releasing
 
 Open the next cycle by adding a fresh `## [Unreleased]` section at the top of
-`CHANGELOG.md` if the release consumed it.
+`CHANGELOG.md`, since step 1 consumed the previous one.

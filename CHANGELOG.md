@@ -51,6 +51,25 @@ platform).
 
 ### Added
 
+- **`scripts/check-release-ready.sh` — a release-time gate, because following
+  `docs/releasing.md` today would have published wrong release notes.** The
+  procedure builds the GitHub release body by extracting the `## [<version>]`
+  section from `CHANGELOG.md`. That is correct only when nothing is stranded
+  under `## [Unreleased]` — and 26 entries were, while `Cargo.toml` still read
+  `2.8.0`. Tagging would have marked code containing this round's fixes with
+  notes describing **none** of them.
+
+  The script refuses unless the declared version has a *dated* changelog section
+  with entries, `[Unreleased]` is empty, and the tag does not already exist. It
+  is deliberately **not** in `scripts/check.sh`: `[Unreleased]` is supposed to
+  have entries during development, so it would fail every ordinary commit.
+  Verified both ways — it refuses today, and passes against a simulated closed
+  changelog.
+
+  `docs/releasing.md` gains the step that was missing (settle the version, close
+  the changelog, run the gate) and loses a preamble sentence that had become
+  false: it claimed the release was already prepared with a dated section.
+
 - **Generated-input invariant tests for the retrieval metrics.** Musk's last
   step is *automate*: the duplicate-credit defect above was found by hand, and
   the same class had recurred five times this generation, so the next one
