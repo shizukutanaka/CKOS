@@ -87,6 +87,25 @@ platform).
 
 ### Fixed
 
+- **`--lambda NaN` silently switched off the diversification it was asking
+  for, and `--lambda 5` was accepted despite the flag promising `0.0..=1.0`.**
+  Third instance of the NaN class, found by sweeping every remaining bounded
+  quantity after the scheduler fix below. (`cosine` was swept too and is
+  correct — a zero vector returns 0, with a test already covering it.)
+
+  `str::parse::<f32>` accepts `"NaN"` and `"inf"`, and the CLI checked only
+  that the value parsed, never the range its own error message quotes. In
+  `mmr_rerank`, `f32::clamp` propagates `NaN`, so `mmr > best_val` was false at
+  every step, the selection loop kept taking index 0, and MMR returned the
+  caller's input order while reporting a re-rank.
+
+  Fixed at both layers, and differently on purpose: the CLI now **rejects**
+  out-of-range and non-finite values (an explicit error beats a quietly altered
+  request — the rule this workspace already applies to oversized bodies and
+  non-evaluable arithmetic), while the library function clamps as documented
+  and resolves `NaN`, which has no position in `[0,1]`, to pure relevance —
+  still a valid ranking, never silently the input order.
+
 - **A single non-finite scheduling factor stalled a task in the ready queue
   forever.** `ScoreFactors` documents "all factors are normalised to
   `0.0..=1.0`", but five of its six fields are public and only

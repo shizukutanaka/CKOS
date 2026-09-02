@@ -528,8 +528,16 @@ fn cmd_search(rest: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let lambda: f32 = match lambda_str.as_deref().map(str::parse) {
-        Some(Ok(n)) => n,
+    // `str::parse::<f32>` accepts "NaN" and "inf", and the range the message
+    // promises was never checked — so `--lambda 5` and `--lambda NaN` were
+    // taken silently. Reject them here rather than clamp downstream: this
+    // workspace prefers an explicit error to a quietly altered request.
+    let lambda: f32 = match lambda_str.as_deref().map(str::parse::<f32>) {
+        Some(Ok(n)) if n.is_finite() && (0.0..=1.0).contains(&n) => n,
+        Some(Ok(n)) => {
+            eprintln!("error: --lambda must be in 0.0..=1.0, got {n}");
+            return ExitCode::FAILURE;
+        }
         Some(Err(_)) => {
             eprintln!("error: --lambda needs a number in 0.0..=1.0");
             return ExitCode::FAILURE;

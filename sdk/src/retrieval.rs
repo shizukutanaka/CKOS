@@ -378,10 +378,21 @@ fn hit_similarity(a: &Hit, b: &Hit) -> f32 {
 /// SIGIR 1998) to reduce redundancy in the result set. At each step it picks the
 /// hit maximizing `λ·relevance − (1−λ)·max similarity-to-already-selected`.
 /// `lambda` in `[0,1]`: 1 = pure relevance (original order), 0 = pure diversity.
+/// Values outside the range are clamped to it; `NaN`, having no position in it,
+/// is treated as 1.
 /// Relevance is each hit's score normalized by the max; redundancy is lexical
 /// `hit_similarity`. Returns up to `k` hits.
 pub fn mmr_rerank(hits: &[Hit], lambda: f32, k: usize) -> Vec<Hit> {
-    let lambda = lambda.clamp(0.0, 1.0);
+    // `f32::clamp` propagates NaN, and every `>` comparison against NaN is
+    // false — so a NaN lambda used to make the selection loop keep index 0 and
+    // return the input order while reporting a re-rank. NaN has no position on
+    // `[0,1]`, so it resolves to pure relevance: still a valid ranking, and
+    // never silently the caller's own input order.
+    let lambda = if lambda.is_nan() {
+        1.0
+    } else {
+        lambda.clamp(0.0, 1.0)
+    };
     let max_score = hits
         .iter()
         .map(|h| h.score)
@@ -1304,6 +1315,49 @@ mod tests {
         let diversified = mmr_rerank(&hits, 0.5, 3);
         assert_eq!(diversified[0].title, "Transformer");
         assert_eq!(diversified[1].title, "Scheduler");
+    }
+
+    #[test]
+    fn a_non_finite_lambda_does_not_silently_disable_diversification() {
+        // Regression: `f32::clamp` returns NaN for NaN, so every
+        // `mmr > best_val` comparison was false and the loop kept taking
+        // index 0 — MMR quietly returned the input order while claiming to
+        // re-rank. `--lambda NaN` parses, so this was reachable.
+        let hit = |title: &str, snippet: &str, score: f32| Hit {
+            id: None,
+            title: title.into(),
+            snippet: snippet.into(),
+            score,
+            sources: vec![HitSource::Keyword],
+        };
+        // Deliberately NOT in relevance order, so "input order" and "by
+        // relevance" are distinguishable.
+        let hits = vec![
+            hit("Least relevant", "task queue priority", 0.1),
+            hit("Most relevant", "attention mechanism", 1.0),
+        ];
+
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 5.0, -3.0] {
+            let out = mmr_rerank(&hits, bad, 2);
+            assert_eq!(out.len(), 2, "lambda {bad} dropped hits");
+            assert!(
+                out.iter().all(|h| h.score.is_finite()),
+                "lambda {bad} produced non-finite scores"
+            );
+        }
+
+        // NaN resolves to pure relevance, so the most relevant hit leads
+        // rather than whichever happened to be first.
+        let out = mmr_rerank(&hits, f32::NAN, 2);
+        assert_eq!(
+            out[0].title, "Most relevant",
+            "a NaN lambda fell back to input order instead of ranking"
+        );
+        // An out-of-range lambda behaves as the nearest end of `[0,1]`.
+        assert_eq!(
+            mmr_rerank(&hits, 5.0, 2)[0].title,
+            mmr_rerank(&hits, 1.0, 2)[0].title
+        );
     }
 
     #[test]
