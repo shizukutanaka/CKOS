@@ -77,6 +77,9 @@ impl ScoreFactors {
 
     /// Weighted blend of the factors. Weights favour deadline and importance,
     /// matching the spec's ordering in §913.
+    ///
+    /// Each factor is coerced into the documented `0.0..=1.0` range first — the
+    /// fields are public, so the range was a claim nothing checked.
     pub fn score(&self, base: Priority) -> f32 {
         let base_weight = match base {
             Priority::Low => 0.0,
@@ -85,12 +88,29 @@ impl ScoreFactors {
             Priority::Critical => 1.0,
         };
         base_weight
-            + 0.30 * self.deadline
-            + 0.25 * self.importance
-            + 0.15 * self.runtime_fit
-            + 0.10 * self.confidence
-            + 0.10 * self.cost_efficiency
-            + 0.10 * self.energy
+            + 0.30 * norm(self.deadline)
+            + 0.25 * norm(self.importance)
+            + 0.15 * norm(self.runtime_fit)
+            + 0.10 * norm(self.confidence)
+            + 0.10 * norm(self.cost_efficiency)
+            + 0.10 * norm(self.energy)
+    }
+}
+
+/// Coerce one factor into the `0.0..=1.0` range `ScoreFactors` documents.
+///
+/// The range was stated and unenforced while five of the six fields are public
+/// and only `with_runtime_fit` clamped. A non-finite factor made `score()`
+/// return NaN, and because every comparison against NaN is false,
+/// [`Scheduler::dispatch_next`] never selected that task — priority aging could
+/// not rescue it either, since NaN plus anything is NaN. The task stalled in a
+/// ready queue forever. `clamp` maps ±∞ to the range ends; NaN has no ordering
+/// so it is mapped to the low end explicitly.
+fn norm(v: f32) -> f32 {
+    if v.is_nan() {
+        0.0
+    } else {
+        v.clamp(0.0, 1.0)
     }
 }
 
@@ -200,6 +220,73 @@ impl Scheduler {
 mod tests {
     use super::*;
     use ckos_kernel::Capability;
+
+    #[test]
+    fn a_task_with_an_out_of_range_factor_is_still_dispatched() {
+        // `ScoreFactors` documents "all factors are normalised to 0.0..=1.0",
+        // but only `with_runtime_fit` enforced it and the fields are public.
+        // A non-finite factor makes `score()` NaN, and every `>` comparison
+        // against NaN is false — so the task is never selected. Aging cannot
+        // rescue it either, because NaN + anything is NaN: the queue's
+        // anti-starvation property is defeated for that task, permanently.
+        let mut q = Scheduler::new();
+        let task = Task::new("stalled", Capability::Reasoning);
+        let id = task.id.clone();
+        q.submit_scored(
+            task,
+            ScoreFactors {
+                importance: f32::NAN,
+                ..Default::default()
+            },
+        );
+        let dispatched = q.dispatch_next();
+        assert_eq!(
+            dispatched.map(|t| t.id),
+            Some(id),
+            "the only ready task in the queue was never dispatched"
+        );
+    }
+
+    #[test]
+    fn out_of_range_factors_are_clamped_to_the_documented_range() {
+        // The other half of the unenforced range: values outside 0.0..=1.0
+        // must score exactly as the range ends do, so the weighting stays
+        // meaningful and one caller cannot outbid every other task by orders
+        // of magnitude.
+        let huge = ScoreFactors {
+            importance: 1.0e9,
+            ..Default::default()
+        };
+        let one = ScoreFactors {
+            importance: 1.0,
+            ..Default::default()
+        };
+        assert_eq!(huge.score(Priority::Normal), one.score(Priority::Normal));
+
+        let negative = ScoreFactors {
+            energy: -5.0,
+            ..Default::default()
+        };
+        let zero = ScoreFactors {
+            energy: 0.0,
+            ..Default::default()
+        };
+        assert_eq!(
+            negative.score(Priority::Normal),
+            zero.score(Priority::Normal)
+        );
+
+        // Every factor non-finite: the score stays finite and orderable.
+        let nan_everywhere = ScoreFactors {
+            deadline: f32::NAN,
+            importance: f32::INFINITY,
+            cost_efficiency: f32::NEG_INFINITY,
+            runtime_fit: f32::NAN,
+            energy: f32::NAN,
+            confidence: f32::NAN,
+        };
+        assert!(nan_everywhere.score(Priority::Normal).is_finite());
+    }
 
     #[test]
     fn higher_priority_dispatches_first() {

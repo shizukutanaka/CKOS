@@ -7,6 +7,31 @@ platform).
 
 ## [Unreleased]
 
+### Added
+
+- **Generated-input invariant tests for the retrieval metrics.** Musk's last
+  step is *automate*: the duplicate-credit defect above was found by hand, and
+  the same class had recurred five times this generation, so the next one
+  should be found by a machine. `sdk/src/eval.rs` gains a deterministic LCG
+  (no external crates) and three properties checked over 42 000 generated
+  rankings that deliberately include repeats, empty lists and `k = 0`:
+
+  1. every metric is finite and within `0.0..=1.0`;
+  2. collapsing repeats out of a ranking never *lowers* a score — a repeat
+     wastes a slot, it must not buy one;
+  3. an ideal ranking scores exactly 1.0 and an empty one exactly 0.0.
+
+  Checked against the pre-fix implementation, these rediscover the defect
+  unaided in under a second — and surface a case the hand-written test never
+  did: `recall = 1.333`. Every example test asserted a number it had been
+  given; none asserted the *range*, which is why the class survived.
+
+  The generator also corrected its author: a first draft asserted that
+  removing repeats could not move recall or MAP at all, and a generated case
+  disproved it immediately (both credit relevance at the *original* rank, so
+  closing a gap legitimately improves them). The property was weakened to the
+  one-sided form, which is the true one.
+
 ### Improved
 
 - **A re-indexed concept now carries what the graph knows about it, instead of
@@ -61,6 +86,26 @@ platform).
   re-litigated.
 
 ### Fixed
+
+- **A single non-finite scheduling factor stalled a task in the ready queue
+  forever.** `ScoreFactors` documents "all factors are normalised to
+  `0.0..=1.0`", but five of its six fields are public and only
+  `with_runtime_fit` clamped — a documented precondition nothing enforced.
+
+  A `NaN` factor makes `score()` return `NaN`, and `dispatch_next` selects by
+  `s > best_score`; every comparison against `NaN` is false, so the task is
+  never chosen. Priority aging cannot rescue it either, because `NaN` plus
+  anything is `NaN` — which defeats precisely the anti-starvation property this
+  module is audited-clean for. With such a task alone in the queue,
+  `dispatch_next` returns `None` while a ready, dependency-satisfied task sits
+  in it: a silent permanent stall, not a crash.
+
+  Fixed by enforcing the documented range where it is consumed — one `norm`
+  helper applied to each factor inside `score()`, mapping `NaN` to the low end
+  (`clamp` already handles ±∞). One guard, at the single point that reads the
+  values, rather than six setters that can drift apart. An inflated factor
+  (`1e9`) now scores exactly as `1.0` does, so no caller can outbid every other
+  task by orders of magnitude.
 
 - **Three of the four retrieval metrics could be inflated by a duplicated hit;
   nDCG could exceed 1.0.** The Socratic follow-up to the retrieval work: the
