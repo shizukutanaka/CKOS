@@ -360,15 +360,25 @@ fn search_lambda_flag_controls_diversity() {
     ]);
     assert!(ok.status.success());
 
-    let bad = ckos(&[
-        "search",
-        "--diverse",
-        "--lambda",
-        "not-a-number",
-        dir.to_str().unwrap(),
-        "kernel",
-    ]);
-    assert!(!bad.status.success());
+    // Out of range, and the values `str::parse::<f32>` quietly accepts. The
+    // flag promised "a number in 0.0..=1.0" but only rejected non-numbers, so
+    // these were taken and clamped downstream — and NaN silently disabled the
+    // very diversification being requested.
+    for bad in ["not-a-number", "5", "-3", "NaN", "inf"] {
+        let out = ckos(&[
+            "search",
+            "--diverse",
+            "--lambda",
+            bad,
+            dir.to_str().unwrap(),
+            "kernel",
+        ]);
+        assert!(
+            !out.status.success(),
+            "--lambda {bad} was accepted: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 }
 
 #[test]
