@@ -62,6 +62,39 @@ platform).
 
 ### Fixed
 
+- **Three of the four retrieval metrics could be inflated by a duplicated hit;
+  nDCG could exceed 1.0.** The Socratic follow-up to the retrieval work: the
+  previous round used `ckos eval` as its measuring instrument, so the
+  instrument itself was put on the bench.
+
+  | case | before | truth |
+  |---|---|---|
+  | `ndcg_at_k(["a","a","b"], {a,b}, 3)` | **1.307** | ≤ 1.0 by construction |
+  | `recall_at_k(["a","a"], {a,b}, 2)` | **1.000** | 0.5 — `b` was never retrieved |
+  | `precision_at_k(["a","a"], {a}, 2)` | **1.000** | 0.5 |
+  | `average_precision` (same input) | 0.833 | 0.833 — already correct |
+
+  `average_precision` deduplicates with a `seen` set and its doc comment says
+  why: *"a run listing the same document twice must not be able to inflate its
+  own score."* Its three siblings in the same module each counted every
+  occurrence. A normalised metric returning 1.307 is not a bad score, it is an
+  impossible one; recall claiming 1.0 for a document that was never returned is
+  worse, because it looks plausible.
+
+  Fixed by moving the guard into one shared `first_occurrences` helper — which
+  yields each id once at the **original** rank, so cutoffs and log-discounts
+  still refer to the position the run really returned it at — and routing all
+  four metrics through it, `average_precision` included, so they cannot
+  disagree again.
+
+  **Scope, stated honestly:** not reachable through `ckos eval` today. Retrieval
+  deduplicates by document id and chunk titles carry a `#N` suffix; no duplicate
+  title appeared across the plain, `--expand`, `--synonyms` and `--diverse`
+  paths when checked. So the previous round's published nDCG figures stand
+  unchanged. The defect is in the **public library API** (`ckos_sdk::eval`),
+  which is the documented surface for scoring an external retrieval system with
+  a caller-supplied ranking.
+
 - **Telemetry reported `0.0ms` and `0 tok/s` for work that had really run.**
   Found by interrogating the run summary rather than trusting it: token counts
   moved with the input (1→9), so the pipeline was live, yet throughput was `0
