@@ -87,6 +87,39 @@ platform).
 
 ### Fixed
 
+- **Japanese text produced no knowledge graph at all: zero concepts, always.**
+  The other half of Japanese support. Entity detection keyed on
+  `char::is_uppercase`, a property no Japanese character has, so every Japanese
+  corpus reported `0 new concept(s)` while an equivalent English one reported 3.
+
+  Katakana — the script used for loanwords and many proper nouns — is the
+  closest analogue to English capitalisation. Candidate heuristics were
+  **measured on a Japanese corpus before implementing**, following the
+  precedent that rejected the planner's keyword classifier:
+
+  | heuristic | extracted | correct | precision | recall |
+  |---|---|---|---|---|
+  | **katakana runs ≥2** | 7 | 7 | **1.00** | 0.44 |
+  | kanji runs ≥2 | 17 | 7 | 0.41 | 0.44 |
+  | katakana + kanji | 24 | 14 | 0.58 | 0.88 |
+
+  Katakana-only ships. Adding kanji nearly doubles recall but halves precision,
+  filling the graph with fragments like 大好 (part of 大好き, "likes very much")
+  and 中核的 ("core-ish") — the same trade that got the planner classifier
+  rejected, and a wrong concept is worse than a missing one because everything
+  downstream treats it as fact. Recall 0.44 is a stated limitation whose lift
+  condition is a morphological analyser, not a bigger regex.
+
+  Detection also needed a unit boundary: Japanese arrives as one whitespace
+  token per clause, so katakana runs are cut out as their own units with the
+  surrounding characters left as the connective text that types relation edges.
+  Without that, the whole clause became a single entity label.
+
+  Indexing the same 4-document corpus now yields **7 concepts** instead of 0,
+  and `search スケジューラ` returns `[Keyword+Vector+Graph]` with provenance and
+  a relation — all three retrieval legs firing on a query that previously
+  returned nothing at all.
+
 - **Japanese search did not work: the keyword leg never fired, and most queries
   returned nothing.** Asked of the headline feature in the language this
   repository is written in — *does hybrid retrieval actually work for Japanese?*
