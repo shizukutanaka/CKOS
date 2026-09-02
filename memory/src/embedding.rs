@@ -37,10 +37,81 @@ fn fnv1a(s: &str) -> u32 {
     h
 }
 
+/// Whether `c` belongs to a script written without word spaces, where a run of
+/// characters is a phrase rather than a single word: Han, Hiragana, Katakana
+/// (including the prolonged-sound mark) and Hangul.
+pub fn is_scriptio_continua(c: char) -> bool {
+    matches!(c,
+        '\u{3040}'..='\u{30ff}'   // Hiragana, Katakana
+        | '\u{3400}'..='\u{4dbf}' // CJK Extension A
+        | '\u{4e00}'..='\u{9fff}' // CJK Unified Ideographs
+        | '\u{f900}'..='\u{faff}' // CJK Compatibility Ideographs
+        | '\u{ac00}'..='\u{d7af}' // Hangul syllables
+    )
+}
+
+/// Split text into the terms the index is built from — **the** definition of a
+/// term for this workspace, shared by the vector and keyword legs so the two
+/// cannot disagree about what a word is.
+///
+/// Splitting on non-alphanumerics alone is wrong for scripts written without
+/// spaces: `猫は人気のペットです` is one alphanumeric run, so the whole clause
+/// became a single term and a search for `猫` could never match it. Such runs
+/// are emitted as overlapping **unigrams and bigrams** (the classic
+/// dictionary-free CJK indexing approach, as in Lucene's CJK analyzer):
+/// unigrams so a one-character query works — a single kanji is a whole word —
+/// and bigrams for the precision unigrams alone would lose. Very common
+/// characters are not filtered out, because BM25's own idf already discounts
+/// terms that appear in every document.
+///
+/// Latin runs are returned whole and lowercased. Callers apply their own
+/// stemming and length policy on top.
+pub fn terms_of(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for run in text.split(|c: char| !c.is_alphanumeric()) {
+        if run.is_empty() {
+            continue;
+        }
+        let mut buf: Vec<char> = Vec::new();
+        // Walk the run, flushing whenever the script class changes, so a mixed
+        // run like `AI搭載` yields `ai` plus the CJK grams rather than one blob.
+        let flush_latin = |buf: &mut Vec<char>, out: &mut Vec<String>| {
+            if !buf.is_empty() {
+                out.push(buf.iter().collect::<String>().to_lowercase());
+                buf.clear();
+            }
+        };
+        let mut cjk: Vec<char> = Vec::new();
+        let flush_cjk = |cjk: &mut Vec<char>, out: &mut Vec<String>| {
+            for (i, c) in cjk.iter().enumerate() {
+                out.push(c.to_string());
+                if let Some(next) = cjk.get(i + 1) {
+                    out.push(format!("{c}{next}"));
+                }
+            }
+            cjk.clear();
+        };
+        for c in run.chars() {
+            if is_scriptio_continua(c) {
+                flush_latin(&mut buf, &mut out);
+                cjk.push(c);
+            } else {
+                flush_cjk(&mut cjk, &mut out);
+                buf.push(c);
+            }
+        }
+        flush_latin(&mut buf, &mut out);
+        flush_cjk(&mut cjk, &mut out);
+    }
+    out
+}
+
 fn tokens(text: &str) -> impl Iterator<Item = String> + '_ {
-    text.split(|c: char| !c.is_alphanumeric())
-        .filter(|t| t.len() > 1)
-        .map(|t| t.to_lowercase())
+    // A CJK gram is meaningful at one character, so the length filter applies
+    // only to the space-delimited scripts it was written for.
+    terms_of(text)
+        .into_iter()
+        .filter(|t| t.chars().count() > 1 || t.chars().all(is_scriptio_continua))
 }
 
 /// A deterministic hashing embedder (the "hashing trick"), L2-normalised.
@@ -122,6 +193,43 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terms_of_splits_space_less_scripts_into_grams() {
+        // Splitting on non-alphanumerics leaves a whole Japanese clause as one
+        // term, so no query could ever match it: measured MRR 0.143 over a
+        // 7-query Japanese corpus, with 6 queries returning nothing at all.
+        let t = terms_of("猫は人気");
+        // Unigrams, so a single kanji — a whole word in Japanese — matches.
+        assert!(t.contains(&"猫".to_string()), "{t:?}");
+        // Bigrams, for the precision unigrams alone would lose.
+        assert!(t.contains(&"猫は".to_string()), "{t:?}");
+        assert!(t.contains(&"人気".to_string()), "{t:?}");
+        // Nothing longer than a bigram, so the term count stays linear.
+        assert!(t.iter().all(|g| g.chars().count() <= 2), "{t:?}");
+    }
+
+    #[test]
+    fn terms_of_leaves_space_delimited_text_alone() {
+        // The change must be invisible to Latin text: whole words, lowercased.
+        assert_eq!(terms_of("Hello, World"), vec!["hello", "world"]);
+        assert_eq!(terms_of("scheduler-v2"), vec!["scheduler", "v2"]);
+        assert_eq!(terms_of(""), Vec::<String>::new());
+    }
+
+    #[test]
+    fn terms_of_separates_scripts_inside_one_run() {
+        // `AI搭載` is a single alphanumeric run but two scripts; the Latin part
+        // must stay a word rather than being cut into grams with the kanji.
+        let t = terms_of("AI搭載");
+        assert!(t.contains(&"ai".to_string()), "{t:?}");
+        assert!(t.contains(&"搭".to_string()), "{t:?}");
+        assert!(t.contains(&"搭載".to_string()), "{t:?}");
+        assert!(
+            !t.iter().any(|g| g.contains('i') && g.contains('搭')),
+            "{t:?}"
+        );
+    }
 
     #[test]
     fn fnv1a_matches_the_published_vectors() {

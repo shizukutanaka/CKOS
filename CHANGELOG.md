@@ -87,6 +87,48 @@ platform).
 
 ### Fixed
 
+- **Japanese search did not work: the keyword leg never fired, and most queries
+  returned nothing.** Asked of the headline feature in the language this
+  repository is written in — *does hybrid retrieval actually work for Japanese?*
+  Measured on a 4-document Japanese corpus, it did not:
+
+  | query | before | after |
+  |---|---|---|
+  | 猫 (cat) | vector-only hit | ✓ |
+  | 犬 (dog) | **no results** | ✓ |
+  | スケジューラ (scheduler) | **no results** | ✓ |
+  | カーネル (kernel) | **wrong document** (the dog file) | ✓ |
+  | 優先度 (priority) | **no results** | ✓ |
+  | メモリ (memory) | **no results** | ✓ |
+  | 動物 (animal) | **no results** | ✓ |
+  | **MRR / nDCG@10** | **0.143** | **1.000** |
+
+  Both tokenisers split on non-alphanumerics, which is a word boundary only in
+  scripts that use spaces. `猫は人気のペットです` is a single alphanumeric run,
+  so the whole clause became **one term** — the keyword leg could match it only
+  if a query reproduced the entire run verbatim, and no realistic query does.
+  What hits there were came from the vector leg alone, which is why `カーネル`
+  returned the dog document: a hashing collision, unopposed.
+
+  Fixed by giving the workspace **one** definition of a term, `memory::terms_of`,
+  now shared by the keyword and vector legs — the two had private tokenisers
+  that already disagreed (one filtered on `chars().count()`, the other on byte
+  `len()`), the same divergence class as the chunk-overlap defect above. Runs in
+  space-less scripts are emitted as overlapping **unigrams and bigrams**, the
+  standard dictionary-free CJK approach (as in Lucene's CJK analyzer): unigrams
+  because a single kanji is a whole word, bigrams for the precision unigrams
+  alone would lose. Common characters are not filtered, because BM25's idf
+  already discounts terms appearing in every document.
+
+  **English is unchanged, verified rather than assumed** — the same corpus and
+  queries were measured on the pre-change binary and produce identical figures,
+  including the `LSTM` 0.500/0.631 concept-stub case and the `gradients` vector
+  artifact. For ASCII the new path is byte-for-byte the old one.
+
+  One existing test asserted `tokens("日本語のカーネル") == ["日本語のカーネル"]`
+  — the defect, pinned as a contract. The property that test is *named* for (no
+  byte-boundary slicing in the stemmer) is what it now asserts.
+
 - **Chunk overlap cut words in half, putting terms into the index that appear
   nowhere in the corpus.** `chunk_with_overlap` prefixed each chunk with the
   trailing *N characters* of its predecessor, with no regard for where words
