@@ -12,7 +12,7 @@ pub mod extract;
 pub mod store;
 pub mod versioning;
 pub use extract::ExtractReport;
-pub use store::GraphStore;
+pub use store::{GraphLock, GraphStore};
 pub use versioning::{GraphRepo, MergeConflict, MergeReport, MergeStrategy, VersionId};
 
 /// Validate an ISO `YYYY-MM-DD` date, returning it unchanged or naming what
