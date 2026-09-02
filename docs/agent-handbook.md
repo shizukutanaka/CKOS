@@ -68,7 +68,33 @@ regressions:
    When it *does* fail, check your own invocation first: a raw `+` in a
    form-encoded body decodes to a space, which made `RETURN Graph + Sources`
    look like a parser bug when the fault was the `curl` call.
-6. **One logical fix per commit**, with a message that states the defect, the
+6. **Measure a claimed capability instead of reading it.** The largest finds
+   here all came from picking a headline claim and testing whether it is true,
+   with numbers: the §899 verifier against a 27-case must-pass/must-fail battery
+   (found a false positive that rejected code); retrieval against `ckos eval`
+   (found concept stubs outranking real content); the same in Japanese (found
+   MRR 0.143 — the keyword leg never fired). A claim with no number attached
+   has not been checked. Write the corpus, score it, and report the figure you
+   get — including when it does not move.
+
+7. **Execute every artifact, not just the Rust.** 313 tests, a route check and a
+   JSON-shape tripwire were all green while `web/src/dashboard.html` threw on
+   load and rendered one tab button — for its entire history. Nothing *ran* it.
+   Ask what actually executes each deliverable: the browser page needs a
+   browser (headless Chromium found it in two minutes), the staged CI workflow
+   needs its commands run and `RUSTFLAGS="-D warnings"` applied, `docs/*.md`
+   needs its examples pasted in. `verify-quickstart.sh` covers the CLI and the
+   routes — it does not cover any of those.
+
+8. **Run it concurrently.** Persisting the graph was a read-modify-write split
+   across two public calls at five sites; six simultaneous `POST /api/run`
+   calls kept 6 concepts of 12, and six `ckos index` runs kept as few as 2.
+   Two browser tabs were enough. Anything that loads a file, changes it and
+   writes it back is a race until proven otherwise — and pick the lock for the
+   widest concurrency the product really has (here separate *processes*, which
+   a `Mutex` cannot see).
+
+9. **One logical fix per commit**, with a message that states the defect, the
    reproduction, and the fix rationale. Update `CHANGELOG.md`'s Unreleased
    `### Fixed` section and the test count in the same commit.
 
@@ -333,10 +359,22 @@ meeting the stated condition (that would be label-moving, §1):
 
 ### P1 — no known unfixed defect
 
-Every verified defect found so far is fixed (§3). The `ArithmeticCheck`
-fragment false positive that previously sat here was fixed in `30eb86c`.
-Start from §1's audit loop on a module not yet listed in §2 rather than
-re-reading audited-clean code.
+Every verified defect found so far is fixed (§3). Start from §1's audit loop on
+a module not yet listed in §2 rather than re-reading audited-clean code.
+
+**Where to point it, in the order that has actually paid.** Most of §2 is now
+read-audited, and reading found the *fewest* defects this generation. Steps 6–8
+of §1 found the rest, and the ground they cover is not exhausted:
+
+1. *An artifact nothing executes* (§1.7). The dashboard was dead in every commit
+   until someone loaded it. Remaining: `deploy/k8s/ckos.yaml`, `Dockerfile` and
+   `docker-compose.yml` are checked **structurally only** — no daemon has ever
+   run them (`scripts/check-deploy.sh` says so). That is the largest untested
+   artifact left.
+2. *A claim with no number* (§1.6). Ask of any ✅ row in the status doc: what
+   would I measure to disprove this? §946 went ✅ → 🟡 that way.
+3. *Concurrency* (§1.8). The graph is now locked; the document store and the
+   session `seq` counter have **not** been examined under simultaneous writers.
 
 ### P2 — high value, moderate size
 
