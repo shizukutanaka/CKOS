@@ -28,18 +28,38 @@ pub struct EvalScores {
     pub average_precision: f32,
 }
 
+/// Yield each id the first time it appears, paired with its **original**
+/// 0-based rank so cutoffs and discounts still refer to the position the run
+/// actually returned it at.
+///
+/// Every metric here credits a document once: a run that lists the same
+/// document twice must not outscore one that lists it once. The guard lives in
+/// this one place because it previously lived in [`average_precision`] alone,
+/// and its three siblings each disagreed — nDCG could exceed 1.0 and recall
+/// could report a document that was never retrieved.
+fn first_occurrences(ranked: &[String]) -> impl Iterator<Item = (usize, &String)> {
+    let mut seen: HashSet<&String> = HashSet::new();
+    ranked
+        .iter()
+        .enumerate()
+        .filter(move |(_, id)| seen.insert(id))
+}
+
+/// Count the distinct relevant documents within the top-`k` positions.
+fn distinct_relevant_in_top_k(ranked: &[String], relevant: &HashSet<String>, k: usize) -> usize {
+    first_occurrences(ranked)
+        .take_while(|(i, _)| *i < k)
+        .filter(|(_, id)| relevant.contains(*id))
+        .count()
+}
+
 /// Precision@k: fraction of the top-`k` results that are relevant (divided by
 /// `k`, the requested cutoff).
 pub fn precision_at_k(ranked: &[String], relevant: &HashSet<String>, k: usize) -> f32 {
     if k == 0 {
         return 0.0;
     }
-    let hits = ranked
-        .iter()
-        .take(k)
-        .filter(|r| relevant.contains(*r))
-        .count();
-    hits as f32 / k as f32
+    distinct_relevant_in_top_k(ranked, relevant, k) as f32 / k as f32
 }
 
 /// Recall@k: fraction of all relevant items that appear in the top-`k`.
@@ -47,12 +67,7 @@ pub fn recall_at_k(ranked: &[String], relevant: &HashSet<String>, k: usize) -> f
     if relevant.is_empty() {
         return 0.0;
     }
-    let hits = ranked
-        .iter()
-        .take(k)
-        .filter(|r| relevant.contains(*r))
-        .count();
-    hits as f32 / relevant.len() as f32
+    distinct_relevant_in_top_k(ranked, relevant, k) as f32 / relevant.len() as f32
 }
 
 /// Reciprocal rank: `1 / (1-based rank of the first relevant hit)`, or 0 if none.
@@ -68,11 +83,12 @@ pub fn reciprocal_rank(ranked: &[String], relevant: &HashSet<String>) -> f32 {
 
 /// nDCG@k with binary relevance: DCG of the ranking divided by the ideal DCG
 /// (all relevant items ranked first). Returns 0 when nothing is relevant.
+///
+/// A repeated document earns its gain once, at the rank it first appeared, so
+/// the result stays inside `0.0..=1.0`.
 pub fn ndcg_at_k(ranked: &[String], relevant: &HashSet<String>, k: usize) -> f32 {
-    let dcg: f32 = ranked
-        .iter()
-        .take(k)
-        .enumerate()
+    let dcg: f32 = first_occurrences(ranked)
+        .take_while(|(i, _)| *i < k)
         .map(|(i, r)| {
             if relevant.contains(r) {
                 1.0 / ((i + 2) as f32).log2()
@@ -112,13 +128,9 @@ pub fn average_precision(ranked: &[String], relevant: &HashSet<String>) -> f32 {
     if relevant.is_empty() {
         return 0.0;
     }
-    let mut seen: HashSet<&String> = HashSet::new();
     let mut found = 0usize;
     let mut sum = 0.0f32;
-    for (i, id) in ranked.iter().enumerate() {
-        if !seen.insert(id) {
-            continue; // already credited this document
-        }
+    for (i, id) in first_occurrences(ranked) {
         if relevant.contains(id) {
             found += 1;
             sum += found as f32 / (i + 1) as f32; // precision at this rank
@@ -246,6 +258,44 @@ mod tests {
         ];
         assert!((mean_average_precision(&queries) - 0.75).abs() < 1e-6);
         assert_eq!(mean_average_precision(&[]), 0.0);
+    }
+
+    #[test]
+    fn no_metric_can_be_inflated_by_a_duplicated_hit() {
+        // Regression: only `average_precision` credited a document once. Its
+        // siblings counted every occurrence, so a run listing the same
+        // document twice scored *better* than an honest one — nDCG above 1.0,
+        // which the metric's own normalisation makes impossible, and full
+        // recall for a document that was never retrieved.
+        let relevant = set(&["a", "b"]);
+
+        let ndcg = ndcg_at_k(&list(&["a", "a", "b"]), &relevant, 3);
+        assert!(ndcg <= 1.0, "nDCG is normalised to [0,1], got {ndcg}");
+        // `a` is credited once at rank 1 and `b` at rank 3 (the repeat holds
+        // rank 2 and earns nothing): DCG = 1/log2(2) + 1/log2(4) = 1.5, over an
+        // ideal DCG of 1/log2(2) + 1/log2(3).
+        let expected = 1.5 / (1.0 + 1.0 / 3.0_f32.log2());
+        assert!(
+            (ndcg - expected).abs() < 1e-6,
+            "expected {expected}, got {ndcg}"
+        );
+
+        // Recall must not claim a document it never returned.
+        let recall = recall_at_k(&list(&["a", "a"]), &relevant, 2);
+        assert!(
+            (recall - 0.5).abs() < 1e-6,
+            "b was never retrieved, recall is 0.5, got {recall}"
+        );
+
+        // Precision counts distinct relevant results, not repeats.
+        let precision = precision_at_k(&list(&["a", "a"]), &set(&["a"]), 2);
+        assert!(
+            (precision - 0.5).abs() < 1e-6,
+            "one of two slots was a repeat, got {precision}"
+        );
+
+        // The already-correct sibling is unchanged.
+        assert!((average_precision(&list(&["a", "a", "b"]), &relevant) - 0.8333333).abs() < 1e-6);
     }
 
     #[test]
