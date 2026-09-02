@@ -166,10 +166,40 @@ pub fn summarize(text: &str, max_chars: usize) -> String {
     out
 }
 
+/// Katakana runs of at least two characters within `run`.
+///
+/// The Unicode block is the same one `graph::extract` uses to spot Japanese
+/// entities; both are the plain block range, not a tunable policy.
+fn katakana_runs(run: &str) -> Vec<String> {
+    let is_kata = |c: char| ('\u{30a0}'..='\u{30ff}').contains(&c);
+    let mut out = Vec::new();
+    let mut buf = String::new();
+    for c in run.chars() {
+        if is_kata(c) {
+            buf.push(c);
+        } else {
+            if buf.chars().count() >= 2 {
+                out.push(std::mem::take(&mut buf));
+            } else {
+                buf.clear();
+            }
+        }
+    }
+    if buf.chars().count() >= 2 {
+        out.push(buf);
+    }
+    out
+}
+
 /// Extract up to `top_n` "concept" keywords from text — the concept tier of the
 /// §940 compression ladder (full-text → summary → concept → knowledge). Words
 /// shorter than 4 characters and a small stop-word set are ignored; results are
 /// ranked by frequency, ties broken alphabetically for determinism.
+///
+/// In a script written without spaces a whole clause is one "word", so those
+/// runs contribute their katakana sub-runs instead: the script of loanwords and
+/// proper nouns, and the only part of such a clause this can identify without a
+/// morphological analyser.
 pub fn keywords(text: &str, top_n: usize) -> Vec<String> {
     const STOP: &[&str] = &[
         "this", "that", "with", "from", "have", "will", "into", "over", "they", "them", "then",
@@ -177,9 +207,22 @@ pub fn keywords(text: &str, top_n: usize) -> Vec<String> {
         "were", "what", "when", "where",
     ];
     let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for word in text.split(|c: char| !c.is_alphanumeric()) {
-        let w = word.to_lowercase();
-        if w.len() >= 4 && !STOP.contains(&w.as_str()) {
+    for run in text.split(|c: char| !c.is_alphanumeric()) {
+        if run.chars().any(crate::is_scriptio_continua) {
+            // A script without spaces puts a whole clause in one run, and the
+            // length gate below counted *bytes*, so entire sentences were
+            // recorded as "keywords". Katakana runs are the candidates instead:
+            // the script of loanwords and proper nouns, measured at precision
+            // 1.00 for entity extraction. The indexing grams are deliberately
+            // not reused — their unigrams are grammatical particles, which are
+            // exactly the most frequent and least meaningful tokens.
+            for kata in katakana_runs(run) {
+                *counts.entry(kata).or_insert(0) += 1;
+            }
+            continue;
+        }
+        let w = run.to_lowercase();
+        if w.chars().count() >= 4 && !STOP.contains(&w.as_str()) {
             *counts.entry(w).or_insert(0) += 1;
         }
     }
@@ -359,6 +402,29 @@ mod tests {
         assert_eq!(
             big[0].metadata.get("compressed").map(String::as_str),
             Some("true")
+        );
+    }
+
+    #[test]
+    fn keywords_of_japanese_text_are_words_not_whole_clauses() {
+        // Splitting on non-alphanumerics makes a Japanese clause one "word",
+        // and the length gate counted *bytes*, so a whole sentence sailed
+        // through: `compress_document` recorded
+        // "カーネルはメモリを管理します" as an extracted concept.
+        let text = "スケジューラはタスクに優先度を割り当てます。カーネルはメモリを管理します。\
+                    スケジューラはタスクを処理します。";
+        let kw = keywords(text, 5);
+        assert!(
+            kw.iter().all(|k| k.chars().count() <= 8),
+            "whole clauses returned as keywords: {kw:?}"
+        );
+        assert!(kw.contains(&"スケジューラ".to_string()), "{kw:?}");
+        assert!(kw.contains(&"タスク".to_string()), "{kw:?}");
+        // Grammatical particles must not become keywords, which is why the
+        // indexing grams are not reused here.
+        assert!(
+            !kw.iter().any(|k| k == "は" || k == "を" || k == "に"),
+            "{kw:?}"
         );
     }
 

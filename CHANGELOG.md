@@ -87,6 +87,29 @@ platform).
 
 ### Fixed
 
+- **`keywords` returned whole Japanese sentences as "keywords".** The third and
+  last consumer of "what is a term" still using its own rule. `compress_document`
+  recorded them as a document's extracted concepts:
+
+  ```
+  meta.concepts: カーネルはメモリを管理します,スケジューラはタスクに優先度を割り当てます,…
+  meta.concepts: assigns,control,kernel,manages,memory          ← English, for comparison
+  ```
+
+  Same two causes as elsewhere: splitting on non-alphanumerics makes a clause
+  one word, and the length gate counted **bytes** (`w.len() >= 4`), so a whole
+  sentence passed a filter meant to drop short words — the third appearance of
+  that byte-vs-character confusion.
+
+  Space-less runs now contribute their **katakana** sub-runs. The indexing grams
+  from `terms_of` are deliberately *not* reused here: their unigrams are
+  grammatical particles (は, を, に), which are precisely the most frequent and
+  least meaningful tokens, so frequency ranking would surface exactly the wrong
+  thing. Same measured signal as the concept extractor.
+
+  After: `concepts: カーネル,スケジューラ,タスク,プロセス,メモリ`. English output
+  is byte-identical.
+
 - **Japanese text produced no knowledge graph at all: zero concepts, always.**
   The other half of Japanese support. Entity detection keyed on
   `char::is_uppercase`, a property no Japanese character has, so every Japanese
