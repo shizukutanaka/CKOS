@@ -706,6 +706,66 @@ fn history_with_a_query_recalls_instead_of_dumping_raw_history() {
 }
 
 #[test]
+fn a_record_with_no_verification_status_is_not_reported_as_failed() {
+    // `history` marked every record `[ok]` or `[FAIL]` from
+    // `metadata["verified"] == "true"`. A reflection record carries no such
+    // key — it is not a verification — so a successful reflection
+    // (confidence 95) was rendered `[FAIL]`, showing the user failures that
+    // never happened. Absence of a verdict is not a negative verdict.
+    struct TempDir(PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("ckos-history-verdict-{}-{n}", std::process::id()));
+    let _guard = TempDir(dir.clone());
+
+    let run = ckos(&[
+        "run",
+        "--session",
+        dir.to_str().unwrap(),
+        "summarize the report",
+    ]);
+    assert!(run.status.success());
+
+    // `--k 10` matters: reflections rank below the executions, so a default-k
+    // recall never reaches them and a test without it passes while proving
+    // nothing.
+    for args in [
+        vec!["history", dir.to_str().unwrap()],
+        vec![
+            "history",
+            dir.to_str().unwrap(),
+            "result accepted",
+            "--k",
+            "10",
+        ],
+    ] {
+        let out = ckos(&args);
+        assert!(out.status.success());
+        let text = stdout(&out);
+        let mut saw_reflection = false;
+        for line in text.lines().filter(|l| l.contains("reflection")) {
+            saw_reflection = true;
+            assert!(
+                !line.contains("[FAIL]"),
+                "a reflection was reported as failed: {line}"
+            );
+        }
+        // Only the recall path surfaces reflections; when it runs, it must
+        // actually have reached one or the assertion above proved nothing.
+        if args.len() > 2 {
+            assert!(saw_reflection, "no reflection reached the output: {text}");
+        }
+        // A real execution still shows its verdict.
+        assert!(text.contains("[ok]"), "no verdict rendered at all: {text}");
+    }
+}
+
+#[test]
 fn closed_output_pipe_never_panics() {
     // Regression: `ckos … | head -1` used to dump a "Broken pipe" panic and
     // backtrace, because Rust ignores SIGPIPE and println! panics when the
