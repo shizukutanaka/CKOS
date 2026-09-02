@@ -7,6 +7,31 @@ platform).
 
 ## [Unreleased]
 
+### Added
+
+- **Generated-input invariant tests for the retrieval metrics.** Musk's last
+  step is *automate*: the duplicate-credit defect above was found by hand, and
+  the same class had recurred five times this generation, so the next one
+  should be found by a machine. `sdk/src/eval.rs` gains a deterministic LCG
+  (no external crates) and three properties checked over 42 000 generated
+  rankings that deliberately include repeats, empty lists and `k = 0`:
+
+  1. every metric is finite and within `0.0..=1.0`;
+  2. collapsing repeats out of a ranking never *lowers* a score — a repeat
+     wastes a slot, it must not buy one;
+  3. an ideal ranking scores exactly 1.0 and an empty one exactly 0.0.
+
+  Checked against the pre-fix implementation, these rediscover the defect
+  unaided in under a second — and surface a case the hand-written test never
+  did: `recall = 1.333`. Every example test asserted a number it had been
+  given; none asserted the *range*, which is why the class survived.
+
+  The generator also corrected its author: a first draft asserted that
+  removing repeats could not move recall or MAP at all, and a generated case
+  disproved it immediately (both credit relevance at the *original* rank, so
+  closing a gap legitimately improves them). The property was weakened to the
+  one-sided form, which is the true one.
+
 ### Improved
 
 - **A re-indexed concept now carries what the graph knows about it, instead of

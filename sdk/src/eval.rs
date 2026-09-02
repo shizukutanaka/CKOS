@@ -185,6 +185,169 @@ pub fn mean_reciprocal_rank(per_query: &[(Vec<String>, HashSet<String>)]) -> f32
     sum / per_query.len() as f32
 }
 
+/// Deterministic, dependency-free pseudo-random source for the invariant tests
+/// below (the workspace takes no external crates, so no `proptest`). A fixed
+/// seed keeps failures reproducible: the same run always generates the same
+/// cases.
+#[cfg(test)]
+struct Lcg(u64);
+
+#[cfg(test)]
+impl Lcg {
+    fn next(&mut self) -> u64 {
+        // Numerical Recipes constants; adequate for generating test cases.
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        self.0 >> 11
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        if n == 0 {
+            0
+        } else {
+            (self.next() % n as u64) as usize
+        }
+    }
+}
+
+/// Invariants every metric in this module must satisfy, checked over generated
+/// inputs rather than hand-picked ones.
+///
+/// These exist because a defect slipped past example-based tests: three metrics
+/// credited a repeated document more than once, and `nDCG` returned 1.307 — a
+/// value its own normalisation makes impossible. Each example test asserted a
+/// number it had been given; none asserted the *range*. Randomised cases with
+/// duplicates catch that class without anyone having to think of the example.
+#[cfg(test)]
+mod invariants {
+    use super::*;
+
+    /// Build a random ranking over a small id pool, deliberately allowing
+    /// repeats — the case the example tests never covered.
+    fn case(rng: &mut Lcg) -> (Vec<String>, HashSet<String>, usize) {
+        let pool = ["a", "b", "c", "d", "e"];
+        let len = rng.below(8);
+        let ranked: Vec<String> = (0..len)
+            .map(|_| pool[rng.below(pool.len())].to_string())
+            .collect();
+        let relevant: HashSet<String> = pool
+            .iter()
+            .filter(|_| rng.next() % 2 == 0)
+            .map(|s| s.to_string())
+            .collect();
+        (ranked, relevant, rng.below(6))
+    }
+
+    #[test]
+    fn every_metric_stays_within_zero_and_one() {
+        let mut rng = Lcg(0x5EED);
+        for _ in 0..20_000 {
+            let (ranked, relevant, k) = case(&mut rng);
+            let scores = evaluate(&ranked, &relevant, k);
+            for (name, v) in [
+                ("precision", scores.precision),
+                ("recall", scores.recall),
+                ("reciprocal_rank", scores.reciprocal_rank),
+                ("ndcg", scores.ndcg),
+                ("average_precision", scores.average_precision),
+            ] {
+                assert!(
+                    v.is_finite() && (0.0..=1.0).contains(&v),
+                    "{name} = {v} outside [0,1] for ranked={ranked:?} relevant={relevant:?} k={k}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn repeating_a_hit_never_improves_a_score() {
+        // The property the duplicate-credit defect violated. Every metric here
+        // scores a repeat at the rank the run actually returned it at, so a
+        // repeat *wastes a slot*: collapsing repeats can only move a score up,
+        // never down. Before the fix, repeats raised nDCG (to 1.307), recall
+        // and precision instead.
+        //
+        // Note this is a one-sided property. An earlier draft asserted that
+        // recall and MAP could not move at all; a generated case disproved it
+        // in under a second — both credit relevance at the *original* rank, so
+        // removing a repeat shifts later documents up and legitimately
+        // improves them. The generator corrected the assumption, which is the
+        // reason it is here.
+        let mut rng = Lcg(0xC0FFEE);
+        let mut cases_with_repeats = 0;
+        for _ in 0..20_000 {
+            let (ranked, relevant, k) = case(&mut rng);
+            let mut seen = HashSet::new();
+            let deduped: Vec<String> = ranked
+                .iter()
+                .filter(|id| seen.insert((*id).clone()))
+                .cloned()
+                .collect();
+            if deduped.len() == ranked.len() {
+                continue; // no repeats in this case
+            }
+            cases_with_repeats += 1;
+            let with = evaluate(&ranked, &relevant, k);
+            let without = evaluate(&deduped, &relevant, k);
+            for (name, a, b) in [
+                ("precision", with.precision, without.precision),
+                ("recall", with.recall, without.recall),
+                (
+                    "reciprocal_rank",
+                    with.reciprocal_rank,
+                    without.reciprocal_rank,
+                ),
+                ("ndcg", with.ndcg, without.ndcg),
+                (
+                    "average_precision",
+                    with.average_precision,
+                    without.average_precision,
+                ),
+            ] {
+                assert!(
+                    a <= b + 1e-6,
+                    "a repeat raised {name}: {a} with repeats vs {b} without, \
+                     ranked={ranked:?} relevant={relevant:?} k={k}"
+                );
+            }
+        }
+        assert!(
+            cases_with_repeats > 1_000,
+            "the generator produced only {cases_with_repeats} cases with repeats; \
+             it is no longer exercising the property"
+        );
+    }
+
+    #[test]
+    fn a_perfect_ranking_scores_one_and_an_empty_one_scores_zero() {
+        let mut rng = Lcg(0xBEEF);
+        for _ in 0..2_000 {
+            let (_, relevant, _) = case(&mut rng);
+            if relevant.is_empty() {
+                continue;
+            }
+            let mut ideal: Vec<String> = relevant.iter().cloned().collect();
+            ideal.sort(); // deterministic order; all are relevant either way
+            let k = ideal.len();
+            let s = evaluate(&ideal, &relevant, k);
+            assert!((s.ndcg - 1.0).abs() < 1e-6, "ideal nDCG = {}", s.ndcg);
+            assert!((s.recall - 1.0).abs() < 1e-6, "ideal recall = {}", s.recall);
+            assert!(
+                (s.average_precision - 1.0).abs() < 1e-6,
+                "ideal MAP = {}",
+                s.average_precision
+            );
+
+            let nothing = evaluate(&[], &relevant, k);
+            assert_eq!(nothing.ndcg, 0.0);
+            assert_eq!(nothing.recall, 0.0);
+            assert_eq!(nothing.average_precision, 0.0);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
